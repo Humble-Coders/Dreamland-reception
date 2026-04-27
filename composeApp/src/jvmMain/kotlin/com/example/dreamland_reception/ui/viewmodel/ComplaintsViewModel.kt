@@ -45,6 +45,7 @@ data class ComplaintsScreenState(
     val roomFilter: String = "",
     val staffFilter: String = "",
     val priorityFilter: String = "",
+    val selectedComplaintId: String? = null,
 ) {
     val newComplaints: List<Complaint>
         get() = complaints.filter { it.status == "NEW" }
@@ -188,11 +189,12 @@ class ComplaintsViewModel(
 
     // ── Tab / filter ──────────────────────────────────────────────────────────
 
-    fun onTabSelected(i: Int) = _screenState.update { it.copy(selectedTab = i) }
+    fun onTabSelected(i: Int) = _screenState.update { it.copy(selectedTab = i, selectedComplaintId = null) }
     fun onSearch(q: String) = _screenState.update { it.copy(searchQuery = q) }
     fun onRoomFilter(r: String) = _screenState.update { it.copy(roomFilter = r) }
     fun onStaffFilter(s: String) = _screenState.update { it.copy(staffFilter = s) }
     fun onPriorityFilter(p: String) = _screenState.update { it.copy(priorityFilter = p) }
+    fun selectComplaint(id: String?) = _screenState.update { it.copy(selectedComplaintId = id) }
 
     // ── Status update ─────────────────────────────────────────────────────────
 

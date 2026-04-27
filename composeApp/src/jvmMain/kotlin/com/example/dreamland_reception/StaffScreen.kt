@@ -3,6 +3,7 @@ package com.example.dreamland_reception
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,15 +19,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,8 +35,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +61,7 @@ import com.example.dreamland_reception.staff.AddEditStaffDialog
 import com.example.dreamland_reception.staff.AssignTasksDialog
 import com.example.dreamland_reception.ui.viewmodel.StaffViewModel
 
-// ── Role colours ─────────────────────────────────────────────────────────────
+// ── Role / availability helpers ───────────────────────────────────────────────
 
 private val roleColor = { role: String ->
     when (role) {
@@ -99,168 +102,101 @@ fun StaffScreen(vm: StaffViewModel = DreamlandAppInitializer.getStaffViewModel()
     val allOrders by ordersVm.screenState.collectAsStateWithLifecycle()
     val allComplaints by complaintsVm.screenState.collectAsStateWithLifecycle()
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(DreamlandForest),
-    ) {
-        // ── Header ─────────────────────────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column {
-                Text(
-                    "TEAM",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = DreamlandGold,
-                    letterSpacing = 2.sp,
-                )
-                Text(
-                    "Staff Management",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = DreamlandOnDark,
-                )
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // Summary chips
-                if (!state.isLoading && state.staff.isNotEmpty()) {
-                    StaffSummaryChip(count = state.availableCount, label = "Available", color = Color(0xFF4CAF50))
-                    StaffSummaryChip(count = state.busyCount, label = "Busy", color = Color(0xFFFFC107))
-                    if (state.inactiveCount > 0) {
-                        StaffSummaryChip(count = state.inactiveCount, label = "Inactive", color = DreamlandMuted)
-                    }
-                }
-                Button(
-                    onClick = { vm.openAddStaff() },
-                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                    shape = RoundedCornerShape(10.dp),
-                ) {
-                    Text("+ Add Staff", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
+    val selectedMember = state.staff.find { it.id == state.selectedMemberId }
+    val assignedOrders = selectedMember?.let { m ->
+        allOrders.orders.filter { it.assignedTo == m.id && it.status == "ASSIGNED" }
+    } ?: emptyList()
+    val assignedComplaints = selectedMember?.let { m ->
+        allComplaints.complaints.filter { it.assignedTo == m.id && it.status == "ASSIGNED" }
+    } ?: emptyList()
 
-        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-        // ── Filter row ─────────────────────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            OutlinedTextField(
-                value = state.searchQuery,
-                onValueChange = { vm.onSearch(it) },
-                label = { Text("Search by name or phone…", color = DreamlandMuted, fontSize = 12.sp) },
-                singleLine = true,
-                modifier = Modifier.weight(1f).heightIn(max = 56.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = DreamlandOnDark,
-                    unfocusedTextColor = DreamlandOnDark,
-                    focusedBorderColor = DreamlandGold,
-                    unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                    cursorColor = DreamlandGold,
-                ),
-            )
-            StaffFilterDropdown(
-                label = "Role",
-                selected = state.roleFilter,
-                options = listOf(
-                    "" to "All Roles",
-                    "HOUSEKEEPING" to "Housekeeping",
-                    "MAINTENANCE" to "Maintenance",
-                    "RECEPTION" to "Reception",
-                ),
-                onSelect = { vm.onRoleFilter(it) },
-            )
-            StaffFilterDropdown(
-                label = "Availability",
-                selected = state.availabilityFilter,
-                options = listOf(
-                    "" to "All",
-                    "AVAILABLE" to "Available",
-                    "BUSY" to "Busy",
-                ),
-                onSelect = { vm.onAvailabilityFilter(it) },
-            )
-            StaffFilterDropdown(
-                label = "Status",
-                selected = state.statusFilter,
-                options = listOf(
-                    "" to "All Status",
-                    "ACTIVE" to "Active",
-                    "INACTIVE" to "Inactive",
-                ),
-                onSelect = { vm.onStatusFilter(it) },
-            )
-        }
-
-        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-        // ── Body ───────────────────────────────────────────────────────────
-        Box(modifier = Modifier.fillMaxSize()) {
-            when {
-                state.isLoading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = DreamlandGold)
+    Row(Modifier.fillMaxSize()) {
+        // ── LEFT: staff list ──────────────────────────────────────────────────
+        Column(Modifier.width(480.dp).fillMaxHeight().background(DreamlandForestSurface)) {
+            // Header
+            Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 20.dp, bottom = 12.dp)) {
+                Text("TEAM", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                Text("Staff Management", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (!state.isLoading && state.staff.isNotEmpty()) {
+                        StaffSummaryChip(state.availableCount, "Available", Color(0xFF4CAF50))
+                        StaffSummaryChip(state.busyCount, "Busy", Color(0xFFFFC107))
+                        if (state.inactiveCount > 0) StaffSummaryChip(state.inactiveCount, "Inactive", DreamlandMuted)
                     }
-                }
-                state.error != null -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        ErrorText(state.error!!)
-                    }
-                }
-                state.filtered.isEmpty() -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                if (state.staff.isEmpty()) "No staff members yet" else "No staff match the filters",
-                                color = DreamlandMuted,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            if (state.staff.isEmpty()) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "Tap \"+ Add Staff\" to add your first team member",
-                                    color = DreamlandMuted.copy(alpha = 0.6f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            } else {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "Try adjusting your search or filters",
-                                    color = DreamlandMuted.copy(alpha = 0.6f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize(),
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = { vm.openAddStaff() },
+                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(34.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
                     ) {
-                        items(state.filtered, key = { it.id }) { member ->
-                            StaffCard(
-                                member = member,
-                                vm = vm,
-                                assignedOrders = allOrders.orders.filter {
-                                    it.assignedTo == member.id && it.status == "ASSIGNED"
-                                },
-                                assignedComplaints = allComplaints.complaints.filter {
-                                    it.assignedTo == member.id && it.status == "ASSIGNED"
-                                },
-                            )
-                        }
+                        Text("+ Add", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     }
                 }
+            }
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+            // Filters
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = { vm.onSearch(it) },
+                    placeholder = { Text("Search name or phone…", color = DreamlandMuted, fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark,
+                        unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold,
+                        unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                        cursorColor = DreamlandGold,
+                    ),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    StaffFilterDropdown(
+                        label = "Role", selected = state.roleFilter,
+                        options = listOf("" to "All Roles", "HOUSEKEEPING" to "Housekeeping", "MAINTENANCE" to "Maintenance", "RECEPTION" to "Reception"),
+                        onSelect = { vm.onRoleFilter(it) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    StaffFilterDropdown(
+                        label = "Avail.", selected = state.availabilityFilter,
+                        options = listOf("" to "All", "AVAILABLE" to "Available", "BUSY" to "Busy"),
+                        onSelect = { vm.onAvailabilityFilter(it) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    StaffFilterDropdown(
+                        label = "Status", selected = state.statusFilter,
+                        options = listOf("" to "All", "ACTIVE" to "Active", "INACTIVE" to "Inactive"),
+                        onSelect = { vm.onStatusFilter(it) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+            // List
+            StaffListContent(
+                state.isLoading, state.error, state.filtered, state.staff.isEmpty(),
+                state.selectedMemberId, allOrders.orders, allComplaints.complaints, vm,
+            )
+        }
+
+        VerticalDivider(color = DreamlandGold.copy(alpha = 0.15f), thickness = 1.dp)
+
+        // ── RIGHT: detail panel ───────────────────────────────────────────────
+        Box(Modifier.weight(1f).fillMaxHeight().background(DreamlandForest)) {
+            if (selectedMember != null) {
+                StaffDetailPanel(
+                    member = selectedMember,
+                    assignedOrders = assignedOrders,
+                    assignedComplaints = assignedComplaints,
+                    vm = vm,
+                )
+            } else {
+                StaffDetailPlaceholder()
             }
         }
     }
@@ -269,329 +205,361 @@ fun StaffScreen(vm: StaffViewModel = DreamlandAppInitializer.getStaffViewModel()
     if (assignTasksDialog.isOpen) AssignTasksDialog(state = assignTasksDialog, vm = vm)
 }
 
-// ── Staff Card ────────────────────────────────────────────────────────────────
+// ── Left panel: list ──────────────────────────────────────────────────────────
 
 @Composable
-private fun StaffCard(
-    member: StaffMember,
+private fun StaffListContent(
+    isLoading: Boolean,
+    error: String?,
+    filtered: List<StaffMember>,
+    isEmpty: Boolean,
+    selectedId: String?,
+    allOrders: List<Order>,
+    allComplaints: List<Complaint>,
     vm: StaffViewModel,
-    assignedOrders: List<Order> = emptyList(),
-    assignedComplaints: List<Complaint> = emptyList(),
+) {
+    when {
+        isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = DreamlandGold)
+        }
+        error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            ErrorText(error)
+        }
+        filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                if (isEmpty) "No staff members yet" else "No staff match filters",
+                color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        else -> LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            items(filtered, key = { it.id }) { member ->
+                val taskCount = allOrders.count { it.assignedTo == member.id && it.status == "ASSIGNED" } +
+                    allComplaints.count { it.assignedTo == member.id && it.status == "ASSIGNED" }
+                StaffListItem(
+                    member = member,
+                    isSelected = member.id == selectedId,
+                    assignedTaskCount = taskCount,
+                    onClick = {
+                        vm.selectMember(if (member.id == selectedId) null else member.id)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StaffListItem(
+    member: StaffMember,
+    isSelected: Boolean,
+    assignedTaskCount: Int,
+    onClick: () -> Unit,
 ) {
     val accentColor = availColor(member)
     val rc = roleColor(member.role)
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) DreamlandForestElevated else Color.Transparent)
+            .border(1.dp, if (isSelected) DreamlandGold else DreamlandMuted.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // ── Status accent bar ──────────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(accentColor),
-            )
-
-            Column(modifier = Modifier.weight(1f).padding(14.dp)) {
-                // ── Role badge + Active/Inactive chip ──────────────────────
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RoleBadge(role = member.role)
-                    ActiveChip(isActive = member.isActive)
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                // ── Name ───────────────────────────────────────────────────
+        Box(Modifier.width(4.dp).fillMaxHeight().background(accentColor, RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)))
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     member.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = DreamlandOnDark,
-                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-
-                // ── Phone ──────────────────────────────────────────────────
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(rc.copy(alpha = 0.12f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(roleLabel(member.role), color = rc, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (member.phone.isNotBlank()) {
-                    Text(
-                        member.phone,
-                        color = DreamlandMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                    Text(member.phone, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                } else {
+                    Spacer(Modifier.weight(1f))
                 }
-
-                Spacer(Modifier.height(10.dp))
-
-                // ── Availability pill ──────────────────────────────────────
-                AvailabilityPill(member = member)
-
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.10f))
-                Spacer(Modifier.height(10.dp))
-
-                // ── Assigned tasks ─────────────────────────────────────────
-                val totalAssigned = assignedOrders.size + assignedComplaints.size
-                if (totalAssigned > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    AssignedTasksList(orders = assignedOrders, complaints = assignedComplaints)
-                    Spacer(Modifier.height(6.dp))
-                    HorizontalDivider(color = DreamlandGold.copy(alpha = 0.10f))
+                val (dotColor, availLabel) = when {
+                    !member.isActive   -> DreamlandMuted to "Inactive"
+                    member.isAvailable -> Color(0xFF4CAF50) to "Available"
+                    else               -> Color(0xFFFFC107) to "Busy"
                 }
-
-                // ── Actions ────────────────────────────────────────────────
-                StaffCardActions(member = member, vm = vm)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(dotColor))
+                    Text(availLabel, color = dotColor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
+                if (assignedTaskCount > 0) {
+                    Box(
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFC107).copy(alpha = 0.2f))
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                    ) {
+                        Text("$assignedTaskCount", color = Color(0xFFFFC107), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }
 }
 
-// ── Card sub-components ───────────────────────────────────────────────────────
+// ── Right panel: detail ───────────────────────────────────────────────────────
 
 @Composable
-private fun RoleBadge(role: String) {
-    val color = roleColor(role)
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(color.copy(alpha = 0.15f))
-            .border(1.dp, color.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+private fun StaffDetailPanel(
+    member: StaffMember,
+    assignedOrders: List<Order>,
+    assignedComplaints: List<Complaint>,
+    vm: StaffViewModel,
+) {
+    var showAvailableConfirm by remember(member.id) { mutableStateOf(false) }
+    val rc = roleColor(member.role)
+    val accentColor = availColor(member)
+
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // ── Header ────────────────────────────────────────────────────────────
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text(member.name, style = MaterialTheme.typography.headlineMedium, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                if (member.phone.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(member.phone, color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Role badge
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(rc.copy(alpha = 0.15f))
+                            .border(1.dp, rc.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Box(Modifier.size(6.dp).clip(CircleShape).background(rc))
+                            Text(roleLabel(member.role), color = rc, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    // Active chip
+                    val activeColor = if (member.isActive) Color(0xFF4CAF50) else DreamlandMuted
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(activeColor.copy(alpha = 0.12f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            if (member.isActive) "Active" else "Inactive",
+                            color = activeColor, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+            // Availability pill (large)
             Box(
                 modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(color),
-            )
-            Spacer(Modifier.width(5.dp))
-            Text(
-                roleLabel(role),
-                color = color,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ActiveChip(isActive: Boolean) {
-    val color = if (isActive) Color(0xFF4CAF50) else DreamlandMuted
-    val label = if (isActive) "Active" else "Inactive"
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 7.dp, vertical = 3.dp),
-    ) {
-        Text(
-            label,
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-@Composable
-private fun AvailabilityPill(member: StaffMember) {
-    val (dotColor, label) = when {
-        !member.isActive   -> DreamlandMuted to "Inactive"
-        member.isAvailable -> Color(0xFF4CAF50) to "Available"
-        else               -> Color(0xFFFFC107) to "Busy"
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(9.dp)
-                .clip(CircleShape)
-                .background(dotColor),
-        )
-        Text(
-            label,
-            color = dotColor,
-            fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-@Composable
-private fun StaffCardActions(member: StaffMember, vm: StaffViewModel) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Assign / Set Available — only for active staff
-        if (member.isActive) {
-            if (member.isAvailable) {
-                // Available: show Assign button to open task assignment dialog
-                Button(
-                    onClick = { vm.openAssignTasks(member) },
-                    modifier = Modifier.fillMaxWidth().height(34.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DreamlandGold.copy(alpha = 0.18f),
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
-                ) {
-                    Text(
-                        "Assign",
-                        color = DreamlandGold,
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-            } else {
-                // Busy: show Set Available button
-                Button(
-                    onClick = { vm.toggleAvailability(member) },
-                    modifier = Modifier.fillMaxWidth().height(34.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF4CAF50).copy(alpha = 0.18f),
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    border = BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f)),
-                ) {
-                    Text(
-                        "Set Available",
-                        color = Color(0xFF4CAF50),
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(accentColor.copy(alpha = 0.14f))
+                    .border(1.dp, accentColor.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(accentColor))
+                    val label = when {
+                        !member.isActive   -> "Inactive"
+                        member.isAvailable -> "Available"
+                        else               -> "Busy"
+                    }
+                    Text(label, color = accentColor, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                 }
             }
         }
 
-        // Edit + Activate/Deactivate row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+        Spacer(Modifier.height(20.dp))
+
+        // ── Assigned tasks ────────────────────────────────────────────────────
+        val totalAssigned = assignedOrders.size + assignedComplaints.size
+        if (totalAssigned > 0) {
+            Text(
+                "CURRENT TASKS",
+                style = MaterialTheme.typography.labelMedium,
+                color = DreamlandGold,
+                letterSpacing = 1.5.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                assignedOrders.forEach { order ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF7986CB).copy(alpha = 0.10f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF7986CB)))
+                        Text("Order · Room ${order.roomNumber}", color = Color(0xFF7986CB), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        val items = order.items.take(1).joinToString { it.name }.let { if (order.items.size > 1) "$it +${order.items.size - 1}" else it }
+                        if (items.isNotBlank()) Text(items, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                assignedComplaints.forEach { complaint ->
+                    val pc = when (complaint.priority) { "HIGH" -> Color(0xFFEF5350); "LOW" -> Color(0xFF4CAF50); else -> Color(0xFFFFC107) }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFEF5350).copy(alpha = 0.08f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(pc))
+                        Text("Complaint · Room ${complaint.roomNumber}", color = Color(0xFFEF5350), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        Text(complaint.priority, color = pc, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+            Spacer(Modifier.height(20.dp))
+        }
+
+        // ── Actions ───────────────────────────────────────────────────────────
+        Text("ACTIONS", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, letterSpacing = 1.5.sp)
+        Spacer(Modifier.height(12.dp))
+
+        if (member.isActive) {
+            Button(
+                onClick = { vm.openAssignTasks(member) },
+                modifier = Modifier.fillMaxWidth().height(42.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold.copy(alpha = 0.18f)),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+            ) {
+                Text("Assign Task", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+            }
+            if (!member.isAvailable) {
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { showAvailableConfirm = true },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50).copy(alpha = 0.18f)),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    border = BorderStroke(1.dp, Color(0xFF4CAF50).copy(alpha = 0.5f)),
+                ) {
+                    Text("Set Available", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(
                 onClick = { vm.openEditStaff(member) },
-                modifier = Modifier.weight(1f).height(34.dp),
+                modifier = Modifier.weight(1f).height(42.dp),
                 border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.55f)),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp),
+                shape = RoundedCornerShape(10.dp),
             ) {
-                Text(
-                    "Edit",
-                    color = DreamlandGold,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                Text("Edit", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
             }
             OutlinedButton(
                 onClick = { vm.toggleActive(member) },
-                modifier = Modifier.weight(1f).height(34.dp),
-                border = BorderStroke(
-                    1.dp,
-                    if (member.isActive) Color(0xFFEF5350).copy(alpha = 0.5f)
-                    else Color(0xFF4CAF50).copy(alpha = 0.5f),
-                ),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp),
+                modifier = Modifier.weight(1f).height(42.dp),
+                border = BorderStroke(1.dp, if (member.isActive) Color(0xFFEF5350).copy(alpha = 0.5f) else Color(0xFF4CAF50).copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(10.dp),
             ) {
                 Text(
                     if (member.isActive) "Deactivate" else "Activate",
                     color = if (member.isActive) Color(0xFFEF5350) else Color(0xFF4CAF50),
-                    style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
         }
     }
-}
 
-// ── Assigned tasks on card ────────────────────────────────────────────────────
+    // Set Available confirmation dialog
+    if (showAvailableConfirm) {
+        val hasTasks = assignedOrders.isNotEmpty() || assignedComplaints.isNotEmpty()
+        AlertDialog(
+            onDismissRequest = { showAvailableConfirm = false },
+            containerColor = DreamlandForestElevated,
+            title = { Text("Set ${member.name} Available?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (hasTasks) {
+                        Text("The following tasks will be marked as completed:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        assignedOrders.forEach { order ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF7986CB)))
+                                Text("Order · Room ${order.roomNumber}", color = Color(0xFF7986CB), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                        assignedComplaints.forEach { complaint ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFFEF5350)))
+                                Text("Complaint · Room ${complaint.roomNumber}", color = Color(0xFFEF5350), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    } else {
+                        Text("Mark ${member.name} as available?", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showAvailableConfirm = false
+                        vm.setAvailableWithCompletion(member, assignedOrders.map { it.id }, assignedComplaints.map { it.id })
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(if (hasTasks) "Complete & Set Available" else "Set Available", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showAvailableConfirm = false }) { Text("Cancel", color = DreamlandMuted) } },
+        )
+    }
+}
 
 @Composable
-private fun AssignedTasksList(orders: List<Order>, complaints: List<Complaint>) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        orders.forEach { order ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF7986CB).copy(alpha = 0.10f))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF7986CB)),
-                )
-                Text(
-                    "Order · Rm ${order.roomNumber}",
-                    color = Color(0xFF7986CB),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                val itemNames = order.items.take(1).joinToString { it.name }
-                    .let { if (order.items.size > 1) "$it +${order.items.size - 1}" else it }
-                if (itemNames.isNotBlank()) {
-                    Text(
-                        itemNames,
-                        color = DreamlandMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
-        }
-        complaints.forEach { complaint ->
-            val priorityColor = when (complaint.priority) {
-                "HIGH" -> Color(0xFFEF5350)
-                "LOW"  -> Color(0xFF4CAF50)
-                else   -> Color(0xFFFFC107)
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFFEF5350).copy(alpha = 0.08f))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(priorityColor),
-                )
-                Text(
-                    "Complaint · Rm ${complaint.roomNumber}",
-                    color = Color(0xFFEF5350),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    complaint.priority,
-                    color = priorityColor,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
+private fun StaffDetailPlaceholder() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Select a staff member", color = DreamlandMuted, style = MaterialTheme.typography.titleMedium)
+            Text("Choose someone from the list to see their details and manage tasks", color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
-// ── Summary chip ──────────────────────────────────────────────────────────────
+// ── Shared sub-components ─────────────────────────────────────────────────────
 
 @Composable
 private fun StaffSummaryChip(count: Int, label: String, color: Color) {
@@ -600,26 +568,14 @@ private fun StaffSummaryChip(count: Int, label: String, color: Color) {
             .clip(RoundedCornerShape(20.dp))
             .background(color.copy(alpha = 0.12f))
             .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(20.dp))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(7.dp)
-                    .clip(CircleShape)
-                    .background(color),
-            )
-            Text(
-                "$count $label",
-                color = color,
-                fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.labelMedium,
-            )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+            Text("$count $label", color = color, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
-
-// ── Filter dropdown ───────────────────────────────────────────────────────────
 
 @Composable
 private fun StaffFilterDropdown(
@@ -627,47 +583,33 @@ private fun StaffFilterDropdown(
     selected: String,
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayLabel = options.find { it.first == selected }?.second ?: label
-    Box {
+    Box(modifier) {
         OutlinedButton(
             onClick = { expanded = true },
             shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(
-                1.dp,
-                if (selected.isBlank()) DreamlandMuted.copy(alpha = 0.4f) else DreamlandGold,
-            ),
-            modifier = Modifier.widthIn(min = 130.dp),
+            border = BorderStroke(1.dp, if (selected.isBlank()) DreamlandMuted.copy(alpha = 0.4f) else DreamlandGold),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
         ) {
-            Text(
-                displayLabel,
-                color = if (selected.isBlank()) DreamlandMuted else DreamlandOnDark,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.width(4.dp))
-            Text("▾", color = DreamlandGold, fontSize = 10.sp)
+            Text(displayLabel, color = if (selected.isBlank()) DreamlandMuted else DreamlandOnDark, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("▾", color = DreamlandGold, fontSize = 9.sp)
         }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             properties = PopupProperties(focusable = false),
-            modifier = Modifier.widthIn(min = 150.dp).background(DreamlandForestElevated),
+            modifier = Modifier.widthIn(min = 130.dp).background(DreamlandForestElevated),
         ) {
             options.forEach { (value, display) ->
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            display,
-                            color = if (value == selected) DreamlandGold else DreamlandOnDark,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
+                        Text(display, color = if (value == selected) DreamlandGold else DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal)
                     },
-                    onClick = {
-                        onSelect(value)
-                        expanded = false
-                    },
+                    onClick = { onSelect(value); expanded = false },
                 )
             }
         }

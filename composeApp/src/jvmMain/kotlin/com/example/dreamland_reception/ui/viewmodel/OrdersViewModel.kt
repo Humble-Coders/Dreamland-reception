@@ -44,6 +44,7 @@ data class OrdersScreenState(
     val searchQuery: String = "",
     val roomFilter: String = "",
     val staffFilter: String = "",
+    val selectedOrderId: String? = null,
 ) {
     val newOrders: List<Order>       get() = orders.filter { it.status == "NEW" }
     val assignedOrders: List<Order>  get() = orders.filter { it.status == "ASSIGNED" }
@@ -83,7 +84,6 @@ data class CreateOrderDialogState(
     val stayQuery: String = "",
     val activeStays: List<Stay> = emptyList(),
     val catalogItems: List<CatalogItem> = emptyList(),
-    val category: String = "",
     val items: List<OrderItemEntry> = listOf(OrderItemEntry()),
     val notes: String = "",
     val isSaving: Boolean = false,
@@ -180,10 +180,11 @@ class OrdersViewModel(
 
     // ── Tab / filter ──────────────────────────────────────────────────────────
 
-    fun onTabSelected(i: Int) = _screenState.update { it.copy(selectedTab = i) }
+    fun onTabSelected(i: Int) = _screenState.update { it.copy(selectedTab = i, selectedOrderId = null) }
     fun onSearch(q: String) = _screenState.update { it.copy(searchQuery = q) }
     fun onRoomFilter(r: String) = _screenState.update { it.copy(roomFilter = r) }
     fun onStaffFilter(s: String) = _screenState.update { it.copy(staffFilter = s) }
+    fun selectOrder(id: String?) = _screenState.update { it.copy(selectedOrderId = id) }
 
     // ── Status update ─────────────────────────────────────────────────────────
 
@@ -220,7 +221,7 @@ class OrdersViewModel(
             _createOrderDialog.update { it.copy(
                 activeStays = stays,
                 catalogItems = catalog,
-                category = firstCategory,
+                items = listOf(OrderItemEntry(category = firstCategory)),
                 isLoadingStays = false,
                 isLoadingCatalog = false,
             ) }
@@ -248,7 +249,7 @@ class OrdersViewModel(
                         val q = entry.name.trim().lowercase()
                         val newSuggestions = catalog.filter { item ->
                             item.name.lowercase().contains(q) &&
-                                (s.category.isBlank() || item.category.split(",").map(String::trim).any { it == s.category })
+                                (entry.category.isBlank() || item.category.split(",").map(String::trim).any { it == entry.category })
                         }.take(6)
                         entry.copy(suggestions = newSuggestions, showSuggestions = newSuggestions.isNotEmpty())
                     }
@@ -277,18 +278,21 @@ class OrdersViewModel(
         ) }
     }
 
-    fun onCreateOrderCategory(v: String) = _createOrderDialog.update { s ->
-        s.copy(category = v, items = s.items.map { it.copy(suggestions = emptyList(), showSuggestions = false) })
+    fun onCreateOrderItemCategory(index: Int, category: String) = _createOrderDialog.update { s ->
+        s.copy(items = s.items.toMutableList().also {
+            it[index] = it[index].copy(category = category, suggestions = emptyList(), showSuggestions = false)
+        })
     }
 
     fun onCreateOrderNotes(v: String) = _createOrderDialog.update { it.copy(notes = v) }
 
     fun onCreateOrderItemName(index: Int, v: String) = _createOrderDialog.update { s ->
+        val itemCategory = s.items.getOrNull(index)?.category ?: ""
         val suggestions = if (v.isBlank()) emptyList() else {
             val q = v.trim().lowercase()
             s.catalogItems.filter { item ->
                 item.name.lowercase().contains(q) &&
-                    (s.category.isBlank() || item.category.split(",").map(String::trim).any { it == s.category })
+                    (itemCategory.isBlank() || item.category.split(",").map(String::trim).any { it == itemCategory })
             }.take(6)
         }
         // Auto-fill price when typed name exactly matches a catalog item and price is still blank
@@ -335,7 +339,10 @@ class OrdersViewModel(
         })
     }
 
-    fun addCreateOrderItem() = _createOrderDialog.update { it.copy(items = it.items + OrderItemEntry()) }
+    fun addCreateOrderItem() = _createOrderDialog.update { s ->
+        val firstCategory = s.categories.firstOrNull() ?: ""
+        s.copy(items = s.items + OrderItemEntry(category = firstCategory))
+    }
 
     fun removeCreateOrderItem(index: Int) = _createOrderDialog.update { s ->
         if (s.items.size <= 1) return@update s
@@ -360,7 +367,7 @@ class OrdersViewModel(
                 OrderItem(it.name.trim(), it.quantity, it.price.toDoubleOrNull() ?: 0.0)
             }
             val total = orderItems.sumOf { it.price * it.quantity }
-            val orderType = if (s.category == "Services") "SERVICE" else "ROOM_SERVICE"
+            val orderType = if (validItems.any { it.category == "Services" }) "SERVICE" else "ROOM_SERVICE"
             runCatching {
                 orderRepo.add(Order(
                     hotelId = AppContext.hotelId,

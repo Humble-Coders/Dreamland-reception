@@ -3,6 +3,7 @@ package com.example.dreamland_reception.stays
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -114,20 +115,6 @@ fun AddOrderDialog(
 
                 Spacer(Modifier.height(20.dp))
 
-                // ── Category chips (dynamic from catalog) ──────────────────
-                SectionLabel("Category")
-                Spacer(Modifier.height(8.dp))
-                if (state.isLoadingCatalog) {
-                    CircularProgressIndicator(modifier = Modifier.height(32.dp).width(32.dp), color = DreamlandGold, strokeWidth = 2.dp)
-                } else if (state.categories.isEmpty()) {
-                    Text("No categories available", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                } else {
-                    // Wrap chips so they flow across multiple rows if needed
-                    FlowRow(state.categories, state.category) { vm.onAddOrderCategory(it) }
-                }
-
-                Spacer(Modifier.height(20.dp))
-
                 // ── Items ──────────────────────────────────────────────────
                 SectionLabel("Items")
                 Spacer(Modifier.height(8.dp))
@@ -151,10 +138,49 @@ fun AddOrderDialog(
                                     }
                                 }
                             }
+
+                            // Per-item category chips
+                            if (state.isLoadingCatalog) {
+                                Spacer(Modifier.height(6.dp))
+                                CircularProgressIndicator(modifier = Modifier.height(20.dp).width(20.dp), color = DreamlandGold, strokeWidth = 2.dp)
+                            } else if (state.categories.isNotEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                ) {
+                                    state.categories.forEach { cat ->
+                                        val isSelected = item.category == cat
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .border(
+                                                    1.dp,
+                                                    if (isSelected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f),
+                                                    RoundedCornerShape(8.dp),
+                                                )
+                                                .background(if (isSelected) DreamlandGold.copy(alpha = 0.15f) else DreamlandForestSurface)
+                                                .clickable(
+                                                    interactionSource = remember { MutableInteractionSource() },
+                                                    indication = null,
+                                                ) { vm.onAddOrderItemCategory(index, cat) }
+                                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                                        ) {
+                                            Text(
+                                                cat,
+                                                color = if (isSelected) DreamlandGold else DreamlandMuted,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             Spacer(Modifier.height(6.dp))
 
                             // Autocomplete item name field
-                            val isServiceCategory = state.category == "Services"
+                            val isServiceCategory = item.category == "Services"
                             AutocompleteItemField(
                                 value = item.name,
                                 suggestions = item.suggestions,

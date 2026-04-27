@@ -48,7 +48,6 @@ data class RoomStatusBreakdown(
     val total: Int = 0,
     val available: Int = 0,
     val occupied: Int = 0,
-    val assigned: Int = 0,
     val cleaning: Int = 0,
     val maintenance: Int = 0,
 )
@@ -230,9 +229,11 @@ class DashboardViewModel(
 
         val revenueToday = hotelInvoices.filter { isSameDay(it.issuedAt, date) }.sumOf { it.totalAmount }
 
+        // OCCUPIED is not a DB status; derive from active stays (rooms with an active stay = occupied)
+        val activeRoomIds = stays.filter { it.status == "ACTIVE" }.map { it.roomInstanceId }.toSet()
         val occupancyRate = if (rooms.isEmpty()) 0f else {
             if (isToday) {
-                rooms.count { it.status == "OCCUPIED" }.toFloat() / rooms.size
+                activeRoomIds.size.toFloat() / rooms.size
             } else {
                 val noonDate = Calendar.getInstance().apply {
                     time = date; set(Calendar.HOUR_OF_DAY, 12)
@@ -251,9 +252,8 @@ class DashboardViewModel(
 
         val roomStatus = RoomStatusBreakdown(
             total = rooms.size,
-            available = rooms.count { it.status == "AVAILABLE" },
-            occupied = rooms.count { it.status == "OCCUPIED" },
-            assigned = rooms.count { it.status == "ASSIGNED" },
+            available = rooms.count { it.status == "AVAILABLE" && it.id !in activeRoomIds },
+            occupied = activeRoomIds.size,
             cleaning = rooms.count { it.status == "CLEANING" },
             maintenance = rooms.count { it.status == "MAINTENANCE" },
         )

@@ -3,7 +3,7 @@
 > **Source of truth:** `src/schema.js`
 > This file mirrors the schema in human-readable form.
 > When you update `src/schema.js`, update this file too.
-> Last updated: 2026-04-12
+> Last updated: 2026-04-26
 
 ---
 
@@ -236,14 +236,17 @@ Represents a **room category/type** (not a specific room number).
 ## Collection: `roomInstances`
 Represents a **specific physical room** (e.g. room number 101) tied to a room category.
 
-| Field | Type | Required | Notes                                                               |
-|-------|------|----------|---------------------------------------------------------------------|
-| `hotelId` | string | ✅ | Parent hotel ID                                                     |
-| `categoryId` | string | ✅ | `rooms/{categoryId}`                                                |
-| `roomNumber` | string | ✅ | Room number/identifier                                              |
-| `status` | enum | ✅ | `AVAILABLE` \| `OCCUPIED` \| `CLEANING` \| `MAINTENANCE`\|'ASSIGNED' | 
-| `currentStayId` | string | — | Active stay ID or `null`                                            |
-| `createdAt` | timestamp | — | Read-only                                                           |
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `hotelId` | string | ✅ | Parent hotel ID |
+| `categoryId` | string | ✅ | `rooms/{categoryId}` |
+| `categoryName` | string | — | Denormalized from `rooms` |
+| `roomNumber` | string | ✅ | Room number/identifier |
+| `status` | enum | ✅ | `AVAILABLE` \| `CLEANING` \| `MAINTENANCE` |
+| `currentStayId` | string | — | ID of the currently active stay; `null` when no guest is in the room |
+| `createdAt` | timestamp | — | Read-only |
+
+> **`OCCUPIED` is a display label only** — it is never written to Firestore. The reception app derives "occupied" client-side: if a room's `roomInstanceId` appears in any `stays` document with `status = ACTIVE`, that room is shown as Occupied. No `ASSIGNED` status exists either; linking a booking to a room only writes `roomInstanceId` on the booking document while the room stays `AVAILABLE` in the DB.
 
 ---
 
@@ -296,8 +299,8 @@ Collections used by the Dreamland Reception desktop app. All flat — no subcoll
 | `userName` | string | |
 | `roomCategoryId` | string | Ref to `rooms` |
 | `roomCategoryName` | string | Denormalized |
-| `roomInstanceId` | string | Assigned at check-in; `null` at booking time |
-| `roomNumber` | string | Assigned at check-in; `null` at booking time |
+| `roomInstanceId` | string | Empty at booking creation; set only when receptionist manually assigns a room via "Assign Room" in the reception app |
+| `roomNumber` | string | Empty at booking creation; set alongside `roomInstanceId` when room is manually assigned |
 | `guestDetails.name` | string | |
 | `guestDetails.phone` | string | |
 | `checkInDate` | timestamp | |
@@ -329,8 +332,8 @@ Active and completed guest stays. Options are synced from the booking at check-i
 | `bookingId` | string | Optional; empty for walk-ins |
 | `roomInstanceId` | string | |
 | `roomNumber` | string | |
-| `roomCategoryId` | string | |
-| `roomCategoryName` | string | Denormalized |
+| `roomCategoryId` | string | Always derived from `roomInstances/{roomInstanceId}.categoryId` at check-in — never sent from client UI |
+| `roomCategoryName` | string | Denormalized from `roomInstances/{roomInstanceId}.categoryName` |
 | `guestDetails.name` | string | |
 | `guestDetails.phone` | string | |
 | `options.breakfast` | boolean | |
@@ -343,6 +346,21 @@ Active and completed guest stays. Options are synced from the booking at check-i
 | `status` | enum | `ACTIVE` \| `COMPLETED` |
 | `occupancy.adults` | number | |
 | `occupancy.children` | number | |
+
+> **Atomic write rule:** Stay creation and room status transition (`AVAILABLE → OCCUPIED`) are performed in a single Firestore **batch write**. If either write fails, both are rolled back.
+
+---
+
+## Reception App — Availability Algorithm
+
+The Rooms screen and Check Availability panel compute available room counts **client-side** using the following steps. No Cloud Functions are involved.
+
+1. Query `bookings` where `hotelId = X`, `status = CONFIRMED`, `checkInDate < requestedCheckOut`, `checkOutDate > requestedCheckIn`. Group by `roomCategoryId` → committed bookings per category.
+2. Query `stays` where `hotelId = X`, `status = ACTIVE`, `expectedCheckOut > requestedCheckIn`. Group by `roomCategoryId` → committed stays per category.
+3. For each category, count `roomInstances` where `hotelId = X`, `categoryId = cat.id`, `status NOT IN (MAINTENANCE, CLEANING)` → usable physical rooms. (`OCCUPIED` is not a DB status; occupancy is captured by Step 2.)
+4. `availableRooms = usable − (committed bookings + committed stays)`.
+5. Keep only categories where `availableRooms > 0`, `capacity ≥ requestedGuests`, `status ≠ maintenance`.
+6. Return remaining categories with `pricePerNight` from the `rooms` document.
 
 ---
 
@@ -458,9 +476,60 @@ Lookup table for complaint categories.
 |-------|------|-------|
 | `hotelId` | string | |
 | `name` | string | e.g. `AC Issue` |
-| `type` | enum | `MAINTENANCE` \| `HOUSEKEEPING` \| `NOISE` \| `FOOD` \| `STAFF` \| `OTHER` |
 | `description` | string | |
 | `isActive` | boolean | |
+| `createdAt` | timestamp | |
+
+---
+
+## Collection: `bills`
+
+Detailed billing records for guest stays. One document per stay, created at check-out.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `hotelId` | string | |
+| `stayId` | string | Ref to `stays` |
+| `guestName` | string | Denormalized |
+| `roomNumber` | string | Denormalized |
+| `checkInDate` | timestamp | |
+| `checkOutDate` | timestamp | |
+| `items` | object[] | See `BillItem` below |
+| `taxEnabled` | boolean | |
+| `taxPercentage` | number | e.g. `18` |
+| `discountType` | enum | `FLAT` \| `PERCENT` |
+| `discountValue` | number | ₹ or % |
+| `subtotal` | number | Sum of all item totals |
+| `taxAmount` | number | Computed from subtotal × taxPercentage |
+| `discountAmount` | number | Computed discount |
+| `totalAmount` | number | subtotal + taxAmount - discountAmount |
+| `transactions` | object[] | See `PaymentTransaction` below |
+| `totalPaid` | number | Sum of transaction amounts |
+| `advancePayment` | number | Carried from check-in billing record |
+| `pendingAmount` | number | totalAmount - totalPaid - advancePayment |
+| `status` | enum | `PENDING` \| `PARTIAL` \| `PAID` |
+| `createdAt` | timestamp | |
+| `updatedAt` | timestamp | |
+
+### BillItem (nested array)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string | UUID |
+| `name` | string | |
+| `type` | enum | `ROOM` \| `ORDER` \| `SERVICE` \| `CUSTOM` |
+| `quantity` | number | |
+| `unitPrice` | number | ₹ |
+| `total` | number | unitPrice × quantity |
+| `refId` | string | Optional reference to source document |
+| `notes` | string | |
+
+### PaymentTransaction (nested array)
+| Field | Type | Notes |
+|-------|------|-------|
+| `id` | string | UUID |
+| `amount` | number | ₹ |
+| `method` | enum | `CASH` \| `UPI` \| `CARD` |
+| `status` | string | `PAID` |
 | `createdAt` | timestamp | |
 
 ---

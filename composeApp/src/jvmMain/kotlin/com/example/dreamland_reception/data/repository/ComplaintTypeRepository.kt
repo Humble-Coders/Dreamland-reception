@@ -45,7 +45,6 @@ object FirestoreComplaintTypeRepository : ComplaintTypeRepository {
             id = id,
             hotelId = getString("hotelId") ?: "",
             name = getString("name") ?: "",
-            type = getString("type") ?: "MAINTENANCE",
             description = getString("description") ?: "",
             isActive = getBoolean("isActive") ?: true,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
@@ -55,7 +54,6 @@ object FirestoreComplaintTypeRepository : ComplaintTypeRepository {
     private fun ComplaintType.toMap() = mapOf(
         "hotelId" to hotelId,
         "name" to name,
-        "type" to type,
         "description" to description,
         "isActive" to isActive,
         "createdAt" to createdAt,

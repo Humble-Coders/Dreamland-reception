@@ -3,6 +3,7 @@ package com.example.dreamland_reception
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,18 +14,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -38,6 +38,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,187 +75,102 @@ fun ComplaintsScreen(vm: ComplaintsViewModel = DreamlandAppInitializer.getCompla
     val createDialog by vm.createDialog.collectAsStateWithLifecycle()
     val assignDialog by vm.assignDialog.collectAsStateWithLifecycle()
 
-    Column(modifier = Modifier.fillMaxSize().background(DreamlandForest)) {
+    val selectedComplaint = screenState.complaints.find { it.id == screenState.selectedComplaintId }
 
-        // ── Header ─────────────────────────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column {
-                Text(
-                    "FEEDBACK",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = DreamlandGold,
-                    letterSpacing = 2.sp,
-                )
-                Text("Complaints", style = MaterialTheme.typography.headlineMedium, color = DreamlandOnDark)
-            }
-            Button(
-                onClick = { vm.openCreateComplaint() },
-                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                shape = RoundedCornerShape(10.dp),
+    Row(Modifier.fillMaxSize()) {
+        // ── LEFT: list ────────────────────────────────────────────────────────
+        Column(Modifier.width(480.dp).fillMaxHeight().background(DreamlandForestSurface)) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text("+ New Complaint", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
-            }
-        }
-
-        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-        // ── Filter row ─────────────────────────────────────────────────────
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            OutlinedTextField(
-                value = screenState.searchQuery,
-                onValueChange = { vm.onSearch(it) },
-                label = { Text("Search guest, room, description…", color = DreamlandMuted, fontSize = 12.sp) },
-                singleLine = true,
-                modifier = Modifier.weight(1f).heightIn(max = 56.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = DreamlandOnDark,
-                    unfocusedTextColor = DreamlandOnDark,
-                    focusedBorderColor = DreamlandGold,
-                    unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                    cursorColor = DreamlandGold,
-                ),
-            )
-            ComplaintFilterDropdown(
-                label = "Room",
-                selected = screenState.roomFilter,
-                options = listOf("" to "All Rooms") + screenState.uniqueRooms.map { it to "Room $it" },
-                onSelect = { vm.onRoomFilter(it) },
-            )
-            ComplaintFilterDropdown(
-                label = "Staff",
-                selected = screenState.staffFilter,
-                options = listOf("" to "All Staff") + screenState.uniqueStaff.map { it.first to it.second },
-                onSelect = { vm.onStaffFilter(it) },
-            )
-            ComplaintFilterDropdown(
-                label = "Priority",
-                selected = screenState.priorityFilter,
-                options = listOf("" to "All Priorities", "HIGH" to "High", "MEDIUM" to "Medium", "LOW" to "Low"),
-                onSelect = { vm.onPriorityFilter(it) },
-            )
-        }
-
-        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-        // ── Tab row ────────────────────────────────────────────────────────
-        val tabLabels = listOf(
-            "NEW" to screenState.newComplaints.size,
-            "ASSIGNED" to screenState.assignedComplaints.size,
-            "COMPLETED" to screenState.completedComplaints.size,
-        )
-        val tabAccentColors = listOf(
-            Color(0xFFFFC107),
-            Color(0xFF4CAF50),
-            DreamlandMuted,
-        )
-        SecondaryTabRow(
-            selectedTabIndex = screenState.selectedTab,
-            containerColor = DreamlandForestSurface,
-            contentColor = DreamlandGold,
-            indicator = {
-                TabRowDefaults.SecondaryIndicator(
-                    Modifier.tabIndicatorOffset(screenState.selectedTab),
-                    color = tabAccentColors[screenState.selectedTab],
-                )
-            },
-        ) {
-            tabLabels.forEachIndexed { i, (label, count) ->
-                Tab(
-                    selected = screenState.selectedTab == i,
-                    onClick = { vm.onTabSelected(i) },
-                    modifier = Modifier.padding(vertical = 4.dp),
+                Column {
+                    Text("FEEDBACK", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                    Text("Complaints", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                }
+                Button(
+                    onClick = { vm.openCreateComplaint() },
+                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.height(34.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(vertical = 10.dp),
-                    ) {
-                        Text(
-                            label,
-                            color = if (screenState.selectedTab == i) tabAccentColors[i] else DreamlandMuted,
-                            fontWeight = if (screenState.selectedTab == i) FontWeight.Bold else FontWeight.Normal,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (count > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(tabAccentColors[i].copy(alpha = 0.2f))
-                                    .padding(horizontal = 7.dp, vertical = 2.dp),
-                            ) {
-                                Text(
-                                    "$count",
-                                    color = tabAccentColors[i],
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                )
+                    Text("+ New", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+            // Filters
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(
+                    value = screenState.searchQuery,
+                    onValueChange = { vm.onSearch(it) },
+                    placeholder = { Text("Search guest, room, description…", color = DreamlandMuted, fontSize = 12.sp) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                        cursorColor = DreamlandGold,
+                    ),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ComplaintFilterDropdown(
+                        label = "Room", selected = screenState.roomFilter,
+                        options = listOf("" to "All Rooms") + screenState.uniqueRooms.map { it to "Room $it" },
+                        onSelect = { vm.onRoomFilter(it) }, modifier = Modifier.weight(1f),
+                    )
+                    ComplaintFilterDropdown(
+                        label = "Priority", selected = screenState.priorityFilter,
+                        options = listOf("" to "All", "HIGH" to "High", "MEDIUM" to "Medium", "LOW" to "Low"),
+                        onSelect = { vm.onPriorityFilter(it) }, modifier = Modifier.weight(1f),
+                    )
+                }
+                ComplaintFilterDropdown(
+                    label = "Staff", selected = screenState.staffFilter,
+                    options = listOf("" to "All Staff") + screenState.uniqueStaff.map { it.first to it.second },
+                    onSelect = { vm.onStaffFilter(it) }, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+            // Tabs
+            val tabLabels = listOf("NEW" to screenState.newComplaints.size, "ASSIGNED" to screenState.assignedComplaints.size, "COMPLETED" to screenState.completedComplaints.size)
+            val tabColors = listOf(Color(0xFFFFC107), Color(0xFF4CAF50), DreamlandMuted)
+            SecondaryTabRow(
+                selectedTabIndex = screenState.selectedTab,
+                containerColor = DreamlandForestSurface,
+                contentColor = DreamlandGold,
+                indicator = { TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(screenState.selectedTab), color = tabColors[screenState.selectedTab]) },
+            ) {
+                tabLabels.forEachIndexed { i, (label, count) ->
+                    Tab(selected = screenState.selectedTab == i, onClick = { vm.onTabSelected(i) }, modifier = Modifier.padding(vertical = 2.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                            Text(label, color = if (screenState.selectedTab == i) tabColors[i] else DreamlandMuted, fontWeight = if (screenState.selectedTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.labelMedium)
+                            if (count > 0) {
+                                Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(tabColors[i].copy(alpha = 0.2f)).padding(horizontal = 5.dp, vertical = 1.dp)) {
+                                    Text("$count", color = tabColors[i], style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
                 }
             }
+
+            // List
+            ComplaintListContent(screenState.isLoading, screenState.error, screenState.filtered, screenState.selectedComplaintId, vm)
         }
 
-        // ── Body ───────────────────────────────────────────────────────────
-        Box(modifier = Modifier.fillMaxSize()) {
-            when {
-                screenState.isLoading -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = DreamlandGold)
-                    }
-                }
-                screenState.error != null -> {
-                    val err = screenState.error!!
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        ErrorText(err)
-                    }
-                }
-                screenState.filtered.isEmpty() -> {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                when (screenState.selectedTab) {
-                                    0 -> "No new complaints"
-                                    1 -> "No assigned complaints"
-                                    else -> "No completed complaints"
-                                },
-                                color = DreamlandMuted,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            if (screenState.searchQuery.isNotBlank() || screenState.roomFilter.isNotBlank() ||
-                                screenState.staffFilter.isNotBlank() || screenState.priorityFilter.isNotBlank()
-                            ) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "Try adjusting your filters",
-                                    color = DreamlandMuted.copy(alpha = 0.6f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
-                    }
-                }
-                else -> {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        contentPadding = PaddingValues(16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(screenState.filtered, key = { it.id }) { complaint ->
-                            ComplaintCard(complaint = complaint, vm = vm)
-                        }
-                    }
-                }
+        VerticalDivider(color = DreamlandGold.copy(alpha = 0.15f), thickness = 1.dp)
+
+        // ── RIGHT: detail ─────────────────────────────────────────────────────
+        Box(Modifier.weight(1f).fillMaxHeight().background(DreamlandForest)) {
+            if (selectedComplaint != null) {
+                ComplaintDetailPanel(complaint = selectedComplaint, vm = vm)
+            } else {
+                ComplaintDetailPlaceholder()
             }
         }
     }
@@ -263,218 +179,221 @@ fun ComplaintsScreen(vm: ComplaintsViewModel = DreamlandAppInitializer.getCompla
     if (assignDialog.isOpen) AssignStaffDialog(state = assignDialog, vm = vm)
 }
 
-// ── Complaint Card ────────────────────────────────────────────────────────────
+// ── Left panel: list ──────────────────────────────────────────────────────────
 
 @Composable
-private fun ComplaintCard(complaint: Complaint, vm: ComplaintsViewModel) {
-    val priorityColor = PRIORITY_COLOR[complaint.priority] ?: DreamlandMuted
-    val statusAccent = when (complaint.status) {
-        "NEW" -> Color(0xFFFFC107)
-        "ASSIGNED" -> Color(0xFF4CAF50)
-        else -> DreamlandMuted
+private fun ComplaintListContent(
+    isLoading: Boolean,
+    error: String?,
+    filtered: List<Complaint>,
+    selectedId: String?,
+    vm: ComplaintsViewModel,
+) {
+    when {
+        isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = DreamlandGold) }
+        error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { ErrorText(error) }
+        filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No complaints", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+        }
+        else -> LazyColumn(modifier = Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(filtered, key = { it.id }) { complaint ->
+                ComplaintListItem(
+                    complaint = complaint,
+                    isSelected = complaint.id == selectedId,
+                    onClick = { vm.selectComplaint(if (complaint.id == selectedId) null else complaint.id) },
+                )
+            }
+        }
     }
+}
 
-    Card(
-        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
-        shape = RoundedCornerShape(12.dp),
+@Composable
+private fun ComplaintListItem(complaint: Complaint, isSelected: Boolean, onClick: () -> Unit) {
+    val priorityColor = PRIORITY_COLOR[complaint.priority] ?: DreamlandMuted
+    Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) DreamlandForestElevated else Color.Transparent)
             .border(
-                width = if (complaint.priority == "HIGH") 1.dp else 0.dp,
-                color = if (complaint.priority == "HIGH") priorityColor.copy(alpha = 0.45f) else Color.Transparent,
-                shape = RoundedCornerShape(12.dp),
-            ),
-    ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // ── Priority accent bar ────────────────────────────────────────
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(priorityColor),
+                1.dp,
+                if (isSelected) DreamlandGold
+                else if (complaint.priority == "HIGH") priorityColor.copy(alpha = 0.4f)
+                else DreamlandMuted.copy(alpha = 0.18f),
+                RoundedCornerShape(8.dp),
             )
-            Column(modifier = Modifier.weight(1f).padding(14.dp)) {
-
-                // Room + priority badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Room ${complaint.roomNumber}",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = DreamlandOnDark,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    PriorityBadge(complaint.priority)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.width(4.dp).fillMaxHeight().background(priorityColor, RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)))
+        Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 9.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Room ${complaint.roomNumber}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = DreamlandOnDark)
+                PriorityBadge(complaint.priority)
+            }
+            Text(complaint.guestName, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            if (complaint.type.isNotBlank()) Text(complaint.type, color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+            Spacer(Modifier.height(3.dp))
+            Text(complaint.description, color = DreamlandOnDark, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(2.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(timeAgo(complaint.reportedAt), color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                if (complaint.assignedToName.isNotBlank()) {
+                    Text("→ ${complaint.assignedToName}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+            }
+        }
+    }
+}
 
-                Text(
-                    complaint.guestName,
-                    color = DreamlandMuted,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+// ── Right panel: detail ───────────────────────────────────────────────────────
 
+@Composable
+private fun ComplaintDetailPanel(complaint: Complaint, vm: ComplaintsViewModel) {
+    var showConfirm by remember(complaint.id) { mutableStateOf(false) }
+    val priorityColor = PRIORITY_COLOR[complaint.priority] ?: DreamlandMuted
+    val statusAccent = when (complaint.status) { "NEW" -> Color(0xFFFFC107); "ASSIGNED" -> Color(0xFF4CAF50); else -> DreamlandMuted }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp)) {
+        // Header
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("Room ${complaint.roomNumber}", style = MaterialTheme.typography.headlineMedium, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                Text(complaint.guestName, color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
                 if (complaint.type.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        complaint.type,
-                        color = DreamlandMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 0.5.sp,
-                    )
+                    Text(complaint.type, color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall, letterSpacing = 0.5.sp)
                 }
-
-                Spacer(Modifier.height(8.dp))
-
-                Text(
-                    complaint.description,
-                    color = DreamlandOnDark,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
-                Spacer(Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+            }
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                PriorityBadge(complaint.priority, large = true)
+                Box(
+                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(statusAccent.copy(alpha = 0.14f)).border(1.dp, statusAccent.copy(alpha = 0.4f), RoundedCornerShape(6.dp)).padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
-                    Text(
-                        timeAgo(complaint.reportedAt),
-                        color = DreamlandMuted,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    StatusBadge(complaint.status, statusAccent)
+                    Text(complaint.status, color = statusAccent, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 }
-
-                if (complaint.assignedToName.isNotBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "→ ${complaint.assignedToName}",
-                        color = Color(0xFF4CAF50),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-
-                Spacer(Modifier.height(10.dp))
-                ComplaintCardActions(complaint = complaint, vm = vm)
             }
         }
-    }
-}
 
-@Composable
-private fun ComplaintCardActions(complaint: Complaint, vm: ComplaintsViewModel) {
-    when (complaint.status) {
-        "NEW" -> {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+        Spacer(Modifier.height(16.dp))
+
+        // Description
+        Text("DESCRIPTION", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, letterSpacing = 1.5.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(complaint.description, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+        Spacer(Modifier.height(12.dp))
+
+        // Meta
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(timeAgo(complaint.reportedAt), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            Box(Modifier.clip(RoundedCornerShape(6.dp)).background(statusAccent.copy(alpha = 0.12f)).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                Text(when (complaint.status) { "NEW" -> "New"; "ASSIGNED" -> "Assigned"; else -> "Resolved" }, color = statusAccent, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        if (complaint.assignedToName.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text("→ ${complaint.assignedToName}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+        }
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+        Spacer(Modifier.height(16.dp))
+
+        // Actions
+        Text("ACTIONS", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, letterSpacing = 1.5.sp)
+        Spacer(Modifier.height(12.dp))
+
+        when (complaint.status) {
+            "NEW" -> {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { vm.openAssignStaff(complaint.id) },
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text("Assign Staff", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
+                    }
+                    OutlinedButton(
+                        onClick = { vm.updateStatus(complaint.id, "COMPLETED") },
+                        modifier = Modifier.weight(1f).height(42.dp),
+                        border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text("Resolve", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            "ASSIGNED" -> {
                 Button(
-                    onClick = { vm.openAssignStaff(complaint.id) },
-                    modifier = Modifier.weight(1f).height(36.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    onClick = { showConfirm = true },
+                    modifier = Modifier.fillMaxWidth().height(42.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                    shape = RoundedCornerShape(10.dp),
                 ) {
-                    Text(
-                        "Assign Staff",
-                        color = Color(0xFF0D1F17),
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
+                    Text("Mark Resolved", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
                 }
-                OutlinedButton(
-                    onClick = { vm.updateStatus(complaint.id, "COMPLETED") },
-                    modifier = Modifier.weight(1f).height(36.dp),
-                    border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.6f)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Text("Resolve", style = MaterialTheme.typography.labelMedium, color = DreamlandGold)
+            }
+            else -> {
+                Box(Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFF4CAF50).copy(alpha = 0.1f)).padding(horizontal = 14.dp, vertical = 8.dp)) {
+                    Text("RESOLVED", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
                 }
             }
         }
-        "ASSIGNED" -> {
-            Button(
-                onClick = { vm.updateStatus(complaint.id, "COMPLETED") },
-                modifier = Modifier.fillMaxWidth().height(36.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                shape = RoundedCornerShape(8.dp),
-            ) {
-                Text(
-                    "Mark Resolved",
-                    color = Color(0xFF0D1F17),
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-        }
-        else -> {
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF4CAF50).copy(alpha = 0.1f))
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            ) {
-                Text(
-                    "RESOLVED",
-                    color = Color(0xFF4CAF50),
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 1.sp,
-                )
-            }
-        }
+    }
+
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { showConfirm = false },
+            containerColor = DreamlandForestElevated,
+            title = { Text("Resolve Complaint?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Room ${complaint.roomNumber}  ·  ${complaint.guestName}", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    if (complaint.type.isNotBlank()) Text(complaint.type, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                    if (complaint.description.isNotBlank()) Text(complaint.description, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showConfirm = false; vm.updateStatus(complaint.id, "COMPLETED") }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), shape = RoundedCornerShape(8.dp)) {
+                    Text("Yes, Resolve", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showConfirm = false }) { Text("Cancel", color = DreamlandMuted) } },
+        )
     }
 }
 
 @Composable
-private fun PriorityBadge(priority: String) {
+private fun ComplaintDetailPlaceholder() {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Select a complaint", color = DreamlandMuted, style = MaterialTheme.typography.titleMedium)
+            Text("Choose a complaint from the list to view details and take action", color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+// ── Shared composables ────────────────────────────────────────────────────────
+
+@Composable
+private fun PriorityBadge(priority: String, large: Boolean = false) {
     val color = PRIORITY_COLOR[priority] ?: DreamlandMuted
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
             .background(color.copy(alpha = 0.15f))
             .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+            .padding(horizontal = if (large) 10.dp else 7.dp, vertical = if (large) 4.dp else 3.dp),
     ) {
-        Text(
-            priority,
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
+        Text(priority, color = color, style = if (large) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
     }
 }
-
-@Composable
-private fun StatusBadge(status: String, color: Color) {
-    val label = when (status) {
-        "NEW" -> "New"
-        "ASSIGNED" -> "Assigned"
-        else -> "Resolved"
-    }
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    ) {
-        Text(
-            label,
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-}
-
-// ── Filter dropdown ───────────────────────────────────────────────────────────
 
 @Composable
 private fun ComplaintFilterDropdown(
@@ -482,54 +401,36 @@ private fun ComplaintFilterDropdown(
     selected: String,
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayLabel = options.find { it.first == selected }?.second ?: label
-    Box {
+    Box(modifier) {
         OutlinedButton(
             onClick = { expanded = true },
             shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(
-                1.dp,
-                if (selected.isBlank()) DreamlandMuted.copy(alpha = 0.4f) else DreamlandGold,
-            ),
-            modifier = Modifier.widthIn(min = 120.dp),
+            border = BorderStroke(1.dp, if (selected.isBlank()) DreamlandMuted.copy(alpha = 0.4f) else DreamlandGold),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
         ) {
-            Text(
-                displayLabel,
-                color = if (selected.isBlank()) DreamlandMuted else DreamlandOnDark,
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Spacer(Modifier.width(4.dp))
-            Text("▾", color = DreamlandGold, fontSize = 10.sp)
+            Text(displayLabel, color = if (selected.isBlank()) DreamlandMuted else DreamlandOnDark, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Text("▾", color = DreamlandGold, fontSize = 9.sp)
         }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             properties = PopupProperties(focusable = false),
-            modifier = Modifier.widthIn(min = 140.dp).background(DreamlandForestElevated),
+            modifier = Modifier.widthIn(min = 130.dp).background(DreamlandForestElevated),
         ) {
             options.forEach { (value, display) ->
                 DropdownMenuItem(
-                    text = {
-                        Text(
-                            display,
-                            color = if (value == selected) DreamlandGold else DreamlandOnDark,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    },
-                    onClick = {
-                        onSelect(value)
-                        expanded = false
-                    },
+                    text = { Text(display, color = if (value == selected) DreamlandGold else DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal) },
+                    onClick = { onSelect(value); expanded = false },
                 )
             }
         }
     }
 }
-
-// ── Time helper ───────────────────────────────────────────────────────────────
 
 private fun timeAgo(date: Date): String {
     val diff = System.currentTimeMillis() - date.time
@@ -537,10 +438,10 @@ private fun timeAgo(date: Date): String {
     val hours = TimeUnit.MILLISECONDS.toHours(diff)
     val days = TimeUnit.MILLISECONDS.toDays(diff)
     return when {
-        minutes < 1 -> "Just now"
+        minutes < 1  -> "Just now"
         minutes < 60 -> "${minutes}m ago"
-        hours < 24 -> "${hours}h ago"
-        days < 7 -> "${days}d ago"
-        else -> SimpleDateFormat("d MMM", Locale.getDefault()).format(date)
+        hours < 24   -> "${hours}h ago"
+        days < 7     -> "${days}d ago"
+        else         -> SimpleDateFormat("d MMM", Locale.getDefault()).format(date)
     }
 }

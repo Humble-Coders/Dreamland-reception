@@ -13,6 +13,7 @@ interface BillingRepository {
     suspend fun add(invoice: BillingInvoice): String
     suspend fun markPaid(id: String, method: String)
     suspend fun updateCharges(id: String, earlyCheckInCharge: Double, lateCheckOutCharge: Double, totalAmount: Double)
+    suspend fun finalizeFromBill(id: String, totalAmount: Double, amountPaid: Double, status: String)
 }
 
 object FirestoreBillingRepository : BillingRepository {
@@ -57,6 +58,20 @@ object FirestoreBillingRepository : BillingRepository {
             "earlyCheckInCharge" to earlyCheckInCharge,
             "lateCheckOutCharge" to lateCheckOutCharge,
             "totalAmount" to totalAmount,
+        )).get(); Unit
+    }
+
+    override suspend fun finalizeFromBill(
+        id: String,
+        totalAmount: Double,
+        amountPaid: Double,
+        status: String,
+    ) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "totalAmount" to totalAmount,
+            "amountPaid" to amountPaid,
+            "status" to status,
+            "issuedAt" to Date(),
         )).get(); Unit
     }
 

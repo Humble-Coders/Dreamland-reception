@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.BillingScreen
+import com.example.dreamland_reception.billing.StayBillingScreen
 import com.example.dreamland_reception.ComplaintsScreen
 import com.example.dreamland_reception.DashboardScreen
 import com.example.dreamland_reception.DreamlandAppInitializer
@@ -145,6 +146,7 @@ private val dreamlandNavItems: List<NavItem> = listOf(
 @Composable
 fun DreamlandApp() {
     var selectedTab by remember { mutableStateOf(MainTab.Dashboard) }
+    var pendingBillingStayId by remember { mutableStateOf("") }
     var isSidebarExpanded by remember { mutableStateOf(true) }
     var isSidebarVisible by remember { mutableStateOf(true) }
 
@@ -217,8 +219,20 @@ fun DreamlandApp() {
                                 selectedTab = MainTab.Stays
                             },
                         )
-                        MainTab.Stays -> StaysScreen(onNavigateToBilling = { selectedTab = MainTab.Billing })
-                        MainTab.Billing -> BillingScreen()
+                        MainTab.Stays -> StaysScreen(onNavigateToBilling = { stayId ->
+                            pendingBillingStayId = stayId
+                            selectedTab = MainTab.Billing
+                        })
+                        MainTab.Billing -> if (pendingBillingStayId.isNotBlank()) {
+                            StayBillingScreen(
+                                stayId = pendingBillingStayId,
+                                onBack = { pendingBillingStayId = "" },
+                            )
+                        } else {
+                            BillingScreen(onOpenStayBilling = { stayId ->
+                                pendingBillingStayId = stayId
+                            })
+                        }
                         MainTab.Orders -> OrdersScreen()
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()

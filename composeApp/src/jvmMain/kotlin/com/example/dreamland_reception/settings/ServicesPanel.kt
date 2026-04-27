@@ -337,11 +337,8 @@ private fun ComplaintTypeRow(ct: ComplaintType, vm: SettingsViewModel) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text(ct.name, style = MaterialTheme.typography.bodyMedium, color = DreamlandOnDark)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TypeChip(ct.type)
-                    if (ct.description.isNotBlank()) {
-                        Text(ct.description, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, maxLines = 1)
-                    }
+                if (ct.description.isNotBlank()) {
+                    Text(ct.description, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, maxLines = 1)
                 }
             }
             Switch(
@@ -353,26 +350,6 @@ private fun ComplaintTypeRow(ct: ComplaintType, vm: SettingsViewModel) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = DreamlandMuted.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
         }
-    }
-}
-
-@Composable
-private fun TypeChip(type: String) {
-    val color = when (type) {
-        "MAINTENANCE" -> Color(0xFFFF9800)
-        "HOUSEKEEPING" -> Color(0xFF2196F3)
-        "FOOD" -> Color(0xFF4CAF50)
-        "NOISE" -> Color(0xFF9C27B0)
-        "BILLING" -> Color(0xFFE91E63)
-        else -> DreamlandMuted
-    }
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(color.copy(alpha = 0.15f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    ) {
-        Text(type, style = MaterialTheme.typography.labelMedium, color = color)
     }
 }
 

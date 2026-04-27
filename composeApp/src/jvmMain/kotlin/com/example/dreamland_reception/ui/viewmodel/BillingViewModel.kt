@@ -1,25 +1,46 @@
 package com.example.dreamland_reception.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
-import com.example.dreamland_reception.data.model.BillingInvoice
-import com.example.dreamland_reception.data.repository.BillingRepository
-import com.example.dreamland_reception.data.repository.FirestoreBillingRepository
+import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.data.repository.BillRepository
+import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
-sealed interface BillingUiState {
-    data object Loading : BillingUiState
-    data class Success(val invoices: List<BillingInvoice>) : BillingUiState
-    data class Error(val message: String) : BillingUiState
+data class BillingScreenState(
+    val bills: List<Bill> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val selectedBillId: String? = null,
+    val statusFilter: String = "ALL",   // ALL | PAID | PARTIAL | PENDING
+    val sortOrder: String = "NEWEST",   // NEWEST | OLDEST
+) {
+    val filteredSorted: List<Bill>
+        get() {
+            val base = if (statusFilter == "ALL") bills else bills.filter { it.status == statusFilter }
+            return if (sortOrder == "NEWEST") base.sortedByDescending { it.createdAt }
+            else base.sortedBy { it.createdAt }
+        }
+
+    val selectedBill: Bill? get() = bills.find { it.id == selectedBillId }
+
+    val totalRevenue: Double get() = bills.sumOf { it.totalAmount }
+    val totalCollected: Double get() = bills.sumOf { it.totalPaid + it.advancePayment }
+    val totalOutstanding: Double get() = bills.sumOf { it.pendingAmount }
+    val paidCount: Int get() = bills.count { it.status == "PAID" }
+    val partialCount: Int get() = bills.count { it.status == "PARTIAL" }
+    val pendingCount: Int get() = bills.count { it.status == "PENDING" }
 }
 
 class BillingViewModel(
-    private val repo: BillingRepository = FirestoreBillingRepository,
+    private val billRepo: BillRepository = FirestoreBillRepository,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<BillingUiState>(BillingUiState.Loading)
-    val uiState: StateFlow<BillingUiState> = _uiState.asStateFlow()
+    private val _state = MutableStateFlow(BillingScreenState(isLoading = true))
+    val state: StateFlow<BillingScreenState> = _state.asStateFlow()
 
     init {
         load()
@@ -27,23 +48,16 @@ class BillingViewModel(
 
     fun load() {
         launchWithGlobalLoading {
-            _uiState.value = BillingUiState.Loading
-            runCatching { repo.getAll() }
-                .onSuccess { _uiState.value = BillingUiState.Success(it) }
-                .onFailure { _uiState.value = BillingUiState.Error(it.message ?: "Unknown error") }
+            _state.update { it.copy(isLoading = true, error = null) }
+            runCatching { billRepo.getByHotel(AppContext.hotelId) }
+                .onSuccess { bills -> _state.update { it.copy(bills = bills, isLoading = false) } }
+                .onFailure { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
         }
     }
 
-    fun markPaid(invoiceId: String, method: String) {
-        launchWithGlobalLoading {
-            runCatching { repo.markPaid(invoiceId, method) }.onSuccess { refetch() }
-        }
-    }
+    fun selectBill(id: String?) = _state.update { it.copy(selectedBillId = id) }
 
-    private suspend fun refetch() {
-        _uiState.value = BillingUiState.Loading
-        runCatching { repo.getAll() }
-            .onSuccess { _uiState.value = BillingUiState.Success(it) }
-            .onFailure { _uiState.value = BillingUiState.Error(it.message ?: "Unknown error") }
-    }
+    fun onStatusFilter(filter: String) = _state.update { it.copy(statusFilter = filter) }
+
+    fun onSortOrder(order: String) = _state.update { it.copy(sortOrder = order) }
 }

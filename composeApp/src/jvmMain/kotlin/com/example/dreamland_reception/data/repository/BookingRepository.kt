@@ -13,9 +13,12 @@ interface BookingRepository {
     suspend fun getAll(): List<Booking>
     suspend fun getById(id: String): Booking?
     suspend fun getUpcoming(hotelId: String): List<Booking>
+    suspend fun getConfirmedByHotel(hotelId: String): List<Booking>
     suspend fun add(booking: Booking): String
     suspend fun update(booking: Booking)
     suspend fun delete(id: String)
+    suspend fun assignRoomTransaction(bookingId: String, roomInstanceId: String, roomNumber: String)
+    suspend fun cancelWithTransaction(bookingId: String)
     fun listenByHotel(hotelId: String): Flow<List<Booking>>
 }
 
@@ -33,6 +36,12 @@ object FirestoreBookingRepository : BookingRepository {
 
     override suspend fun getById(id: String): Booking? = withContext(Dispatchers.IO) {
         col.document(id).get().get().takeIf { it.exists() }?.toBooking()
+    }
+
+    override suspend fun getConfirmedByHotel(hotelId: String): List<Booking> = withContext(Dispatchers.IO) {
+        col.whereEqualTo("hotelId", hotelId).get().get()
+            .documents.mapNotNull { it.toBooking() }
+            .filter { it.status == "CONFIRMED" }
     }
 
     /** Returns CONFIRMED bookings for [hotelId] with checkIn within ±2 days of today. */
@@ -57,6 +66,36 @@ object FirestoreBookingRepository : BookingRepository {
 
     override suspend fun delete(id: String) = withContext(Dispatchers.IO) {
         col.document(id).delete().get(); Unit
+    }
+
+    override suspend fun assignRoomTransaction(
+        bookingId: String,
+        roomInstanceId: String,
+        roomNumber: String,
+    ) = withContext(Dispatchers.IO) {
+        val fs = FirestoreRepositorySupport.get()
+        fs.runTransaction { txn ->
+            val bookingRef = col.document(bookingId)
+            val bookingDoc = txn.get(bookingRef).get()
+            if (bookingDoc.getString("status") == "CANCELLED")
+                throw Exception("Booking is cancelled")
+            val roomRef = fs.collection("roomInstances").document(roomInstanceId)
+            val roomDoc = txn.get(roomRef).get()
+            if (roomDoc.getString("status") == "OCCUPIED")
+                throw Exception("Room $roomNumber is currently occupied")
+            txn.update(bookingRef, mapOf("roomInstanceId" to roomInstanceId, "roomNumber" to roomNumber))
+        }.get(); Unit
+    }
+
+    override suspend fun cancelWithTransaction(bookingId: String) = withContext(Dispatchers.IO) {
+        val fs = FirestoreRepositorySupport.get()
+        fs.runTransaction { txn ->
+            val ref = col.document(bookingId)
+            val doc = txn.get(ref).get()
+            if (doc.getString("status") != "CANCELLED") {
+                txn.update(ref, mapOf("status" to "CANCELLED"))
+            }
+        }.get(); Unit
     }
 
     override fun listenByHotel(hotelId: String): Flow<List<Booking>> = callbackFlow {

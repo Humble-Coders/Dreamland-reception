@@ -44,7 +44,6 @@ data class AddFoodDialog(
 data class AddComplaintTypeDialog(
     val show: Boolean = false,
     val name: String = "",
-    val type: String = "MAINTENANCE",
     val description: String = "",
     val isSaving: Boolean = false,
 )
@@ -250,7 +249,6 @@ class SettingsViewModel(
     fun openAddComplaintType() = _state.update { it.copy(addComplaintTypeDialog = AddComplaintTypeDialog(show = true)) }
     fun closeAddComplaintType() = _state.update { it.copy(addComplaintTypeDialog = AddComplaintTypeDialog()) }
     fun onAddComplaintTypeName(v: String) = _state.update { it.copy(addComplaintTypeDialog = it.addComplaintTypeDialog.copy(name = v)) }
-    fun onAddComplaintTypeType(v: String) = _state.update { it.copy(addComplaintTypeDialog = it.addComplaintTypeDialog.copy(type = v)) }
     fun onAddComplaintTypeDesc(v: String) = _state.update { it.copy(addComplaintTypeDialog = it.addComplaintTypeDialog.copy(description = v)) }
 
     fun submitAddComplaintType() {
@@ -260,7 +258,7 @@ class SettingsViewModel(
         _state.update { it.copy(addComplaintTypeDialog = d.copy(isSaving = true)) }
         launchWithGlobalLoading {
             runCatching {
-                complaintTypeRepo.add(ComplaintType(hotelId = hotelId, name = d.name.trim(), type = d.type, description = d.description.trim()))
+                complaintTypeRepo.add(ComplaintType(hotelId = hotelId, name = d.name.trim(), description = d.description.trim()))
             }.onSuccess {
                 val updated = runCatching { complaintTypeRepo.getByHotel(hotelId) }.getOrElse { _state.value.complaintTypes }
                 _state.update { it.copy(complaintTypes = updated, addComplaintTypeDialog = AddComplaintTypeDialog()) }

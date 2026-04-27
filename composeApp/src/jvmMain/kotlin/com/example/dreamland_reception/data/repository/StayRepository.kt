@@ -12,7 +12,9 @@ import java.util.Date
 interface StayRepository {
     suspend fun getActive(hotelId: String): List<Stay>
     suspend fun getAll(hotelId: String): List<Stay>
+    suspend fun getById(id: String): Stay?
     suspend fun add(stay: Stay): String
+    suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String
     suspend fun checkOut(id: String, checkOutTime: Date)
     suspend fun getCompleted(hotelId: String): List<Stay>
     fun listenActive(hotelId: String): Flow<List<Stay>>
@@ -44,8 +46,27 @@ object FirestoreStayRepository : StayRepository {
             .sortedBy { it.checkInActual }
     }
 
+    override suspend fun getById(id: String): Stay? = withContext(Dispatchers.IO) {
+        col.document(id).get().get().toStay()
+    }
+
     override suspend fun add(stay: Stay): String = withContext(Dispatchers.IO) {
         col.add(stay.toMap()).get().id
+    }
+
+    override suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String = withContext(Dispatchers.IO) {
+        val fs = FirestoreRepositorySupport.get()
+        val stayRef = col.document()
+        val stayId = stayRef.id
+        val batch = fs.batch()
+        batch.set(stayRef, stay.copy(id = stayId).toMap())
+        // OCCUPIED is derived client-side from active stays; only track the link via currentStayId
+        batch.update(
+            fs.collection("roomInstances").document(roomInstanceId),
+            mapOf("currentStayId" to stayId),
+        )
+        batch.commit().get()
+        stayId
     }
 
     override suspend fun checkOut(id: String, checkOutTime: Date) = withContext(Dispatchers.IO) {
@@ -56,10 +77,10 @@ object FirestoreStayRepository : StayRepository {
 
     override fun listenActive(hotelId: String): Flow<List<Stay>> = callbackFlow {
         val registration = col.whereEqualTo("hotelId", hotelId)
-            .whereEqualTo("status", "ACTIVE")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) { close(error); return@addSnapshotListener }
-                val stays = snapshot?.documents?.mapNotNull { it.toStay() } ?: emptyList()
+                val stays = snapshot?.documents?.mapNotNull { it.toStay() }
+                    ?.filter { it.status == "ACTIVE" } ?: emptyList()
                 trySend(stays)
             }
         awaitClose { registration.remove() }

@@ -100,6 +100,7 @@ fun DashboardScreen(
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showDatePicker by remember { mutableStateOf(false) }
+    var showCheckAvailability by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         DashboardHeader(
@@ -177,6 +178,7 @@ fun DashboardScreen(
                         onNavigateToOrders = onNavigateToOrders,
                         onNavigateToComplaints = onNavigateToComplaints,
                         onNavigateToStaff = onNavigateToStaff,
+                        onCheckAvailability = { showCheckAvailability = true },
                     )
                 }
             }
@@ -188,6 +190,11 @@ fun DashboardScreen(
             currentDate = state.selectedDate,
             onSelect = { date -> vm.onDateSelected(date); showDatePicker = false },
             onDismiss = { showDatePicker = false },
+        )
+    }
+    if (showCheckAvailability) {
+        com.example.dreamland_reception.stays.CheckAvailabilityDialog(
+            onDismiss = { showCheckAvailability = false },
         )
     }
 }
@@ -604,11 +611,10 @@ private fun RoomStatusCard(breakdown: RoomStatusBreakdown) {
         Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Room Status", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
-            RoomStatusRow("Available", breakdown.available, Color(0xFF2ECC71))
-            RoomStatusRow("Occupied", breakdown.occupied, Color(0xFF3498DB))
-            RoomStatusRow("Assigned", breakdown.assigned, Color(0xFF9B59B6))
-            RoomStatusRow("Cleaning", breakdown.cleaning, Color(0xFFF39C12))
-            RoomStatusRow("Maintenance", breakdown.maintenance, Color(0xFFE74C3C))
+            RoomStatusRow("Available",   breakdown.available,   Color(0xFF2ECC71))
+            RoomStatusRow("Occupied",    breakdown.occupied,    Color(0xFFE74C3C))
+            RoomStatusRow("Cleaning",    breakdown.cleaning,    Color(0xFFE67E22))
+            RoomStatusRow("Maintenance", breakdown.maintenance, Color(0xFF95A5A6))
             Spacer(Modifier.height(4.dp))
             Box(Modifier.fillMaxWidth().height(1.dp).background(DreamlandGold.copy(alpha = 0.12f)))
             Spacer(Modifier.height(4.dp))
@@ -755,6 +761,7 @@ private fun QuickActionsCard(
     onNavigateToOrders: () -> Unit,
     onNavigateToComplaints: () -> Unit,
     onNavigateToStaff: () -> Unit,
+    onCheckAvailability: () -> Unit = {},
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -763,6 +770,17 @@ private fun QuickActionsCard(
         Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Quick Actions", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
+            // Prominent availability check button
+            Button(
+                onClick = onCheckAvailability,
+                modifier = Modifier.fillMaxWidth().height(42.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+            ) {
+                Icon(Icons.Filled.Hotel, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Check Availability", style = MaterialTheme.typography.bodySmall, color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+            }
             QuickActionButton(Icons.Filled.PersonAdd, "Walk-in Check-in", onNewWalkIn)
             QuickActionButton(Icons.Filled.ShoppingBag, "View Orders", onNavigateToOrders)
             QuickActionButton(Icons.Filled.Feedback, "View Complaints", onNavigateToComplaints)

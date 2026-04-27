@@ -61,7 +61,7 @@ import java.util.Locale
 @Composable
 fun StaysScreen(
     vm: StaysViewModel = DreamlandAppInitializer.getStaysViewModel(),
-    onNavigateToBilling: () -> Unit = {},
+    onNavigateToBilling: (stayId: String) -> Unit = {},
 ) {
     val listState by vm.listState.collectAsStateWithLifecycle()
     val walkInState by vm.walkInState.collectAsStateWithLifecycle()

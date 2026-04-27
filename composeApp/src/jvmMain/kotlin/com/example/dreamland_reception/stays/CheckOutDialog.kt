@@ -20,9 +20,16 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -43,12 +50,12 @@ import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 fun CheckOutDialog(
     state: CheckOutState,
     vm: StaysViewModel,
-    onNavigateToBilling: () -> Unit = {},
+    onNavigateToBilling: (stayId: String) -> Unit = {},
 ) {
     // Navigate to Billing after successful checkout
     LaunchedEffect(state.navigateToBilling) {
         if (state.navigateToBilling) {
-            onNavigateToBilling()
+            onNavigateToBilling(state.checkedOutStayId)
             vm.onNavigateToBillingHandled()
         }
     }
@@ -71,6 +78,33 @@ fun CheckOutDialog(
                 state.stay?.let { stay ->
                     Text(stay.guestName, style = MaterialTheme.typography.headlineMedium, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
                     Text("Room ${stay.roomNumber}", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(8.dp))
+                    val dtFmt = SimpleDateFormat("d MMM, h:mm a", Locale.getDefault())
+                    val timeParts = state.hotelCheckOutTime.split(":")
+                    val expHour = timeParts.getOrNull(0)?.toIntOrNull() ?: 11
+                    val expMin = timeParts.getOrNull(1)?.toIntOrNull() ?: 0
+                    val expectedDateTime = Calendar.getInstance().apply {
+                        time = stay.expectedCheckOut
+                        set(Calendar.HOUR_OF_DAY, expHour)
+                        set(Calendar.MINUTE, expMin)
+                        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+                    }.time
+                    val actualNow = Date()
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("Expected Check-out", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                            Text(dtFmt.format(expectedDateTime), color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text("Actual Check-out", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                            Text(
+                                dtFmt.format(actualNow),
+                                color = if (state.isLateCheckout) Color(0xFFEF5350) else DreamlandOnDark,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
                 }
 
                 // ── Late checkout warning ──────────────────────────────────
@@ -88,13 +122,63 @@ fun CheckOutDialog(
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                             Text(
-                                if (state.lateCheckoutCharge > 0)
-                                    "Guest is checking out past the scheduled time. Late checkout charge of ₹${state.lateCheckoutCharge.toLong()} will be added."
-                                else
-                                    "Guest is checking out past the scheduled checkout time.",
+                                when {
+                                    state.lateCheckoutCharge <= 0 -> "Guest is checking out past the scheduled checkout time."
+                                    state.lateChargeType == "ROOM_RATE" -> "Room charges of ₹${state.lateCheckoutCharge.toLong()} will be added for the extra stay."
+                                    else -> "Guest is checking out past the scheduled time. Late checkout charge of ₹${state.lateCheckoutCharge.toLong()} will be added."
+                                },
                                 color = Color(0xFFEF5350).copy(alpha = 0.85f),
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            if (state.flatLateCheckoutFee > 0 || state.roomPricePerNight > 0) {
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    "Apply charge:",
+                                    color = Color(0xFFEF5350).copy(alpha = 0.7f),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                if (state.flatLateCheckoutFee > 0) {
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable { vm.onLateChargeType("FLAT") },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        RadioButton(
+                                            selected = state.lateChargeType == "FLAT",
+                                            onClick = { vm.onLateChargeType("FLAT") },
+                                            colors = RadioButtonDefaults.colors(
+                                                selectedColor = Color(0xFFEF5350),
+                                                unselectedColor = Color(0xFFEF5350).copy(alpha = 0.5f),
+                                            ),
+                                        )
+                                        Text(
+                                            "Late check-out fee  ₹${state.flatLateCheckoutFee.toLong()}",
+                                            color = Color(0xFFEF5350).copy(alpha = 0.85f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                                if (state.roomPricePerNight > 0) {
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable { vm.onLateChargeType("ROOM_RATE") },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        RadioButton(
+                                            selected = state.lateChargeType == "ROOM_RATE",
+                                            onClick = { vm.onLateChargeType("ROOM_RATE") },
+                                            colors = RadioButtonDefaults.colors(
+                                                selectedColor = Color(0xFFEF5350),
+                                                unselectedColor = Color(0xFFEF5350).copy(alpha = 0.5f),
+                                            ),
+                                        )
+                                        Text(
+                                            "Room charges (1 night)  ₹${state.roomPricePerNight.toLong()}",
+                                            color = Color(0xFFEF5350).copy(alpha = 0.85f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

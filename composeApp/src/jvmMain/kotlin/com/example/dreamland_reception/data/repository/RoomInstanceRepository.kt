@@ -11,6 +11,7 @@ import java.util.Date
 
 interface RoomInstanceRepository {
     suspend fun getAll(): List<RoomInstance>
+    suspend fun getById(id: String): RoomInstance?
     suspend fun getAvailable(): List<RoomInstance>
     suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean = false): List<RoomInstance>
     suspend fun updateStatus(id: String, status: String, currentStayId: String? = null)
@@ -29,6 +30,10 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
         col.orderBy("roomNumber").get().get().documents.mapNotNull { it.toRoomInstance() }
     }
 
+    override suspend fun getById(id: String): RoomInstance? = withContext(Dispatchers.IO) {
+        col.document(id).get().get().takeIf { it.exists() }?.toRoomInstance()
+    }
+
     override suspend fun getAvailable(): List<RoomInstance> = withContext(Dispatchers.IO) {
         col.whereEqualTo("status", "AVAILABLE").get().get().documents.mapNotNull { it.toRoomInstance() }
     }
@@ -36,7 +41,7 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
     override suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean): List<RoomInstance> = withContext(Dispatchers.IO) {
         col.whereEqualTo("categoryId", categoryId)
             .get().get().documents.mapNotNull { it.toRoomInstance() }
-            .filter { it.hotelId == hotelId && (it.status == "AVAILABLE" || (includeAssigned && it.status == "ASSIGNED")) }
+            .filter { it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING") }
     }
 
     override suspend fun updateStatus(id: String, status: String, currentStayId: String?) = withContext(Dispatchers.IO) {

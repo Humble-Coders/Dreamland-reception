@@ -1,6 +1,7 @@
 package com.example.dreamland_reception
 
 import com.example.dreamland_reception.data.firebase.FirebaseManager
+import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillingRepository
 import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
@@ -14,8 +15,10 @@ import com.example.dreamland_reception.data.repository.FirestoreRoomRepository
 import com.example.dreamland_reception.data.repository.FirestoreServiceRepository
 import com.example.dreamland_reception.data.repository.FirestoreStaffRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
 import com.example.dreamland_reception.ui.viewmodel.BillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.BookingsViewModel
+import com.example.dreamland_reception.ui.viewmodel.StayBillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.ComplaintsViewModel
 import com.example.dreamland_reception.ui.viewmodel.DashboardViewModel
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
@@ -50,6 +53,9 @@ object DreamlandAppInitializer {
     private var billingVm: BillingViewModel? = null
 
     @Volatile
+    private var stayBillingVm: StayBillingViewModel? = null
+
+    @Volatile
     private var ordersVm: OrdersViewModel? = null
 
     @Volatile
@@ -64,6 +70,9 @@ object DreamlandAppInitializer {
     @Volatile
     private var settingsVm: SettingsViewModel? = null
 
+    @Volatile
+    private var availabilityVm: AvailabilityViewModel? = null
+
     /** @param serviceAccountJsonPath Optional path to service account JSON (see `claude.md`). */
     fun initialize(serviceAccountJsonPath: String? = null) {
         FirebaseManager.initialize(serviceAccountJsonPath)
@@ -76,6 +85,7 @@ object DreamlandAppInitializer {
                 FirestoreRoomInstanceRepository.initialize(fs)
                 FirestoreStayRepository.initialize(fs)
                 FirestoreBillingRepository.initialize(fs)
+                FirestoreBillRepository.initialize(fs)
                 FirestoreOrderRepository.initialize(fs)
                 FirestoreComplaintRepository.initialize(fs)
                 FirestoreStaffRepository.initialize(fs)
@@ -128,6 +138,11 @@ object DreamlandAppInitializer {
             billingVm ?: BillingViewModel().also { billingVm = it }
         }
 
+    fun getStayBillingViewModel(): StayBillingViewModel =
+        stayBillingVm ?: synchronized(this) {
+            stayBillingVm ?: StayBillingViewModel().also { stayBillingVm = it }
+        }
+
     fun getOrdersViewModel(): OrdersViewModel =
         ordersVm ?: synchronized(this) {
             ordersVm ?: OrdersViewModel().also { ordersVm = it }
@@ -151,5 +166,10 @@ object DreamlandAppInitializer {
     fun getSettingsViewModel(): SettingsViewModel =
         settingsVm ?: synchronized(this) {
             settingsVm ?: SettingsViewModel().also { settingsVm = it }
+        }
+
+    fun getAvailabilityViewModel(): AvailabilityViewModel =
+        availabilityVm ?: synchronized(this) {
+            availabilityVm ?: AvailabilityViewModel().also { availabilityVm = it }
         }
 }

@@ -18,7 +18,7 @@ object FirestoreHotelRepository : HotelRepository {
     private val col get() = FirestoreRepositorySupport.get().collection("hotels")
 
     override suspend fun getAll(): List<Hotel> = withContext(Dispatchers.IO) {
-        col.whereEqualTo("status", "active").get().get().documents.mapNotNull { it.toHotel() }
+        col.whereEqualTo("status", "ACTIVE").get().get().documents.mapNotNull { it.toHotel() }
     }
 
     override suspend fun getById(id: String): Hotel? = withContext(Dispatchers.IO) {

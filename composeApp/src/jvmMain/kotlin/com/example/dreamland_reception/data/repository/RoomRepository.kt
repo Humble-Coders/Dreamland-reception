@@ -1,6 +1,7 @@
 package com.example.dreamland_reception.data.repository
 
 import com.example.dreamland_reception.data.model.Room
+import com.example.dreamland_reception.data.model.SeasonalPricing
 import com.google.cloud.firestore.Firestore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

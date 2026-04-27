@@ -129,71 +129,23 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 
                 Spacer(Modifier.height(20.dp))
 
-                // ── 2. Room Selection ──────────────────────────────────────
-                SectionLabel("Room Selection")
-                Spacer(Modifier.height(8.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    DreamlandDropdown(
-                        modifier = Modifier.weight(1f),
-                        label = "Room Category *",
-                        selectedText = if (state.selectedCategoryName.isBlank()) "Select category"
-                                       else "${state.selectedCategoryName}  ·  ₹${state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight?.toLong() ?: 0}/night",
-                        options = state.categories.map { room ->
-                            room.id to "${room.type}  ·  ₹${room.pricePerNight.toLong()}/night"
-                        },
-                        onSelected = vm::onCategorySelected,
-                    )
-                    Column(Modifier.weight(1f)) {
-                        val isPreAssigned = state.sourceBooking?.roomInstanceId?.isNotBlank() == true &&
-                            state.selectedInstanceId == state.sourceBooking.roomInstanceId
-                        DreamlandDropdown(
-                            label = "Room Number *",
-                            selectedText = if (state.selectedInstanceNumber.isBlank()) "Select room" else "Room ${state.selectedInstanceNumber}",
-                            options = state.availableInstances.map { inst ->
-                                inst.id to "Room ${inst.roomNumber}  ·  ${inst.status}"
-                            },
-                            onSelected = vm::onInstanceSelected,
-                            enabled = state.selectedCategoryId.isNotBlank(),
-                            emptyText = if (state.selectedCategoryId.isNotBlank()) "No available rooms" else "Select category first",
-                        )
-                        if (isPreAssigned) {
-                            Spacer(Modifier.height(4.dp))
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF3498DB)),
-                                )
-                                Text(
-                                    text = "Pre-assigned from booking · tap to change",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF3498DB),
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(20.dp))
-
-                // ── 3. Stay Details ────────────────────────────────────────
+                // ── 2. Stay Dates (before category so availability can be computed on category select) ──
                 SectionLabel("Stay Details")
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Check-in", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted)
-                        Spacer(Modifier.height(4.dp))
-                        ReadOnlyField(SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date()))
-                    }
+                    DateSelectorField(
+                        modifier = Modifier.weight(1f),
+                        label = "Check-in *",
+                        date = state.checkInTime,
+                        onDateSelected = { it?.let(vm::onWalkInCheckInTime) },
+                        minDate = null,
+                    )
                     DateSelectorField(
                         modifier = Modifier.weight(1f),
                         label = "Expected Check-out *",
                         date = state.expectedCheckOut,
                         onDateSelected = vm::onWalkInExpectedCheckOut,
+                        minDate = state.checkInTime,
                     )
                 }
                 Spacer(Modifier.height(10.dp))
@@ -209,6 +161,117 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                             onIncrement = { vm.onWalkInChildren(state.children + 1) },
                             onDecrement = { vm.onWalkInChildren(state.children - 1) },
                         )
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── 3. Room Selection ──────────────────────────────────────
+                SectionLabel("Room Selection")
+                Spacer(Modifier.height(8.dp))
+                DreamlandDropdown(
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "Room Category *",
+                    selectedText = if (state.selectedCategoryName.isBlank()) "Select category"
+                                   else "${state.selectedCategoryName}  ·  ₹${state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight?.toLong() ?: 0}/night",
+                    options = state.categories.map { room ->
+                        room.id to "${room.type}  ·  ₹${room.pricePerNight.toLong()}/night"
+                    },
+                    onSelected = vm::onCategorySelected,
+                )
+                if (state.selectedCategoryId.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    val availCount = state.availableCount
+                    val selectedCount = state.selectedInstanceIds.size
+                    // Availability + selection summary row
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(
+                                    if (availCount > 0) Color(0xFF2ECC71).copy(alpha = 0.15f)
+                                    else Color(0xFFE74C3C).copy(alpha = 0.15f),
+                                )
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                if (availCount > 0) "$availCount room${if (availCount != 1) "s" else ""} available"
+                                else "No rooms available",
+                                color = if (availCount > 0) Color(0xFF2ECC71) else Color(0xFFE74C3C),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontSize = 11.sp,
+                            )
+                        }
+                        if (selectedCount > 0) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(DreamlandGold.copy(alpha = 0.18f))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    "$selectedCount selected",
+                                    color = DreamlandGold,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // Room instance list — multi-select
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        state.availableInstances.forEach { inst ->
+                            val isSelected = inst.id in state.selectedInstanceIds
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isSelected) DreamlandGold.copy(alpha = 0.12f)
+                                        else DreamlandForestElevated,
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) DreamlandGold.copy(alpha = 0.6f)
+                                        else DreamlandGold.copy(alpha = 0.15f),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .clickable { vm.onInstanceToggled(inst.id) }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    "Room ${inst.roomNumber}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = DreamlandOnDark,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                if (isSelected) {
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(DreamlandGold.copy(alpha = 0.2f))
+                                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                                    ) {
+                                        Text("Selected", color = DreamlandGold, fontSize = 10.sp, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                        if (state.availableInstances.isEmpty()) {
+                            Text(
+                                if (state.expectedCheckOut == null) "Set check-out date to see available rooms"
+                                else "No rooms available for these dates in this category",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = DreamlandMuted,
+                            )
+                        }
                     }
                 }
 
@@ -254,19 +317,29 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     ),
                 )
                 val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
-                if (advance > 0) {
+                val roomCount = state.selectedInstanceIds.size.coerceAtLeast(1)
+                if (advance > 0 || state.selectedInstanceIds.isNotEmpty()) {
                     val cat = state.categories.find { it.id == state.selectedCategoryId }
                     val nights = if (state.expectedCheckOut != null)
                         ChronoUnit.DAYS.between(Date().toInstant(), state.expectedCheckOut.toInstant()).coerceAtLeast(1)
                     else 1L
-                    val roomCharge = (cat?.pricePerNight ?: 0.0) * nights
+                    val roomCharge = (cat?.pricePerNight ?: 0.0) * nights * roomCount
                     val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
                     val total = roomCharge + bfCharge
                     val pending = (total - advance).coerceAtLeast(0.0)
                     Spacer(Modifier.height(6.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                        Text("₹${pending.toLong()}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold)
+                    if (roomCount > 1) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Total ($roomCount rooms × $nights night${if (nights != 1L) "s" else ""}):", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("₹${total.toLong()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(Modifier.height(2.dp))
+                    }
+                    if (advance > 0) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("₹${pending.toLong()}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
 
@@ -277,15 +350,43 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     Spacer(Modifier.height(8.dp))
                 }
 
+                val primaryIdVerified = state.guestEntries.firstOrNull()?.idProofVerified == true
+                if (!primaryIdVerified) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("⚠", color = Color(0xFFF39C12), fontSize = 14.sp)
+                        Text(
+                            "Verify primary guest ID proof to enable check-in",
+                            color = Color(0xFFF39C12),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
                 Button(
                     onClick = { vm.submitWalkIn() },
-                    enabled = !state.isSaving,
+                    enabled = !state.isSaving && primaryIdVerified,
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = DreamlandGold,
+                        disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),
+                    ),
                     shape = RoundedCornerShape(10.dp),
                 ) {
                     Text(
-                        text = if (state.isSaving) "Checking in..." else "Check-in Guest",
+                        text = when {
+                            state.isSaving -> "Checking in…"
+                            state.selectedInstanceIds.size > 1 -> "Check-in ${state.selectedInstanceIds.size} Rooms"
+                            else -> "Check-in Guest"
+                        },
                         color = Color(0xFF0D1F17),
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 16.sp,
@@ -545,6 +646,7 @@ private fun DateSelectorField(
     label: String,
     date: Date?,
     onDateSelected: (Date?) -> Unit,
+    minDate: Date? = null,
 ) {
     var showPicker by remember { mutableStateOf(false) }
     val fmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
@@ -572,49 +674,181 @@ private fun DateSelectorField(
             initialDate = date ?: run { val c = Calendar.getInstance(); c.add(Calendar.DAY_OF_YEAR, 1); c.time },
             onDateSelected = { onDateSelected(it); showPicker = false },
             onDismiss = { showPicker = false },
+            minDate = minDate,
         )
     }
 }
 
 @Composable
-private fun SimpleDatePickerDialog(initialDate: Date, onDateSelected: (Date) -> Unit, onDismiss: () -> Unit) {
-    val cal = Calendar.getInstance().apply { time = initialDate }
-    var year by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
-    var month by remember { mutableStateOf(cal.get(Calendar.MONTH) + 1) }
-    var day by remember { mutableStateOf(cal.get(Calendar.DAY_OF_MONTH)) }
+private fun SimpleDatePickerDialog(
+    initialDate: Date,
+    onDateSelected: (Date) -> Unit,
+    onDismiss: () -> Unit,
+    minDate: Date? = null,
+) {
+    val minCal = minDate?.let {
+        Calendar.getInstance().apply {
+            time = it
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }
+    }
+    val initCal = Calendar.getInstance().apply { time = initialDate }
+
+    // Display month/year (for navigation)
+    var displayYear  by remember { mutableStateOf(initCal.get(Calendar.YEAR)) }
+    var displayMonth by remember { mutableStateOf(initCal.get(Calendar.MONTH)) }  // 0-based
+
+    // Currently selected day (may be in a different month from display)
+    var selYear  by remember { mutableStateOf(initCal.get(Calendar.YEAR)) }
+    var selMonth by remember { mutableStateOf(initCal.get(Calendar.MONTH)) }
+    var selDay   by remember { mutableStateOf(initCal.get(Calendar.DAY_OF_MONTH)) }
+
+    val today = Calendar.getInstance()
+
+    fun isDisabled(y: Int, m: Int, d: Int): Boolean {
+        if (minCal == null) return false
+        val c = Calendar.getInstance().apply { set(y, m, d, 0, 0, 0); set(Calendar.MILLISECOND, 0) }
+        return !c.after(minCal)
+    }
+
+    fun prevMonth() {
+        if (displayMonth == 0) { displayMonth = 11; displayYear-- } else displayMonth--
+    }
+    fun nextMonth() {
+        if (displayMonth == 11) { displayMonth = 0; displayYear++ } else displayMonth++
+    }
+
+    val monthNames = listOf("January","February","March","April","May","June",
+                            "July","August","September","October","November","December")
+    val dayLabels  = listOf("Mo","Tu","We","Th","Fr","Sa","Su")
+
+    // First day-of-week offset for the display month (Monday=0 … Sunday=6)
+    val firstDow = Calendar.getInstance().run {
+        set(displayYear, displayMonth, 1)
+        val dow = get(Calendar.DAY_OF_WEEK) - Calendar.MONDAY
+        if (dow < 0) dow + 7 else dow
+    }
+    val daysInMonth = Calendar.getInstance().apply {
+        set(displayYear, displayMonth, 1)
+    }.getActualMaximum(Calendar.DAY_OF_MONTH)
+
+    val isSelectionValid = !isDisabled(selYear, selMonth, selDay)
+
     Dialog(onDismissRequest = onDismiss) {
-        Card(colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface), shape = RoundedCornerShape(16.dp)) {
-            Column(Modifier.padding(24.dp)) {
-                Text("Select Date", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark)
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NumberSpinner("Day", day, 1, 31) { day = it }
-                    NumberSpinner("Month", month, 1, 12) { month = it }
-                    NumberSpinner("Year", year, 2024, 2030) { year = it }
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.width(340.dp),
+        ) {
+            Column(Modifier.padding(20.dp)) {
+
+                // ── Month / year navigation ──────────────────────────────
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = ::prevMonth, modifier = Modifier.size(36.dp)) {
+                        Text("‹", color = DreamlandGold, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        "${monthNames[displayMonth]} $displayYear",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = DreamlandOnDark,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    TextButton(onClick = ::nextMonth, modifier = Modifier.size(36.dp)) {
+                        Text("›", color = DreamlandGold, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
+
+                Spacer(Modifier.height(10.dp))
+
+                // ── Day-of-week header ───────────────────────────────────
+                Row(Modifier.fillMaxWidth()) {
+                    dayLabels.forEach { lbl ->
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            Text(lbl, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(6.dp))
+
+                // ── Calendar grid ────────────────────────────────────────
+                val totalCells = firstDow + daysInMonth
+                val rows = (totalCells + 6) / 7
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (row in 0 until rows) {
+                        Row(Modifier.fillMaxWidth()) {
+                            for (col in 0..6) {
+                                val cellIndex = row * 7 + col
+                                val day = cellIndex - firstDow + 1
+                                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                    if (day < 1 || day > daysInMonth) {
+                                        // Empty cell
+                                        Spacer(Modifier.size(36.dp))
+                                    } else {
+                                        val isSelected = day == selDay && displayMonth == selMonth && displayYear == selYear
+                                        val isToday = day == today.get(Calendar.DAY_OF_MONTH) &&
+                                            displayMonth == today.get(Calendar.MONTH) &&
+                                            displayYear == today.get(Calendar.YEAR)
+                                        val disabled = isDisabled(displayYear, displayMonth, day)
+
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .clip(RoundedCornerShape(50))
+                                                .background(
+                                                    when {
+                                                        isSelected -> DreamlandGold
+                                                        isToday    -> DreamlandGold.copy(alpha = 0.15f)
+                                                        else       -> Color.Transparent
+                                                    }
+                                                )
+                                                .clickable(enabled = !disabled) {
+                                                    selDay = day; selMonth = displayMonth; selYear = displayYear
+                                                },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                "$day",
+                                                color = when {
+                                                    isSelected -> Color(0xFF0D1F17)
+                                                    disabled   -> DreamlandMuted.copy(alpha = 0.3f)
+                                                    isToday    -> DreamlandGold
+                                                    else       -> DreamlandOnDark
+                                                },
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+
+                // ── Actions ──────────────────────────────────────────────
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Cancel", color = DreamlandMuted) }
                     Spacer(Modifier.width(8.dp))
                     Button(
-                        onClick = { val c = Calendar.getInstance(); c.set(year, month - 1, day, 12, 0, 0); onDateSelected(c.time) },
+                        onClick = {
+                            val c = Calendar.getInstance()
+                            c.set(selYear, selMonth, selDay, 12, 0, 0)
+                            c.set(Calendar.MILLISECOND, 0)
+                            onDateSelected(c.time)
+                        },
+                        enabled = isSelectionValid,
                         colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        shape = RoundedCornerShape(10.dp),
                     ) { Text("Set", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun NumberSpinner(label: String, value: Int, min: Int, max: Int, onChanged: (Int) -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { if (value > min) onChanged(value - 1) }) { Text("-", color = DreamlandGold, fontWeight = FontWeight.Bold) }
-            Text("$value", color = DreamlandOnDark, modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
-            TextButton(onClick = { if (value < max) onChanged(value + 1) }) { Text("+", color = DreamlandGold, fontWeight = FontWeight.Bold) }
         }
     }
 }

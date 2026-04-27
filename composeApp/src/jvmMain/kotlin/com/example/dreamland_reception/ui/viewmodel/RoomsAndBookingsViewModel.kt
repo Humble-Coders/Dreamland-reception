@@ -49,6 +49,7 @@ data class RoomsAndBookingsUiState(
     val searchQuery: String = "",
     val bookingStatusFilter: String? = null, // null = All
     val bookingDateFilter: BookingDateFilter = BookingDateFilter.ALL,
+    val bookingSortOrder: String = "NEWEST", // NEWEST | OLDEST
     // Assign-room dialog
     val assignRoomDialogBooking: Booking? = null,
     val availableRoomsForAssign: List<RoomInstance> = emptyList(),
@@ -58,8 +59,42 @@ data class RoomsAndBookingsUiState(
     // General error / snackbar
     val error: String? = null,
     val operationMessage: String? = null,
+    // Room panel filters
+    val roomCategoryFilter: String = "",
+    val roomStatusFilter: String = "",
+    // Hotel times — populated from Firestore on init; empty until loaded
+    val hotelCheckInTime: String = "",
+    val hotelCheckOutTime: String = "",
+    // No-show confirmation
+    val noShowConfirmBooking: Booking? = null,
+    // Room detail
+    val selectedRoomId: String? = null,
+    val roomDetailStays: List<Stay> = emptyList(),
+    val roomDetailLoading: Boolean = false,
 ) {
     val isInitialLoading: Boolean get() = roomsLoading && rooms.isEmpty() && bookingsLoading && bookings.isEmpty()
+
+    val roomsForPanel: List<RoomInstance>
+        get() {
+            var base = rooms
+            val q = searchQuery.trim().lowercase()
+            if (q.isNotEmpty()) base = base.filter { it.roomNumber.lowercase().contains(q) }
+            if (roomCategoryFilter.isNotBlank()) base = base.filter { it.categoryId == roomCategoryFilter }
+            // Note: roomStatusFilter is applied in the UI after computing the derived displayStatus
+            return base.sortedWith(compareBy({ it.roomNumber.length }, { it.roomNumber }))
+        }
+
+    val selectedRoom: RoomInstance?
+        get() = selectedRoomId?.let { id -> rooms.find { it.id == id } }
+
+    val selectedRoomCurrentStay: Stay?
+        get() = selectedRoom?.let { room -> activeStaysByRoom[room.roomNumber] }
+
+    val selectedRoomUpcomingBookings: List<Booking>
+        get() = selectedRoomId?.let { id ->
+            bookings.filter { it.roomInstanceId == id && it.status == "CONFIRMED" }
+                .sortedBy { it.checkIn }
+        } ?: emptyList()
 
     val filteredRooms: List<RoomInstance>
         get() {
@@ -90,7 +125,10 @@ data class RoomsAndBookingsUiState(
                     BookingDateFilter.ALL -> true
                 }
                 matchesSearch && matchesStatus && matchesDate
-            }.sortedBy { it.checkIn }
+            }.let { list ->
+                if (bookingSortOrder == "NEWEST") list.sortedByDescending { it.checkIn }
+                else list.sortedBy { it.checkIn }
+            }
         }
 
     fun isCheckInToday(booking: Booking): Boolean {
@@ -121,7 +159,6 @@ class RoomsAndBookingsViewModel(
     val uiState: StateFlow<RoomsAndBookingsUiState> = _uiState.asStateFlow()
 
     private var hotel: Hotel? = null
-    private val autoAssignAttempted = mutableSetOf<String>()
 
     init {
         startListeners()
@@ -132,7 +169,15 @@ class RoomsAndBookingsViewModel(
     private fun loadHotel() {
         viewModelScope.launch {
             runCatching { hotelRepo.getById(AppContext.hotelId) }
-                .onSuccess { hotel = it }
+                .onSuccess { h ->
+                    hotel = h
+                    if (h != null) {
+                        _uiState.update { it.copy(
+                            hotelCheckInTime = h.checkInTime,
+                            hotelCheckOutTime = h.checkOutTime,
+                        )}
+                    }
+                }
         }
     }
 
@@ -148,22 +193,7 @@ class RoomsAndBookingsViewModel(
         viewModelScope.launch {
             bookingRepo.listenByHotel(hotelId)
                 .catch { e -> _uiState.update { it.copy(bookingsLoading = false, error = "Bookings: ${e.message}") } }
-                .collect { bookings ->
-                    _uiState.update { it.copy(bookings = bookings, bookingsLoading = false) }
-                    if (hotel?.autoAssignRoom == true) {
-                        bookings
-                            .filter { it.status == "CONFIRMED" && it.roomInstanceId.isBlank() && it.id !in autoAssignAttempted }
-                            .forEach { booking ->
-                                autoAssignAttempted.add(booking.id)
-                                viewModelScope.launch {
-                                    val assigned = autoAssignRoom(booking.id, booking)
-                                    if (assigned != null) {
-                                        _uiState.update { it.copy(operationMessage = "Room ${assigned.roomNumber} auto-assigned to ${booking.guestName}") }
-                                    }
-                                }
-                            }
-                    }
-                }
+                .collect { bookings -> _uiState.update { it.copy(bookings = bookings, bookingsLoading = false) } }
         }
         viewModelScope.launch {
             stayRepo.listenActive(hotelId)
@@ -193,12 +223,28 @@ class RoomsAndBookingsViewModel(
 
     // ── UI state setters ──────────────────────────────────────────────────────
 
-    fun setTab(tab: Int) = _uiState.update { it.copy(selectedTab = tab, searchQuery = "") }
+    fun setTab(tab: Int) = _uiState.update { it.copy(selectedTab = tab, searchQuery = "", selectedRoomId = null) }
     fun setSearchQuery(q: String) = _uiState.update { it.copy(searchQuery = q) }
     fun setBookingStatusFilter(status: String?) = _uiState.update { it.copy(bookingStatusFilter = status) }
     fun setBookingDateFilter(filter: BookingDateFilter) = _uiState.update { it.copy(bookingDateFilter = filter) }
+    fun setBookingSortOrder(order: String) = _uiState.update { it.copy(bookingSortOrder = order) }
     fun clearError() = _uiState.update { it.copy(error = null) }
     fun clearMessage() = _uiState.update { it.copy(operationMessage = null) }
+    fun setRoomCategoryFilter(id: String) = _uiState.update { it.copy(roomCategoryFilter = id) }
+    fun setRoomStatusFilter(status: String) = _uiState.update { it.copy(roomStatusFilter = status) }
+
+    fun selectRoom(id: String?) {
+        _uiState.update { it.copy(selectedRoomId = id, roomDetailStays = emptyList(), roomDetailLoading = id != null) }
+        if (id == null) return
+        viewModelScope.launch {
+            runCatching { stayRepo.getAll(AppContext.hotelId) }
+                .onSuccess { allStays ->
+                    val roomStays = allStays.filter { it.roomInstanceId == id }.sortedByDescending { it.checkInActual }
+                    _uiState.update { it.copy(roomDetailStays = roomStays, roomDetailLoading = false) }
+                }
+                .onFailure { _uiState.update { it.copy(roomDetailLoading = false) } }
+        }
+    }
 
     // ── Room actions ──────────────────────────────────────────────────────────
 
@@ -216,8 +262,10 @@ class RoomsAndBookingsViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(assignRoomDialogBooking = booking, assignRoomLoading = true, availableRoomsForAssign = emptyList()) }
             runCatching {
-                roomInstanceRepo.getAvailable()
-                    .filter { it.hotelId == AppContext.hotelId }
+                val candidates = roomInstanceRepo.getAll()
+                    .filter { it.hotelId == AppContext.hotelId && it.status == "AVAILABLE" }
+                val confirmedBookings = _uiState.value.bookings.filter { it.status == "CONFIRMED" }
+                dateConflictFilter(candidates, confirmedBookings, booking.checkIn, booking.checkOut, excludeBookingId = booking.id)
                     .sortedWith(compareBy({ it.roomNumber.length }, { it.roomNumber }))
             }
             .onSuccess { rooms -> _uiState.update { it.copy(availableRoomsForAssign = rooms, assignRoomLoading = false) } }
@@ -231,19 +279,16 @@ class RoomsAndBookingsViewModel(
         val booking = _uiState.value.assignRoomDialogBooking ?: return
         launchWithGlobalLoading {
             runCatching {
-                bookingRepo.update(booking.copy(roomInstanceId = room.id, roomNumber = room.roomNumber))
-                roomInstanceRepo.updateStatus(room.id, "ASSIGNED", null)
+                bookingRepo.assignRoomTransaction(booking.id, room.id, room.roomNumber)
             }
-                .onSuccess {
-                    _uiState.update {
-                        it.copy(
-                            assignRoomDialogBooking = null,
-                            availableRoomsForAssign = emptyList(),
-                            operationMessage = "Room ${room.roomNumber} assigned to ${booking.guestName}",
-                        )
-                    }
-                }
-                .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
+            .onSuccess {
+                _uiState.update { it.copy(
+                    assignRoomDialogBooking = null,
+                    availableRoomsForAssign = emptyList(),
+                    operationMessage = "Room ${room.roomNumber} assigned to ${booking.guestName}",
+                )}
+            }
+            .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
         }
     }
 
@@ -255,13 +300,33 @@ class RoomsAndBookingsViewModel(
     fun confirmCancelBooking() {
         val booking = _uiState.value.cancelConfirmBooking ?: return
         launchWithGlobalLoading {
-            runCatching { bookingRepo.update(booking.copy(status = "CANCELLED")) }
-                .onSuccess { _uiState.update { it.copy(cancelConfirmBooking = null, operationMessage = "Booking for ${booking.guestName} cancelled") } }
-                .onFailure { e -> _uiState.update { it.copy(cancelConfirmBooking = null, error = e.message) } }
+            runCatching {
+                val active = stayRepo.getActive(AppContext.hotelId)
+                if (active.any { it.roomInstanceId == booking.roomInstanceId && it.status == "ACTIVE" }) {
+                    throw Exception("Guest is currently checked in — check out the guest first")
+                }
+                bookingRepo.cancelWithTransaction(booking.id)
+            }
+            .onSuccess { _uiState.update { it.copy(cancelConfirmBooking = null, operationMessage = "Booking for ${booking.guestName} cancelled") } }
+            .onFailure { e -> _uiState.update { it.copy(cancelConfirmBooking = null, error = e.message) } }
         }
     }
 
-    // ── Dummy booking ─────────────────────────────────────────────────────────
+    // ── No-show ───────────────────────────────────────────────────────────────
+
+    fun promptMarkNoShow(booking: Booking) = _uiState.update { it.copy(noShowConfirmBooking = booking) }
+    fun dismissNoShow() = _uiState.update { it.copy(noShowConfirmBooking = null) }
+
+    fun confirmNoShow() {
+        val booking = _uiState.value.noShowConfirmBooking ?: return
+        launchWithGlobalLoading {
+            runCatching { bookingRepo.update(booking.copy(status = "NO_SHOW")) }
+            .onSuccess { _uiState.update { it.copy(noShowConfirmBooking = null, operationMessage = "Booking for ${booking.guestName} marked as no-show") } }
+            .onFailure { e -> _uiState.update { it.copy(noShowConfirmBooking = null, error = e.message) } }
+        }
+    }
+
+    // ── Dummy booking (no auto-assign) ────────────────────────────────────────
 
     fun addDummyBooking() {
         launchWithGlobalLoading {
@@ -271,18 +336,13 @@ class RoomsAndBookingsViewModel(
             cal.add(Calendar.DAY_OF_YEAR, (1..2).random())
             val checkOut = cal.time
             val total = (2000..8000).random().toDouble()
-
-            // Pick a real category from the rooms collection so the booking can be assigned
             val categoryEntry = _uiState.value.categoryNames.entries.randomOrNull()
-            val categoryId = categoryEntry?.key ?: ""
-            val categoryName = categoryEntry?.value ?: ""
-
             val booking = Booking(
                 hotelId = AppContext.hotelId,
                 guestName = names.random(),
                 guestPhone = "9${(100_000_000..999_999_999).random()}",
-                roomCategoryId = categoryId,
-                roomCategoryName = categoryName,
+                roomCategoryId = categoryEntry?.key ?: "",
+                roomCategoryName = categoryEntry?.value ?: "",
                 checkIn = checkIn,
                 checkOut = checkOut,
                 adults = (1..3).random(),
@@ -294,33 +354,8 @@ class RoomsAndBookingsViewModel(
                 createdAt = Date(),
             )
             runCatching { bookingRepo.add(booking) }
-                .onSuccess { bookingId ->
-                    val assignedRoom = autoAssignRoom(bookingId, booking)
-                    val msg = if (assignedRoom != null)
-                        "Dummy booking added for ${booking.guestName} — Room ${assignedRoom.roomNumber} assigned"
-                    else
-                        "Dummy booking added for ${booking.guestName} (no available room in category)"
-                    _uiState.update { it.copy(operationMessage = msg) }
-                }
+                .onSuccess { _uiState.update { it.copy(operationMessage = "Dummy booking added for ${booking.guestName}") } }
                 .onFailure { e -> _uiState.update { it.copy(error = "Failed to add booking: ${e.message}") } }
         }
-    }
-
-    // ── Auto-assign ───────────────────────────────────────────────────────────
-    // Finds the first available room in the booking's category, links it to the
-    // booking, and marks it ASSIGNED. Returns the assigned RoomInstance, or null
-    // if no room was available (booking is left unassigned — not an error).
-
-    suspend fun autoAssignRoom(bookingId: String, booking: Booking): RoomInstance? {
-        if (booking.roomCategoryId.isBlank()) return null
-        val room = runCatching {
-            roomInstanceRepo.getByCategory(booking.roomCategoryId, AppContext.hotelId)
-                .firstOrNull()
-        }.getOrNull() ?: return null
-        return runCatching {
-            bookingRepo.update(booking.copy(id = bookingId, roomInstanceId = room.id, roomNumber = room.roomNumber))
-            roomInstanceRepo.updateStatus(room.id, "ASSIGNED", null)
-            room
-        }.getOrNull()
     }
 }

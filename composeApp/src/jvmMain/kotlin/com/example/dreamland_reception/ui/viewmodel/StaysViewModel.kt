@@ -78,8 +78,8 @@ data class WalkInState(
     val selectedCategoryId: String = "",
     val selectedCategoryName: String = "",
     val selectedCategoryBreakfastPrice: Double = 0.0,
-    val selectedInstanceId: String = "",
-    val selectedInstanceNumber: String = "",
+    val selectedInstanceIds: Set<String> = emptySet(),
+    val checkInTime: Date = Date(),
     val expectedCheckOut: Date? = null,
     val adults: Int = 1,
     val children: Int = 0,
@@ -87,6 +87,7 @@ data class WalkInState(
     val advancePayment: String = "",
     val categories: List<Room> = emptyList(),
     val availableInstances: List<RoomInstance> = emptyList(),
+    val availableCount: Int = 0,
     val isSaving: Boolean = false,
     val error: String? = null,
     val sourceBooking: Booking? = null,
@@ -117,13 +118,13 @@ data class OrderItemEntry(
     val name: String = "",
     val quantity: Int = 1,
     val price: String = "",
+    val category: String = "",
     val suggestions: List<CatalogItem> = emptyList(),
     val showSuggestions: Boolean = false,
 )
 
 data class AddOrderState(
     val isOpen: Boolean = false,
-    val category: String = "",
     val items: List<OrderItemEntry> = listOf(OrderItemEntry()),
     val notes: String = "",
     val isSaving: Boolean = false,
@@ -157,7 +158,12 @@ data class CheckOutState(
     val error: String? = null,
     val isLateCheckout: Boolean = false,
     val lateCheckoutCharge: Double = 0.0,
+    val flatLateCheckoutFee: Double = 0.0,
+    val roomPricePerNight: Double = 0.0,
+    val lateChargeType: String = "FLAT",
+    val hotelCheckOutTime: String = "11:00",
     val navigateToBilling: Boolean = false,
+    val checkedOutStayId: String = "",
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -316,7 +322,13 @@ class StaysViewModel(
         }
     }
     fun onWalkInChildren(count: Int) = _walkInState.update { it.copy(children = count.coerceAtLeast(0)) }
-    fun onWalkInExpectedCheckOut(date: Date?) = _walkInState.update { it.copy(expectedCheckOut = date) }
+    fun onWalkInCheckInTime(date: Date) = _walkInState.update { it.copy(checkInTime = date) }
+
+    fun onWalkInExpectedCheckOut(date: Date?) {
+        _walkInState.update { it.copy(expectedCheckOut = date) }
+        val categoryId = _walkInState.value.selectedCategoryId
+        if (categoryId.isNotBlank()) onCategorySelected(categoryId)
+    }
     fun onWalkInBreakfast(v: Boolean) = _walkInState.update { it.copy(breakfast = v) }
     fun onWalkInAdvancePayment(v: String) = _walkInState.update { it.copy(advancePayment = v.filter { c -> c.isDigit() || c == '.' }) }
 
@@ -353,36 +365,63 @@ class StaysViewModel(
             selectedCategoryId = categoryId,
             selectedCategoryName = cat.type,
             selectedCategoryBreakfastPrice = cat.breakfastPrice,
-            selectedInstanceId = "",
-            selectedInstanceNumber = "",
+            selectedInstanceIds = emptySet(),
             availableInstances = emptyList(),
+            availableCount = 0,
         ) }
         launchWithGlobalLoading {
-            val instances = runCatching { instanceRepo.getByCategory(categoryId, AppContext.hotelId) }.getOrElse { emptyList() }
-            _walkInState.update { it.copy(availableInstances = instances) }
+            val hotelId = AppContext.hotelId
+            val checkOut = _walkInState.value.expectedCheckOut
+            val checkIn = Date()
+
+            // All usable instances in this category (not maintenance/cleaning)
+            val allInstances = runCatching {
+                instanceRepo.getByCategory(categoryId, hotelId, includeAssigned = false)
+            }.getOrElse { emptyList() }
+
+            val available = if (checkOut != null) {
+                // Remove instances with CONFIRMED booking date conflicts
+                val confirmed = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
+                val noConflict = dateConflictFilter(allInstances, confirmed, checkIn, checkOut)
+                // Remove instances occupied by active stays overlapping the range
+                val activeStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
+                noConflict.filter { instance ->
+                    activeStays.none { stay ->
+                        stay.roomInstanceId == instance.id && stay.expectedCheckOut.after(checkIn)
+                    }
+                }
+            } else {
+                allInstances.filter { it.status == "AVAILABLE" }
+            }
+            _walkInState.update { it.copy(availableInstances = available, availableCount = available.size) }
         }
     }
 
-    fun onInstanceSelected(instanceId: String) {
-        val inst = _walkInState.value.availableInstances.find { it.id == instanceId } ?: return
-        _walkInState.update { it.copy(selectedInstanceId = instanceId, selectedInstanceNumber = inst.roomNumber) }
+    fun onInstanceToggled(instanceId: String) {
+        _walkInState.update { ws ->
+            val ids = ws.selectedInstanceIds
+            ws.copy(selectedInstanceIds = if (instanceId in ids) ids - instanceId else ids + instanceId)
+        }
     }
 
     fun submitWalkIn() {
         val ws = _walkInState.value
         val primaryName = ws.guestEntries.firstOrNull()?.name?.trim()?.ifBlank { ws.guestName.trim() } ?: ws.guestName.trim()
         if (primaryName.isBlank()) { _walkInState.update { it.copy(error = "Primary guest name is required") }; return }
-        if (ws.selectedInstanceId.isBlank()) { _walkInState.update { it.copy(error = "Please select a room") }; return }
+        if (ws.selectedInstanceIds.isEmpty()) { _walkInState.update { it.copy(error = "Please select at least one room") }; return }
         if (ws.expectedCheckOut == null) { _walkInState.update { it.copy(error = "Please set expected check-out date") }; return }
+        if (!ws.expectedCheckOut.after(ws.checkInTime)) {
+            _walkInState.update { it.copy(error = "Check-out must be after check-in") }
+            return
+        }
 
         _walkInState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
             runCatching {
-                val now = Date()
+                val now = ws.checkInTime
                 val primary = ws.guestEntries.firstOrNull() ?: GuestEntry()
                 val primaryName = primary.name.trim().ifBlank { ws.guestName.trim() }
                 val primaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
-                // Detect early check-in
                 val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
                 val isEarlyCheckIn = if (hotel != null && hotel.earlyCheckInAllowed) {
                     val parts = hotel.checkInTime.split(":")
@@ -393,77 +432,83 @@ class StaysViewModel(
                     nowMinutes < hotelHour * 60 + hotelMin
                 } else false
                 val earlyCheckInCharge = if (isEarlyCheckIn && hotel != null) hotel.earlyCheckInPrice else 0.0
-                val stay = Stay(
-                    hotelId = AppContext.hotelId,
-                    bookingId = ws.sourceBooking?.id ?: "",
-                    guestName = primaryName,
-                    guestPhone = primaryPhone,
-                    roomInstanceId = ws.selectedInstanceId,
-                    roomNumber = ws.selectedInstanceNumber,
-                    roomCategoryId = ws.selectedCategoryId,
-                    roomCategoryName = ws.selectedCategoryName,
-                    checkInActual = now,
-                    expectedCheckOut = ws.expectedCheckOut,
-                    status = "ACTIVE",
-                    adults = ws.adults,
-                    children = ws.children,
-                    breakfast = ws.breakfast,
-                    earlyCheckIn = isEarlyCheckIn,
-                    createdAt = now,
-                )
-                // 1. Create stay
-                val stayId = stayRepo.add(stay)
-                // 2. Mark room as occupied
-                instanceRepo.updateStatus(ws.selectedInstanceId, "OCCUPIED", currentStayId = stayId)
-                // 3. Create initial bill
-                val cat = ws.categories.find { it.id == ws.selectedCategoryId }
-                val nights = ChronoUnit.DAYS.between(
-                    now.toInstant(), ws.expectedCheckOut.toInstant(),
-                ).coerceAtLeast(1)
-                val roomCharge = (cat?.pricePerNight ?: 0.0) * nights
-                val breakfastCharge = if (ws.breakfast) ws.selectedCategoryBreakfastPrice * ws.adults * nights else 0.0
-                val total = roomCharge + breakfastCharge + earlyCheckInCharge
                 val advance = ws.advancePayment.toDoubleOrNull() ?: 0.0
-                billingRepo.add(BillingInvoice(
-                    stayId = stayId,
-                    guestName = primaryName,
-                    roomNumber = ws.selectedInstanceNumber,
-                    roomCharges = roomCharge,
-                    serviceCharges = breakfastCharge,
-                    earlyCheckInCharge = earlyCheckInCharge,
-                    totalAmount = total,
-                    amountPaid = advance,
-                    status = if (advance >= total) "PAID" else if (advance > 0) "PARTIAL" else "PENDING",
-                    issuedAt = now,
-                ))
-                // 4. Handle booking
-                val srcBooking = ws.sourceBooking
-                if (srcBooking != null) {
-                    bookingRepo.update(srcBooking.copy(
-                        roomInstanceId = ws.selectedInstanceId,
-                        roomNumber = ws.selectedInstanceNumber,
-                    ))
-                } else {
-                    bookingRepo.add(Booking(
+                val roomCount = ws.selectedInstanceIds.size
+                // Split advance equally across all rooms
+                val advancePerRoom = if (roomCount > 0) advance / roomCount else 0.0
+
+                val firstStayId = ws.selectedInstanceIds.mapIndexed { roomIndex, instanceId ->
+                    // Risk 4: always derive category from Firestore doc
+                    val roomInstance = instanceRepo.getById(instanceId)
+                        ?: throw Exception("Room instance $instanceId not found")
+                    val cat = ws.categories.find { it.id == roomInstance.categoryId }
+                    val nights = ChronoUnit.DAYS.between(now.toInstant(), ws.expectedCheckOut.toInstant()).coerceAtLeast(1)
+                    val roomCharge = (cat?.pricePerNight ?: 0.0) * nights
+                    val breakfastCharge = if (ws.breakfast) ws.selectedCategoryBreakfastPrice * ws.adults * nights else 0.0
+                    // Early check-in charge only on first room
+                    val earlyCharge = if (roomIndex == 0) earlyCheckInCharge else 0.0
+                    val total = roomCharge + breakfastCharge + earlyCharge
+
+                    val stay = Stay(
                         hotelId = AppContext.hotelId,
+                        bookingId = if (roomIndex == 0) ws.sourceBooking?.id ?: "" else "",
                         guestName = primaryName,
                         guestPhone = primaryPhone,
-                        roomCategoryId = ws.selectedCategoryId,
-                        roomCategoryName = ws.selectedCategoryName,
-                        roomInstanceId = ws.selectedInstanceId,
-                        roomNumber = ws.selectedInstanceNumber,
-                        checkIn = now,
-                        checkOut = ws.expectedCheckOut,
+                        roomInstanceId = instanceId,
+                        roomNumber = roomInstance.roomNumber,
+                        roomCategoryId = roomInstance.categoryId,
+                        roomCategoryName = roomInstance.categoryName,
+                        checkInActual = now,
+                        expectedCheckOut = ws.expectedCheckOut,
+                        status = "ACTIVE",
                         adults = ws.adults,
                         children = ws.children,
-                        status = "COMPLETED",
-                        source = "WALK_IN",
-                        totalAmount = total,
-                        advancePaidAmount = advance,
+                        breakfast = ws.breakfast,
+                        earlyCheckIn = isEarlyCheckIn && roomIndex == 0,
                         createdAt = now,
+                    )
+                    val stayId = stayRepo.checkInBatch(stay, instanceId)
+                    billingRepo.add(BillingInvoice(
+                        stayId = stayId,
+                        guestName = primaryName,
+                        roomNumber = roomInstance.roomNumber,
+                        roomCharges = roomCharge,
+                        serviceCharges = breakfastCharge,
+                        earlyCheckInCharge = earlyCharge,
+                        totalAmount = total,
+                        amountPaid = advancePerRoom,
+                        status = if (advancePerRoom >= total) "PAID" else if (advancePerRoom > 0) "PARTIAL" else "PENDING",
+                        issuedAt = now,
                     ))
-                }
-                stayId
+                    // Only link booking for single-room or first room of walk-in
+                    if (roomIndex == 0) {
+                        val srcBooking = ws.sourceBooking
+                        if (srcBooking != null) {
+                            bookingRepo.update(srcBooking.copy(roomInstanceId = instanceId, roomNumber = roomInstance.roomNumber))
+                        } else {
+                            bookingRepo.add(Booking(
+                                hotelId = AppContext.hotelId,
+                                guestName = primaryName,
+                                guestPhone = primaryPhone,
+                                roomCategoryId = roomInstance.categoryId,
+                                roomCategoryName = roomInstance.categoryName,
+                                roomInstanceId = instanceId,
+                                roomNumber = roomInstance.roomNumber,
+                                checkIn = now,
+                                checkOut = ws.expectedCheckOut,
+                                adults = ws.adults,
+                                children = ws.children,
+                                status = "COMPLETED",
+                                source = "WALK_IN",
+                                totalAmount = total * roomCount,
+                                advancePaidAmount = advance,
+                                createdAt = now,
+                            ))
+                        }
+                    }
+                    stayId
+                }.first()
+                firstStayId
             }.onSuccess { newStayId ->
                 _walkInState.value = WalkInState()
                 loadActive()
@@ -495,9 +540,11 @@ class StaysViewModel(
         _fromBookingState.value = FromBookingState()
         launchWithGlobalLoading {
             val categories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
-            val instances = if (booking.roomCategoryId.isNotBlank()) {
+            val allInstances = if (booking.roomCategoryId.isNotBlank()) {
                 runCatching { instanceRepo.getByCategory(booking.roomCategoryId, hotelId, includeAssigned = true) }.getOrElse { emptyList() }
             } else emptyList()
+            val confirmed = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
+            val instances = dateConflictFilter(allInstances, confirmed, booking.checkIn, booking.checkOut, excludeBookingId = booking.id)
             val cat = categories.find { it.id == booking.roomCategoryId }
             val entries = List(booking.adults.coerceAtLeast(1)) { i ->
                 if (i == 0) GuestEntry(name = booking.guestName, phone = booking.guestPhone)
@@ -513,13 +560,13 @@ class StaysViewModel(
                 selectedCategoryId = booking.roomCategoryId,
                 selectedCategoryName = booking.roomCategoryName,
                 selectedCategoryBreakfastPrice = cat?.breakfastPrice ?: 0.0,
-                selectedInstanceId = preAssignedInstance?.id ?: "",
-                selectedInstanceNumber = preAssignedInstance?.roomNumber ?: "",
+                selectedInstanceIds = if (preAssignedInstance != null) setOf(preAssignedInstance.id) else emptySet(),
                 expectedCheckOut = booking.checkOut,
                 adults = booking.adults,
                 children = booking.children,
                 categories = categories,
                 availableInstances = instances,
+                availableCount = instances.size,
                 sourceBooking = booking,
             )
         }
@@ -548,16 +595,36 @@ class StaysViewModel(
                 todayDateOnly.after(expectedDateOnly) ||
                     (todayDateOnly.timeInMillis == expectedDateOnly.timeInMillis && nowMinutes > hotelHour * 60 + hotelMin)
             } else false
-            val lateCheckoutCharge = if (isLateCheckout && hotel?.lateCheckOutAllowed == true) hotel.lateCheckOutPrice else 0.0
+            val flatFee = if (isLateCheckout && hotel?.lateCheckOutAllowed == true) hotel.lateCheckOutPrice else 0.0
+            val nights = ChronoUnit.DAYS.between(
+                stay.checkInActual.toInstant(), stay.expectedCheckOut.toInstant()
+            ).coerceAtLeast(1)
+            val roomPricePerNight = if (bill != null) bill.roomCharges / nights else 0.0
             _checkOutState.value = CheckOutState(
                 isOpen = true, stay = stay, bill = bill,
-                isLateCheckout = isLateCheckout, lateCheckoutCharge = lateCheckoutCharge,
+                isLateCheckout = isLateCheckout,
+                lateCheckoutCharge = flatFee,
+                flatLateCheckoutFee = flatFee,
+                roomPricePerNight = roomPricePerNight,
+                lateChargeType = "FLAT",
+                hotelCheckOutTime = hotel?.checkOutTime ?: "11:00",
             )
         }
     }
 
     fun closeCheckOut() {
         _checkOutState.value = CheckOutState()
+    }
+
+    fun onLateChargeType(type: String) {
+        _checkOutState.update { cos ->
+            val charge = when (type) {
+                "FLAT" -> cos.flatLateCheckoutFee
+                "ROOM_RATE" -> cos.roomPricePerNight
+                else -> 0.0
+            }
+            cos.copy(lateChargeType = type, lateCheckoutCharge = charge)
+        }
     }
 
     fun confirmCheckOut() {
@@ -579,7 +646,7 @@ class StaysViewModel(
                     if (booking != null) bookingRepo.update(booking.copy(status = "COMPLETED"))
                 }
             }.onSuccess {
-                _checkOutState.value = CheckOutState(navigateToBilling = true)
+                _checkOutState.value = CheckOutState(navigateToBilling = true, checkedOutStayId = stay.id)
                 _listState.update { it.copy(selectedStayId = null) }
                 _detailState.value = StayDetailState()
                 loadActive()
@@ -608,7 +675,11 @@ class StaysViewModel(
                 .filter { it.isActive }
                 .map { CatalogItem(name = it.name, price = it.price, category = "Services") }
             val firstCategory = catalog.map { it.category }.distinct().firstOrNull() ?: ""
-            _addOrderState.update { it.copy(isLoadingCatalog = false, catalogItems = catalog, category = firstCategory) }
+            _addOrderState.update { it.copy(
+                isLoadingCatalog = false,
+                catalogItems = catalog,
+                items = listOf(OrderItemEntry(category = firstCategory)),
+            ) }
         }
     }
 
@@ -632,7 +703,7 @@ class StaysViewModel(
                         val q = entry.name.trim().lowercase()
                         val newSuggestions = catalog.filter { item ->
                             item.name.lowercase().contains(q) &&
-                                (s.category.isBlank() || item.category.split(",").map(String::trim).any { it == s.category })
+                                (entry.category.isBlank() || item.category.split(",").map(String::trim).any { it == entry.category })
                         }.take(6)
                         entry.copy(suggestions = newSuggestions, showSuggestions = newSuggestions.isNotEmpty())
                     }
@@ -642,18 +713,20 @@ class StaysViewModel(
         }
     }
 
-    fun onAddOrderCategory(v: String) = _addOrderState.update { s ->
-        // Clear suggestions when category changes
-        s.copy(category = v, items = s.items.map { it.copy(suggestions = emptyList(), showSuggestions = false) })
+    fun onAddOrderItemCategory(index: Int, v: String) = _addOrderState.update { s ->
+        s.copy(items = s.items.toMutableList().also {
+            it[index] = it[index].copy(category = v, name = "", suggestions = emptyList(), showSuggestions = false)
+        })
     }
     fun onAddOrderNotes(v: String) = _addOrderState.update { it.copy(notes = v) }
 
     fun onAddOrderItemName(index: Int, v: String) = _addOrderState.update { s ->
+        val itemCategory = s.items.getOrNull(index)?.category ?: ""
         val suggestions = if (v.isBlank()) emptyList() else {
             val query = v.trim().lowercase()
             s.catalogItems.filter { item ->
                 item.name.lowercase().contains(query) &&
-                    (s.category.isBlank() || item.category.split(",").map(String::trim).any { it == s.category })
+                    (itemCategory.isBlank() || item.category.split(",").map(String::trim).any { it == itemCategory })
             }.take(6)
         }
         // Auto-fill price when typed name exactly matches a catalog item and price is still blank
@@ -694,7 +767,10 @@ class StaysViewModel(
     fun onAddOrderItemPrice(index: Int, v: String) = _addOrderState.update { s ->
         s.copy(items = s.items.toMutableList().also { it[index] = it[index].copy(price = v.filter { c -> c.isDigit() || c == '.' }) })
     }
-    fun addOrderItem() = _addOrderState.update { it.copy(items = it.items + OrderItemEntry()) }
+    fun addOrderItem() = _addOrderState.update { s ->
+        val firstCategory = s.categories.firstOrNull() ?: ""
+        s.copy(items = s.items + OrderItemEntry(category = firstCategory))
+    }
     fun removeOrderItem(index: Int) = _addOrderState.update { s ->
         if (s.items.size <= 1) return@update s
         s.copy(items = s.items.toMutableList().also { it.removeAt(index) })
@@ -712,7 +788,7 @@ class StaysViewModel(
         launchWithGlobalLoading {
             val orderItems = validItems.map { OrderItem(name = it.name.trim(), quantity = it.quantity, price = it.price.toDoubleOrNull() ?: 0.0) }
             val total = orderItems.sumOf { it.price * it.quantity }
-            val orderType = if (s.category == "Services") "SERVICE" else "ROOM_SERVICE"
+            val orderType = if (validItems.any { it.category == "Services" }) "SERVICE" else "ROOM_SERVICE"
             runCatching {
                 orderRepo.add(Order(
                     hotelId = AppContext.hotelId,

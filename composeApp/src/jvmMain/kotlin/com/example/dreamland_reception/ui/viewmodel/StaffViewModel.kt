@@ -38,6 +38,7 @@ data class StaffScreenState(
     val roleFilter: String = "",         // "" | "HOUSEKEEPING" | "MAINTENANCE" | "RECEPTION"
     val availabilityFilter: String = "", // "" | "AVAILABLE" | "BUSY"
     val statusFilter: String = "",       // "" | "ACTIVE" | "INACTIVE"
+    val selectedMemberId: String? = null,
 ) {
     val filtered: List<StaffMember>
         get() {
@@ -149,12 +150,22 @@ class StaffViewModel(
     fun onRoleFilter(r: String) = _screenState.update { it.copy(roleFilter = r) }
     fun onAvailabilityFilter(a: String) = _screenState.update { it.copy(availabilityFilter = a) }
     fun onStatusFilter(s: String) = _screenState.update { it.copy(statusFilter = s) }
+    fun selectMember(id: String?) = _screenState.update { it.copy(selectedMemberId = id) }
 
     // ── Actions ───────────────────────────────────────────────────────────────
 
     fun toggleAvailability(member: StaffMember) {
         launchWithGlobalLoading {
             runCatching { repo.setAvailability(member.id, !member.isAvailable) }
+                .onFailure { e -> _screenState.update { it.copy(error = e.message) } }
+        }
+    }
+
+    fun setAvailableWithCompletion(member: StaffMember, orderIds: List<String>, complaintIds: List<String>) {
+        launchWithGlobalLoading {
+            orderIds.forEach { id -> runCatching { orderRepo.updateStatus(id, "COMPLETED") } }
+            complaintIds.forEach { id -> runCatching { complaintRepo.updateStatus(id, "COMPLETED") } }
+            runCatching { repo.setAvailability(member.id, true) }
                 .onFailure { e -> _screenState.update { it.copy(error = e.message) } }
         }
     }
