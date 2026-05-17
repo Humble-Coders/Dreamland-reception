@@ -1,15 +1,18 @@
 package com.example.dreamland_reception.stays
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +26,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,7 +59,7 @@ fun FromBookingDialog(state: FromBookingState, vm: StaysViewModel) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.55f)
-                .heightIn(max = 600.dp)
+                .heightIn(max = 680.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(DreamlandForestSurface)
                 .padding(24.dp),
@@ -90,13 +97,123 @@ fun FromBookingDialog(state: FromBookingState, vm: StaysViewModel) {
                         }
                     }
                     else -> {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(state.bookings) { booking ->
-                                BookingRow(booking = booking, onCheckIn = { vm.prefillFromBooking(booking) })
+                        // Group by groupBookingId; bookings with blank id are treated as individual
+                        val grouped = state.bookings
+                            .groupBy { b -> if (b.groupBookingId.isBlank()) b.id else b.groupBookingId }
+                            .values
+                            .sortedBy { it[0].checkIn }
+
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(grouped, key = { it[0].id }) { group ->
+                                if (group.size == 1) {
+                                    BookingRow(
+                                        booking = group[0],
+                                        onCheckIn = { vm.prefillFromBooking(group[0]) },
+                                    )
+                                } else {
+                                    GroupBookingRow(
+                                        group = group,
+                                        onCheckInAll = { vm.prefillGroupBooking(group) },
+                                        onCheckIn = { vm.prefillFromBooking(it) },
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupBookingRow(
+    group: List<Booking>,
+    onCheckInAll: () -> Unit,
+    onCheckIn: (Booking) -> Unit,
+) {
+    val fmt = SimpleDateFormat("dd MMM", Locale.getDefault())
+    val primary = group[0]
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.border(1.dp, DreamlandGold.copy(alpha = 0.25f), RoundedCornerShape(10.dp)),
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(primary.guestName, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge)
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(DreamlandGold.copy(alpha = 0.15f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text("${group.size} ROOMS", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${fmt.format(primary.checkIn)} → ${fmt.format(primary.checkOut)}  ·  ${group.sumOf { it.adults }}A",
+                        color = DreamlandMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    // Category summary
+                    val catSummary = group.groupBy { it.roomCategoryName.ifBlank { "Room" } }
+                        .entries.joinToString(" · ") { (cat, bkgs) -> if (bkgs.size > 1) "${bkgs.size}× $cat" else cat }
+                    Text(catSummary, color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = { expanded = !expanded },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text(if (expanded) "▲ Hide" else "▼ Rooms", color = DreamlandMuted, fontSize = 11.sp)
+                    }
+                    Button(
+                        onClick = onCheckInAll,
+                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text("Check In All", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            // Collapsible per-room rows
+            if (expanded) {
+                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+                group.forEach { booking ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column {
+                            val roomLabel = if (booking.roomNumber.isNotBlank()) "Room ${booking.roomNumber}" else "No room"
+                            Text(roomLabel, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                            Text(booking.roomCategoryName.ifBlank { "Room" }, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(
+                            onClick = { onCheckIn(booking) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold.copy(alpha = 0.8f)),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        ) {
+                            Text("Check In", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                        }
+                    }
+                    if (booking != group.last()) HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f), modifier = Modifier.padding(horizontal = 14.dp))
+                }
+                Spacer(Modifier.height(4.dp))
             }
         }
     }
@@ -128,6 +245,7 @@ private fun BookingRow(booking: Booking, onCheckIn: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            Spacer(Modifier.width(8.dp))
             Button(
                 onClick = onCheckIn,
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),

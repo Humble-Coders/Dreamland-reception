@@ -11,6 +11,7 @@ import java.util.Date
 
 interface BookingRepository {
     suspend fun getAll(): List<Booking>
+    suspend fun getAllByHotel(hotelId: String): List<Booking>
     suspend fun getById(id: String): Booking?
     suspend fun getUpcoming(hotelId: String): List<Booking>
     suspend fun getConfirmedByHotel(hotelId: String): List<Booking>
@@ -19,6 +20,7 @@ interface BookingRepository {
     suspend fun delete(id: String)
     suspend fun assignRoomTransaction(bookingId: String, roomInstanceId: String, roomNumber: String)
     suspend fun cancelWithTransaction(bookingId: String)
+    suspend fun markNoShow(bookingId: String, markedAt: Date, refundStatus: String, refundNote: String)
     fun listenByHotel(hotelId: String): Flow<List<Booking>>
 }
 
@@ -32,6 +34,10 @@ object FirestoreBookingRepository : BookingRepository {
 
     override suspend fun getAll(): List<Booking> = withContext(Dispatchers.IO) {
         col.orderBy("checkIn").get().get().documents.mapNotNull { it.toBooking() }
+    }
+
+    override suspend fun getAllByHotel(hotelId: String): List<Booking> = withContext(Dispatchers.IO) {
+        col.whereEqualTo("hotelId", hotelId).get().get().documents.mapNotNull { it.toBooking() }
     }
 
     override suspend fun getById(id: String): Booking? = withContext(Dispatchers.IO) {
@@ -87,6 +93,22 @@ object FirestoreBookingRepository : BookingRepository {
         }.get(); Unit
     }
 
+    override suspend fun markNoShow(
+        bookingId: String,
+        markedAt: Date,
+        refundStatus: String,
+        refundNote: String,
+    ) = withContext(Dispatchers.IO) {
+        col.document(bookingId).update(
+            mapOf(
+                "status" to "NO_SHOW",
+                "noShowMarkedAt" to markedAt,
+                "noShowRefundStatus" to refundStatus,
+                "noShowRefundNote" to refundNote,
+            ),
+        ).get(); Unit
+    }
+
     override suspend fun cancelWithTransaction(bookingId: String) = withContext(Dispatchers.IO) {
         val fs = FirestoreRepositorySupport.get()
         fs.runTransaction { txn ->
@@ -139,10 +161,15 @@ object FirestoreBookingRepository : BookingRepository {
             lateCheckOutCharge = (lateCheckOut?.get("charge") as? Number)?.toDouble() ?: 0.0,
             status = getString("status") ?: "CONFIRMED",
             source = getString("source") ?: "APP",
+            sourceId = getString("sourceId") ?: "",
             totalAmount = getDouble("totalAmount") ?: 0.0,
             advancePaidAmount = getDouble("advancePaidAmount") ?: 0.0,
             notes = getString("notes") ?: "",
+            groupBookingId = getString("groupBookingId") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
+            noShowMarkedAt = getTimestamp("noShowMarkedAt")?.toDate(),
+            noShowRefundStatus = getString("noShowRefundStatus") ?: "",
+            noShowRefundNote = getString("noShowRefundNote") ?: "",
         )
     }.getOrNull()
 
@@ -180,10 +207,16 @@ object FirestoreBookingRepository : BookingRepository {
         "checkInDate" to checkIn,
         "checkOutDate" to checkOut,
         "status" to status,
+
         "source" to source,
+        "sourceId" to sourceId,
         "totalAmount" to totalAmount,
         "advancePaidAmount" to advancePaidAmount,
         "notes" to notes,
+        "groupBookingId" to groupBookingId,
         "createdAt" to createdAt,
+        "noShowMarkedAt" to noShowMarkedAt,
+        "noShowRefundStatus" to noShowRefundStatus,
+        "noShowRefundNote" to noShowRefundNote,
     )
 }

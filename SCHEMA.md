@@ -3,7 +3,7 @@
 > **Source of truth:** `src/schema.js`
 > This file mirrors the schema in human-readable form.
 > When you update `src/schema.js`, update this file too.
-> Last updated: 2026-04-26
+> Last updated: 2026-05-04 (no-show audit fields added)
 
 ---
 
@@ -267,6 +267,7 @@ Seeded automatically on first use. Each document has a `name` field and `created
 | `roomAccessibilityFeatures` | Accessibility options | `Wheelchair Accessible`, `Elevator Access`, `Roll-in Shower`, `Grab Bars`, `Visual Alarms`, `Braille Signage`, `Wide Doorways` |
 | `roomComplimentaryBenefits` | Complimentary add-ons | `Breakfast Included`, `Welcome Drink`, `Evening Snacks`, `Newspaper`, `Airport Pickup`, `Early Check-in`, `Late Check-out` |
 | `roomPurchasableBenefits` | Purchasable add-ons | `Spa Package`, `Romantic Room Setup`, `Decorated Room`, `Extra Bed`, `Airport Transfer`, `Private Dining`, `Bonfire Setup` |
+| `bookingSources` | Booking source options (**global — no `hotelId`**) | `APP`, `WALK_IN`, `OTA`, `Phone`, `Email` |
 
 ---
 
@@ -316,38 +317,62 @@ Collections used by the Dreamland Reception desktop app. All flat — no subcoll
 | `options.earlyCheckIn.charge` | number | ₹ |
 | `options.lateCheckOut.enabled` | boolean | |
 | `options.lateCheckOut.charge` | number | ₹ |
-| `source` | enum | `APP` \| `WALK_IN` |
+| `notes` | string | |
+| `groupBookingId` | string | Optional; links grouped bookings; empty string when not part of a group |
+| `source` | string | Free-form string; references a `name` from the `bookingSources` lookup collection |
 | `createdAt` | timestamp | |
+| `noShowMarkedAt` | timestamp | Set when `status` transitions to `NO_SHOW`; `null` otherwise |
+| `noShowRefundStatus` | string | `""` (no advance) \| `"PENDING"` \| `"REFUNDED"` \| `"FORFEITED"` \| `"PARTIAL"` |
+| `noShowRefundNote` | string | Free-form note recorded by receptionist (e.g. "Refunded via UPI on 04 May") |
+
+> **No-show rules:** Marking `NO_SHOW` is final and irreversible. The receptionist is shown a confirmation dialog displaying the grace-period deadline (hotel check-in time + 12 hours) before confirming. If the booking had an advance payment, the status is set immediately to `NO_SHOW` with `noShowRefundStatus = "PENDING"`, and the receptionist is then prompted to record the refund outcome (`REFUNDED / FORFEITED / PARTIAL`). This outcome is saved back to the same booking document via `noShowMarkedAt`, `noShowRefundStatus`, and `noShowRefundNote`.
 
 ---
 
 ## Collection: `stays`
 
-Active and completed guest stays. Options are synced from the booking at check-in.
+Active and completed guest stays. Created at check-in (walk-in or from-booking). Options are synced from the booking at check-in.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `hotelId` | string | |
-| `hotelName` | string | Denormalized |
-| `bookingId` | string | Optional; empty for walk-ins |
-| `roomInstanceId` | string | |
-| `roomNumber` | string | |
-| `roomCategoryId` | string | Always derived from `roomInstances/{roomInstanceId}.categoryId` at check-in — never sent from client UI |
-| `roomCategoryName` | string | Denormalized from `roomInstances/{roomInstanceId}.categoryName` |
-| `guestDetails.name` | string | |
-| `guestDetails.phone` | string | |
-| `options.breakfast` | boolean | |
-| `options.extraBed` | boolean | |
-| `options.earlyCheckIn` | boolean | |
-| `options.lateCheckOut` | boolean | |
-| `checkInTime` | timestamp | |
-| `expectedCheckOut` | timestamp | |
-| `actualCheckOut` | timestamp | `null` while active |
+| `bookingId` | string | Ref to `bookings`; empty string for walk-ins |
+| `guestName` | string | Primary guest name (denormalized from `guests[0].name`) |
+| `guestPhone` | string | Primary guest phone (denormalized from `guests[0].phone`) |
+| `roomInstanceId` | string | Ref to `roomInstances` |
+| `roomNumber` | string | Denormalized |
+| `roomCategoryId` | string | Derived from `roomInstances/{id}.categoryId` at check-in |
+| `roomCategoryName` | string | Denormalized from `roomInstances/{id}.categoryName` |
+| `checkInActual` | timestamp | Actual check-in datetime |
+| `expectedCheckOut` | timestamp | Expected check-out date (midnight UTC) |
+| `checkOutActual` | timestamp | `null` while active; set at check-out |
 | `status` | enum | `ACTIVE` \| `COMPLETED` |
-| `occupancy.adults` | number | |
-| `occupancy.children` | number | |
+| `adults` | number | |
+| `children` | number | |
+| `breakfast` | boolean | |
+| `extraBed` | boolean | |
+| `earlyCheckIn` | boolean | |
+| `lateCheckOut` | boolean | |
+| `earlyCheckInCharge` | number | ₹; `0` if not applicable |
+| `lateCheckOutCharge` | number | ₹; `0` if not applicable |
+| `advanceAmount` | number | ₹ paid at check-in |
+| `totalBilled` | number | ₹ total from final bill |
+| `specialRequests` | string | Free-form guest requests |
+| `createdAt` | timestamp | |
+| `guests` | object[] | All guests on the stay — see **GuestRecord** below |
 
-> **Atomic write rule:** Stay creation and room status transition (`AVAILABLE → OCCUPIED`) are performed in a single Firestore **batch write**. If either write fails, both are rolled back.
+### GuestRecord (nested array in `guests`)
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | Guest full name |
+| `phone` | string | Phone number; populated for primary guest (index 0); optional for additional guests |
+| `idProofVerified` | boolean | Whether ID proof was verified at check-in |
+
+> **Primary guest:** `guests[0]` is always the primary guest. `guestName` and `guestPhone` on the stay document are denormalized copies of `guests[0].name` and `guests[0].phone` for backwards-compatible queries.
+>
+> **Source:** `guests[]` is populated at check-in from the walk-in form's guest entries. For from-booking check-ins, `guests[0]` is pre-filled from the booking's `guestName`/`guestPhone`; additional guests are entered at the time of check-in.
+>
+> **Atomic write rule:** Stay creation and `roomInstances/{id}.currentStayId` update are performed in a single Firestore **batch write**. `OCCUPIED` is never stored in Firestore — it is derived client-side from active stays.
 
 ---
 
@@ -361,31 +386,6 @@ The Rooms screen and Check Availability panel compute available room counts **cl
 4. `availableRooms = usable − (committed bookings + committed stays)`.
 5. Keep only categories where `availableRooms > 0`, `capacity ≥ requestedGuests`, `status ≠ maintenance`.
 6. Return remaining categories with `pricePerNight` from the `rooms` document.
-
----
-
-## Collection: `bills`
-
-One bill per stay. `itemsPreview` is a denormalized summary; full line items live on the orders.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `hotelId` | string | |
-| `stayId` | string | |
-| `summary.roomCharges` | number | ₹ |
-| `summary.serviceCharges` | number | ₹ |
-| `summary.tax` | number | ₹ |
-| `summary.discount` | number | ₹ |
-| `summary.totalAmount` | number | ₹ |
-| `itemsPreview[]` | object[] | Each: `name`, `total` (₹), `orderId` (or `null`) |
-| `itemsCount` | number | Total line-item count |
-| `payment.totalPaid` | number | ₹ |
-| `payment.advancePayment` | number | ₹ |
-| `payment.pendingAmount` | number | ₹ |
-| `payment.transactions[]` | object[] | Each: `amount`, `method` (`UPI`\|`CASH`\|`CARD`), `status`, `createdAt` |
-| `status` | enum | `PENDING` \| `PARTIAL` \| `PAID` |
-| `createdAt` | timestamp | |
-| `updatedAt` | timestamp | |
 
 ---
 

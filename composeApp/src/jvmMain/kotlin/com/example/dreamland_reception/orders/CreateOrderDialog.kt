@@ -230,6 +230,14 @@ fun CreateOrderDialog(
                                 },
                                 addNewLabel = if (isServiceCategory) "Add as new service" else "Add as new food item",
                                 allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
+                                onToggleItemAvailability = { catalogItem ->
+                                    if (catalogItem.category == "Services") {
+                                        settingsVm.toggleService(catalogItem.id, true)
+                                    } else {
+                                        settingsVm.toggleFoodItem(catalogItem.id, true)
+                                    }
+                                    vm.refreshCreateOrderCatalog()
+                                },
                             )
 
                             Spacer(Modifier.height(8.dp))

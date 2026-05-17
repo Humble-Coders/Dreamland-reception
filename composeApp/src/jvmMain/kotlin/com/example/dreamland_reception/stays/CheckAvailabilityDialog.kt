@@ -54,6 +54,7 @@ import com.example.dreamland_reception.DreamlandOnDark
 import com.example.dreamland_reception.ui.viewmodel.AvailabilityUiState
 import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
 import com.example.dreamland_reception.ui.viewmodel.AvailableCategory
+import com.example.dreamland_reception.util.dateFromPicker
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -316,12 +317,7 @@ private fun AvailabilityDatePickerDialog(
                     TextButton(onClick = onDismiss) { Text("Cancel", color = DreamlandMuted) }
                     Spacer(Modifier.width(8.dp))
                     Button(
-                        onClick = {
-                            val c = Calendar.getInstance()
-                            c.set(year, month - 1, day, 0, 0, 0)
-                            c.set(Calendar.MILLISECOND, 0)
-                            onDateSelected(c.time)
-                        },
+                        onClick = { onDateSelected(dateFromPicker(year, month - 1, day)) },
                         colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
                         shape = RoundedCornerShape(8.dp),
                     ) { Text("Set", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }

@@ -46,10 +46,13 @@ import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.stays.AddComplaintDialog
 import com.example.dreamland_reception.stays.AddOrderDialog
 import com.example.dreamland_reception.stays.CheckOutDialog
+import com.example.dreamland_reception.stays.ExtendStayDialog
+import com.example.dreamland_reception.stays.ChangeRoomDialog
 import com.example.dreamland_reception.stays.FromBookingDialog
 import com.example.dreamland_reception.stays.StayDetailPanel
 import com.example.dreamland_reception.stays.StayDetailPlaceholder
 import com.example.dreamland_reception.stays.WalkInDialog
+import androidx.compose.runtime.DisposableEffect
 import com.example.dreamland_reception.ui.viewmodel.StaysListState
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import kotlinx.coroutines.delay
@@ -64,14 +67,21 @@ fun StaysScreen(
     onNavigateToBilling: (stayId: String) -> Unit = {},
 ) {
     val listState by vm.listState.collectAsStateWithLifecycle()
-    val walkInState by vm.walkInState.collectAsStateWithLifecycle()
     val fromBookingState by vm.fromBookingState.collectAsStateWithLifecycle()
     val detailState by vm.detailState.collectAsStateWithLifecycle()
     val checkOutState by vm.checkOutState.collectAsStateWithLifecycle()
+    val extendStayState by vm.extendStayState.collectAsStateWithLifecycle()
     val addOrderState by vm.addOrderState.collectAsStateWithLifecycle()
     val addComplaintState by vm.addComplaintState.collectAsStateWithLifecycle()
+    val changeRoomState by vm.changeRoomState.collectAsStateWithLifecycle()
 
-    // Poll badges every 30s
+    // Real-time stays listener — active while this screen is in the composition
+    DisposableEffect(Unit) {
+        vm.startListeningStays()
+        onDispose { vm.stopListeningStays() }
+    }
+
+    // Poll badges every 30s (supplementary; real-time listener covers immediate updates)
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000L)
@@ -103,11 +113,13 @@ fun StaysScreen(
     }
 
     // ── Dialogs ────────────────────────────────────────────────────────────────
-    if (walkInState.isOpen) WalkInDialog(walkInState, vm)
+    // WalkInDialog is rendered globally in DreamlandApp so it appears over any tab
     if (fromBookingState.isOpen) FromBookingDialog(fromBookingState, vm)
+    ExtendStayDialog(extendStayState, vm)
     CheckOutDialog(checkOutState, vm, onNavigateToBilling = onNavigateToBilling)
     if (addOrderState.isOpen) AddOrderDialog(addOrderState, vm)
     if (addComplaintState.isOpen) AddComplaintDialog(addComplaintState, vm)
+    ChangeRoomDialog(changeRoomState, vm)
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
@@ -211,6 +223,8 @@ private fun StayCardList(listState: StaysListState, vm: StaysViewModel) {
                 items(listState.filtered, key = { it.id }) { stay ->
                     StayCard(
                         stay = stay,
+                        categoryName = listState.categoryNames[stay.roomCategoryId]
+                            ?: stay.roomCategoryName.ifBlank { null },
                         isSelected = stay.id == listState.selectedStayId,
                         pendingOrders = listState.pendingOrdersByStay[stay.id] ?: 0,
                         openComplaints = listState.openComplaintsByStay[stay.id] ?: 0,
@@ -227,6 +241,7 @@ private fun StayCardList(listState: StaysListState, vm: StaysViewModel) {
 @Composable
 private fun StayCard(
     stay: Stay,
+    categoryName: String?,
     isSelected: Boolean,
     pendingOrders: Int,
     openComplaints: Int,
@@ -234,9 +249,11 @@ private fun StayCard(
 ) {
     val fmt = SimpleDateFormat("dd MMM", Locale.getDefault())
     val nights = ChronoUnit.DAYS.between(stay.checkInActual.toInstant(), stay.expectedCheckOut.toInstant()).coerceAtLeast(1)
+    val isOverdue = stay.status == "ACTIVE" && stay.expectedCheckOut.before(Date())
+    val accentColor = if (isOverdue) Color(0xFFEF5350) else Color(0xFF4CAF50)
     val borderColor = when {
         isSelected -> DreamlandGold
-        stay.status == "ACTIVE" -> Color(0xFF4CAF50)
+        stay.status == "ACTIVE" -> accentColor
         else -> DreamlandMuted.copy(alpha = 0.3f)
     }
 
@@ -254,8 +271,8 @@ private fun StayCard(
                 .width(4.dp)
                 .fillMaxHeight()
                 .background(
-                    color = when (stay.status) {
-                        "ACTIVE" -> Color(0xFF4CAF50)
+                    color = when {
+                        stay.status == "ACTIVE" -> accentColor
                         else -> DreamlandMuted.copy(alpha = 0.3f)
                     },
                     shape = RoundedCornerShape(topStart = 10.dp, bottomStart = 10.dp),
@@ -265,12 +282,12 @@ private fun StayCard(
             // Row 1: room + status
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Room ${stay.roomNumber} · ${stay.roomCategoryName.ifBlank { "—" }}",
+                    "Room ${stay.roomNumber}${if (categoryName != null) " · $categoryName" else ""}",
                     color = DreamlandOnDark,
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                StatusBadge(stay.status)
+                StatusBadge(if (isOverdue) "OVERDUE" else stay.status)
             }
             Spacer(Modifier.height(2.dp))
             // Row 2: guest name
@@ -299,6 +316,7 @@ private fun StayCard(
 private fun StatusBadge(status: String) {
     val color = when (status) {
         "ACTIVE" -> Color(0xFF4CAF50)
+        "OVERDUE" -> Color(0xFFEF5350)
         "COMPLETED" -> DreamlandMuted
         else -> DreamlandMuted
     }

@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.automirrored.filled.TrendingFlat
 import androidx.compose.material.icons.filled.Warning
@@ -77,11 +78,14 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.ui.viewmodel.ActiveStayRow
 import com.example.dreamland_reception.ui.viewmodel.AlertType
+import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
+import com.example.dreamland_reception.ui.viewmodel.AvailableCategory
 import com.example.dreamland_reception.ui.viewmodel.DashboardAlert
 import com.example.dreamland_reception.ui.viewmodel.DashboardState
 import com.example.dreamland_reception.ui.viewmodel.DashboardViewModel
 import com.example.dreamland_reception.ui.viewmodel.DayTrendPoint
-import com.example.dreamland_reception.ui.viewmodel.RoomStatusBreakdown
+import com.example.dreamland_reception.util.dateFromPicker
+import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -132,10 +136,7 @@ fun DashboardScreen(
             }
         }
 
-        if (state.isLoading && state.activeStays.isEmpty() && state.roomStatus.total == 0) {
-            LoadingDashboard()
-        } else {
-            Row(Modifier.weight(1f).fillMaxWidth()) {
+        Row(Modifier.weight(1f).fillMaxWidth()) {
                 // ── Left main column ──────────────────────────────────────────
                 Column(
                     modifier = Modifier
@@ -171,7 +172,7 @@ fun DashboardScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    RoomStatusCard(state.roomStatus)
+                    CheckAvailabilityCard()
                     TrendsSection(state.trendPoints)
                     QuickActionsCard(
                         onNewWalkIn = onNewWalkIn,
@@ -182,7 +183,6 @@ fun DashboardScreen(
                     )
                 }
             }
-        }
     }
 
     if (showDatePicker) {
@@ -311,18 +311,6 @@ private fun LiveDot() {
                 .background(Color(0xFF2ECC71).copy(alpha = alpha)),
         )
         Text("LIVE", style = MaterialTheme.typography.labelSmall, color = Color(0xFF2ECC71), letterSpacing = 1.sp)
-    }
-}
-
-// ── Loading placeholder ───────────────────────────────────────────────────────
-
-@Composable
-private fun LoadingDashboard() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            CircularProgressIndicator(color = DreamlandGold, strokeWidth = 3.dp, modifier = Modifier.size(40.dp))
-            Text("Loading dashboard…", style = MaterialTheme.typography.bodyMedium, color = DreamlandMuted)
-        }
     }
 }
 
@@ -600,51 +588,192 @@ private fun ActiveStayRowItem(row: ActiveStayRow) {
     }
 }
 
-// ── Room status card ──────────────────────────────────────────────────────────
+// ── Check availability card (inline sidebar) ──────────────────────────────────
 
 @Composable
-private fun RoomStatusCard(breakdown: RoomStatusBreakdown) {
+private fun CheckAvailabilityCard(
+    vm: AvailabilityViewModel = DreamlandAppInitializer.getAvailabilityViewModel(),
+) {
+    val state by vm.uiState.collectAsStateWithLifecycle()
+
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
     ) {
-        Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Room Status", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            RoomStatusRow("Available",   breakdown.available,   Color(0xFF2ECC71))
-            RoomStatusRow("Occupied",    breakdown.occupied,    Color(0xFFE74C3C))
-            RoomStatusRow("Cleaning",    breakdown.cleaning,    Color(0xFFE67E22))
-            RoomStatusRow("Maintenance", breakdown.maintenance, Color(0xFF95A5A6))
-            Spacer(Modifier.height(4.dp))
-            Box(Modifier.fillMaxWidth().height(1.dp).background(DreamlandGold.copy(alpha = 0.12f)))
-            Spacer(Modifier.height(4.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Total", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted, fontWeight = FontWeight.Medium)
-                Text("${breakdown.total}", style = MaterialTheme.typography.labelMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Check Availability", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SidebarDateField("Check-In",  state.checkIn,  vm::setCheckIn,  Modifier.weight(1f))
+                SidebarDateField("Check-Out", state.checkOut, vm::setCheckOut, Modifier.weight(1f))
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                SidebarGuestsField(state.guests, vm::setGuests, Modifier.weight(1f))
+                Button(
+                    onClick = vm::search,
+                    enabled = !state.loading,
+                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.height(40.dp),
+                ) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Search", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                }
+            }
+
+            if (state.error != null) {
+                Text(state.error ?: "", color = Color(0xFFE74C3C), style = MaterialTheme.typography.bodySmall)
+            }
+
+            when {
+                state.loading -> {
+                    Box(Modifier.fillMaxWidth().height(60.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = DreamlandGold, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
+                    }
+                }
+                state.searched && state.results.isEmpty() -> {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+                        Text("No rooms available for these dates", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, textAlign = TextAlign.Center)
+                    }
+                }
+                state.results.isNotEmpty() -> {
+                    Text(
+                        "${state.results.size} categor${if (state.results.size != 1) "ies" else "y"} available",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = DreamlandGold,
+                        fontSize = 11.sp,
+                    )
+                    state.results.forEach { cat -> SidebarAvailableCategoryRow(cat) }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RoomStatusRow(label: String, count: Int, color: Color) {
+private fun SidebarDateField(label: String, date: Date, onDateSelected: (Date) -> Unit, modifier: Modifier = Modifier) {
+    val fmt = remember { SimpleDateFormat("d MMM yy", Locale.getDefault()) }
+    var showPicker by remember { mutableStateOf(false) }
+
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 10.sp)
+        Spacer(Modifier.height(4.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DreamlandForestSurface)
+                .border(1.dp, DreamlandGold.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .clickable { showPicker = true }
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Text(fmt.format(date), style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, fontSize = 11.sp)
+        }
+    }
+
+    if (showPicker) {
+        SidebarDatePickerDialog(date, { onDateSelected(it); showPicker = false }, { showPicker = false })
+    }
+}
+
+@Composable
+private fun SidebarGuestsField(guests: Int, onChanged: (Int) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text("Guests", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 10.sp)
+        Spacer(Modifier.height(4.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DreamlandForestSurface)
+                .border(1.dp, DreamlandGold.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            TextButton(onClick = { if (guests > 1) onChanged(guests - 1) }, modifier = Modifier.size(28.dp)) {
+                Text("-", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+            Text("$guests", color = DreamlandOnDark, fontSize = 13.sp)
+            TextButton(onClick = { onChanged(guests + 1) }, modifier = Modifier.size(28.dp)) {
+                Text("+", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarDatePickerDialog(initialDate: Date, onDateSelected: (Date) -> Unit, onDismiss: () -> Unit) {
+    val cal = Calendar.getInstance().apply { time = initialDate }
+    var year  by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
+    var month by remember { mutableStateOf(cal.get(Calendar.MONTH) + 1) }
+    var day   by remember { mutableStateOf(cal.get(Calendar.DAY_OF_MONTH)) }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("Select Date", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    DashboardNumberSpinner("Day",   day,   1,    31)   { day   = it }
+                    DashboardNumberSpinner("Month", month, 1,    12)   { month = it }
+                    DashboardNumberSpinner("Year",  year,  2024, 2030) { year  = it }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel", color = DreamlandMuted) }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = { onDateSelected(dateFromPicker(year, month - 1, day)) },
+                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Set", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SidebarAvailableCategoryRow(cat: AvailableCategory) {
+    val fmt = remember { NumberFormat.getNumberInstance(Locale("en", "IN")) }
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(DreamlandForestSurface)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
-            Text(label, style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark)
+        Column(Modifier.weight(1f)) {
+            Text(
+                cat.room.type.replaceFirstChar { it.titlecase() },
+                style = MaterialTheme.typography.bodySmall,
+                color = DreamlandOnDark,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "${cat.availableCount} room${if (cat.availableCount != 1) "s" else ""} free",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF2ECC71),
+                fontSize = 10.sp,
+            )
         }
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(color.copy(alpha = 0.15f))
-                .padding(horizontal = 10.dp, vertical = 2.dp),
-        ) {
-            Text("$count", style = MaterialTheme.typography.labelMedium, color = color, fontWeight = FontWeight.SemiBold)
-        }
+        Text(
+            "₹${fmt.format(cat.pricePerNight.toLong())}/night",
+            style = MaterialTheme.typography.labelSmall,
+            color = DreamlandGold,
+            fontWeight = FontWeight.Medium,
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -838,12 +967,7 @@ private fun DashboardDatePickerDialog(
                     TextButton(onClick = onDismiss) { Text("Cancel", color = DreamlandMuted) }
                     Spacer(Modifier.width(8.dp))
                     Button(
-                        onClick = {
-                            val c = Calendar.getInstance()
-                            c.set(year, month - 1, day, 0, 0, 0)
-                            c.set(Calendar.MILLISECOND, 0)
-                            onSelect(c.time)
-                        },
+                        onClick = { onSelect(dateFromPicker(year, month - 1, day)) },
                         colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
                     ) {
                         Text("Set", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)

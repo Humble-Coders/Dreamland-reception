@@ -1,10 +1,11 @@
 package com.example.dreamland_reception.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
-import com.example.dreamland_reception.data.repository.BillingRepository
+import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.data.repository.BillRepository
 import com.example.dreamland_reception.data.repository.BookingRepository
 import com.example.dreamland_reception.data.repository.ComplaintRepository
-import com.example.dreamland_reception.data.repository.FirestoreBillingRepository
+import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
@@ -29,7 +30,7 @@ sealed interface ReportsUiState {
 
 class ReportsViewModel(
     private val bookingRepo: BookingRepository = FirestoreBookingRepository,
-    private val billingRepo: BillingRepository = FirestoreBillingRepository,
+    private val billRepo: BillRepository = FirestoreBillRepository,
     private val orderRepo: OrderRepository = FirestoreOrderRepository,
     private val complaintRepo: ComplaintRepository = FirestoreComplaintRepository,
 ) : ViewModel() {
@@ -45,16 +46,16 @@ class ReportsViewModel(
         launchWithGlobalLoading {
             _uiState.value = ReportsUiState.Loading
             runCatching {
-                val invoices = billingRepo.getAll()
+                val bills = billRepo.getByHotel(AppContext.hotelId)
                 val bookings = bookingRepo.getAll()
                 val orders = orderRepo.getAll()
                 val complaints = complaintRepo.getOpen()
                 ReportSummary(
-                    totalRevenue = invoices.filter { it.status == "PAID" }.sumOf { it.totalAmount },
+                    totalRevenue = bills.filter { it.status == "PAID" }.sumOf { it.totalAmount },
                     totalBookings = bookings.size,
                     totalOrders = orders.size,
                     openComplaints = complaints.size,
-                    unpaidInvoices = invoices.count { it.status == "PENDING" },
+                    unpaidInvoices = bills.count { it.status == "PENDING" },
                 )
             }
                 .onSuccess { _uiState.value = ReportsUiState.Success(it) }

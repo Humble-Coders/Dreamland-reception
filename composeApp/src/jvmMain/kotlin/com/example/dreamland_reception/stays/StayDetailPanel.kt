@@ -2,6 +2,7 @@ package com.example.dreamland_reception.stays
 
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,10 +12,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -37,12 +46,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.dreamland_reception.DreamlandForest
 import com.example.dreamland_reception.DreamlandForestElevated
 import com.example.dreamland_reception.DreamlandForestSurface
 import com.example.dreamland_reception.DreamlandGold
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
-import com.example.dreamland_reception.data.model.BillingInvoice
+import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.data.model.GuestRecord
 import com.example.dreamland_reception.data.model.Complaint
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.Stay
@@ -79,20 +90,42 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
                     Text(stay.guestPhone, color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
                 }
                 Spacer(Modifier.height(6.dp))
+                val categoryName = stay.roomCategoryName.ifBlank {
+                    listState.categoryNames[stay.roomCategoryId] ?: ""
+                }
                 Text(
-                    text = "Room ${stay.roomNumber} · ${stay.roomCategoryName}",
+                    text = buildString {
+                        append("Room ${stay.roomNumber}")
+                        if (categoryName.isNotBlank()) append(" · $categoryName")
+                    },
                     color = DreamlandGold,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
             if (stay.status == "ACTIVE") {
-                Button(
-                    onClick = { vm.openCheckOut(stay.id) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
-                    shape = RoundedCornerShape(10.dp),
-                ) {
-                    Text("Check-out", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { vm.openExtendStay(stay.id) },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.7f)),
+                    ) {
+                        Text("Extend Stay", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                    }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { vm.openChangeRoom(stay.id) },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.7f)),
+                    ) {
+                        Text("Change Room", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = { vm.openCheckOut(stay.id) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
+                        shape = RoundedCornerShape(10.dp),
+                    ) {
+                        Text("Check-out", color = Color.White, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -108,6 +141,12 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
             if (stay.extraBed) InfoPill("Extra Bed")
             if (stay.earlyCheckIn) InfoPill("Early CI")
             if (stay.lateCheckOut) InfoPill("Late CO")
+        }
+
+        // ── Guest details ──────────────────────────────────────────────────────
+        if (stay.guests.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            GuestsSection(guests = stay.guests, totalAdults = stay.adults)
         }
 
         Spacer(Modifier.height(16.dp))
@@ -157,16 +196,130 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
     }
 }
 
+// ── Guest details section (collapsible) ──────────────────────────────────────
+
+@Composable
+private fun GuestsSection(guests: List<GuestRecord>, totalAdults: Int) {
+    var expanded by remember(guests) { mutableStateOf(true) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Header row — click anywhere to toggle
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "GUESTS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DreamlandMuted,
+                    letterSpacing = 1.5.sp,
+                )
+                // Compact summary shown when collapsed
+                if (!expanded) {
+                    val primary = guests.firstOrNull()
+                    val summaryText = buildString {
+                        if (primary?.name?.isNotBlank() == true) append(primary.name)
+                        if (guests.size > 1) append(" +${guests.size - 1} more")
+                    }
+                    if (summaryText.isNotBlank()) {
+                        Text(
+                            summaryText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = DreamlandOnDark,
+                        )
+                    }
+                }
+            }
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse guests" else "Expand guests",
+                tint = DreamlandMuted,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+
+        if (expanded) {
+            guests.forEachIndexed { index, guest ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(DreamlandForestElevated)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (index == 0) DreamlandGold.copy(alpha = 0.15f) else DreamlandMuted.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.Person,
+                            contentDescription = null,
+                            tint = if (index == 0) DreamlandGold else DreamlandMuted,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Column(Modifier.weight(1f)) {
+                        val displayName = guest.name.ifBlank { if (index == 0) "Primary Guest" else "Guest ${index + 1}" }
+                        Text(
+                            displayName,
+                            color = DreamlandOnDark,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                        if (guest.phone.isNotBlank()) {
+                            Text(guest.phone, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (index == 0) {
+                            Text(
+                                "Primary Guest",
+                                color = DreamlandGold.copy(alpha = 0.7f),
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    if (guest.idProofVerified) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = "ID Verified", tint = Color(0xFF4CAF50), modifier = Modifier.size(14.dp))
+                            Text("ID Verified", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium)
+                        }
+                    } else {
+                        Text("ID Pending", color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Billing tab ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun BillingTab(bill: BillingInvoice?) {
+private fun BillingTab(bill: Bill?) {
     if (bill == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No billing record found", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+            Text("Bill generated at checkout", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
         }
         return
     }
+
+    val roomCharges = bill.items.filter { it.type == "ROOM" }.sumOf { it.total }
+    val serviceCharges = bill.items.filter { it.type == "SERVICE" }.sumOf { it.total }
+    val orderCharges = bill.items.filter { it.type == "ORDER" }.sumOf { it.total }
+    val customCharges = bill.items.filter { it.type == "CUSTOM" }.sumOf { it.total }
+    val amountPaid = bill.totalPaid + bill.advancePayment
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -177,22 +330,22 @@ private fun BillingTab(bill: BillingInvoice?) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Bill Summary", style = MaterialTheme.typography.titleMedium, color = DreamlandGold, fontWeight = FontWeight.SemiBold)
                     HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
-                    BillRow("Room Charges", bill.roomCharges)
-                    if (bill.serviceCharges > 0) BillRow("Service Charges", bill.serviceCharges)
-                    if (bill.earlyCheckInCharge > 0) BillRow("Early Check-in", bill.earlyCheckInCharge)
-                    if (bill.lateCheckOutCharge > 0) BillRow("Late Check-out", bill.lateCheckOutCharge)
-                    if (bill.discount > 0) BillRow("Discount", -bill.discount)
+                    if (roomCharges > 0) BillRow("Room Charges", roomCharges)
+                    if (serviceCharges > 0) BillRow("Service Charges", serviceCharges)
+                    if (orderCharges > 0) BillRow("Orders", orderCharges)
+                    if (customCharges > 0) BillRow("Other", customCharges)
+                    if (bill.taxAmount > 0) BillRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
+                    if (bill.discountAmount > 0) BillRow("Discount", -bill.discountAmount)
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.3f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         Text("₹${bill.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     }
-                    BillRow("Amount Paid", bill.amountPaid)
-                    val pending = bill.totalAmount - bill.amountPaid
-                    if (pending > 0) {
+                    BillRow("Amount Paid", amountPaid)
+                    if (bill.pendingAmount > 0) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Pending", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold)
-                            Text("₹${pending.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
+                            Text("₹${bill.pendingAmount.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
                         }
                     }
                 }

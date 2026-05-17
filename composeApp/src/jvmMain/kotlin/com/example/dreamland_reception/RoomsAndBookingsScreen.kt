@@ -18,6 +18,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -30,6 +35,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -45,6 +52,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -76,9 +84,12 @@ import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.roomsbookings.AssignRoomDialog
+import com.example.dreamland_reception.stays.WalkInDialog
 import com.example.dreamland_reception.ui.viewmodel.BookingDateFilter
+import com.example.dreamland_reception.ui.viewmodel.NoShowRefundDialogState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsUiState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
+import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -129,9 +140,12 @@ private fun formatRupees(amount: Double): String =
 @Composable
 fun RoomsAndBookingsScreen(
     vm: RoomsAndBookingsViewModel = DreamlandAppInitializer.getRoomsAndBookingsViewModel(),
+    staysVm: StaysViewModel = DreamlandAppInitializer.getStaysViewModel(),
     onCheckIn: (Booking) -> Unit = {},
+    onCheckInAll: (List<Booking>) -> Unit = {},
 ) {
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val walkInState by staysVm.walkInState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(state.operationMessage) {
@@ -149,7 +163,7 @@ fun RoomsAndBookingsScreen(
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            PageHeader(state = state, vm = vm)
+            PageHeader(state = state, vm = vm, staysVm = staysVm)
 
             RoomsBookingsTabRow(
                 selectedTab = state.selectedTab,
@@ -170,7 +184,7 @@ fun RoomsAndBookingsScreen(
                         }
                     }
                     state.selectedTab == 0 -> RoomsTabContent(state = state, vm = vm)
-                    else -> BookingsTabContent(state = state, vm = vm, onCheckIn = onCheckIn)
+                    else -> BookingsTabContent(state = state, vm = vm, onCheckIn = onCheckIn, onCheckInAll = onCheckInAll)
                 }
             }
         }
@@ -194,9 +208,118 @@ fun RoomsAndBookingsScreen(
     if (state.noShowConfirmBooking != null) {
         NoShowConfirmDialog(
             booking = state.noShowConfirmBooking!!,
+            hotelCheckInTime = state.hotelCheckInTime,
             onConfirm = vm::confirmNoShow,
             onDismiss = vm::dismissNoShow,
         )
+    }
+    state.groupNoShowBookings?.let { group ->
+        val selectedIds = state.groupNoShowSelectedIds
+        val totalAdvance = group.filter { it.id in selectedIds }.sumOf { it.advancePaidAmount }
+        val guestName = group.firstOrNull()?.guestName ?: "Guest"
+        Dialog(
+            onDismissRequest = vm::dismissGroupNoShow,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .widthIn(min = 380.dp, max = 500.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(DreamlandForestSurface)
+                    .padding(24.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    Text("Mark as No-Show?", style = MaterialTheme.typography.titleLarge, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Select which rooms to mark as no-show for $guestName.", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
+                    Spacer(Modifier.height(16.dp))
+                    HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+                    Spacer(Modifier.height(8.dp))
+                    // Room list with checkboxes
+                    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                        lazyItems(group) { booking ->
+                            val isChecked = booking.id in selectedIds
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { vm.toggleGroupNoShowBooking(booking.id) }
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { vm.toggleGroupNoShowBooking(booking.id) },
+                                    colors = CheckboxDefaults.colors(
+                                        checkedColor = Color(0xFFE74C3C),
+                                        uncheckedColor = DreamlandMuted,
+                                    ),
+                                )
+                                if (booking.roomNumber.isNotBlank()) {
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(DreamlandGold.copy(alpha = 0.1f))
+                                            .padding(horizontal = 7.dp, vertical = 2.dp),
+                                    ) {
+                                        Text("Room ${booking.roomNumber}", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, fontSize = 11.sp)
+                                    }
+                                }
+                                Text(
+                                    booking.roomCategoryName.ifBlank { "No category" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isChecked) DreamlandOnDark else DreamlandMuted,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("This action is final and cannot be undone.", fontSize = 12.sp, color = Color(0xFFEF5350))
+                    if (totalAdvance > 0) {
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text("Advance payment on record", style = MaterialTheme.typography.labelSmall, color = Color(0xFFF39C12), fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "${formatRupees(totalAdvance)} — you will be prompted to record the refund outcome after confirming.",
+                                    color = Color(0xFFF39C12), fontSize = 11.sp,
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+                    Spacer(Modifier.height(12.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = vm::dismissGroupNoShow) { Text("Keep Booking", color = DreamlandMuted) }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = vm::confirmGroupNoShow,
+                            enabled = selectedIds.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+                            shape = RoundedCornerShape(8.dp),
+                        ) { Text("Mark No-Show", fontWeight = FontWeight.SemiBold) }
+                    }
+                }
+            }
+        }
+    }
+    if (state.noShowRefundDialog != null) {
+        NoShowRefundOutcomeDialog(
+            state = state.noShowRefundDialog!!,
+            onStatusSelected = vm::onNoShowRefundStatus,
+            onNoteChanged = vm::onNoShowRefundNote,
+            onConfirm = vm::submitNoShowRefundOutcome,
+            onDismiss = vm::dismissNoShowRefundDialog,
+        )
+    }
+    if (walkInState.isOpen && walkInState.isBookingMode) {
+        WalkInDialog(state = walkInState, vm = staysVm)
     }
 }
 
@@ -205,57 +328,38 @@ fun RoomsAndBookingsScreen(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
-private fun PageHeader(state: RoomsAndBookingsUiState, vm: RoomsAndBookingsViewModel) {
-    val searchPlaceholder = if (state.selectedTab == 0) "Search rooms…" else "Search bookings…"
-
+private fun PageHeader(state: RoomsAndBookingsUiState, vm: RoomsAndBookingsViewModel, staysVm: StaysViewModel) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(DreamlandForestSurface)
-            .padding(horizontal = 24.dp, vertical = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 24.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Column {
             Text(
                 text = "ACCOMMODATION",
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
                 color = DreamlandGold,
                 letterSpacing = 2.sp,
             )
-            Spacer(Modifier.height(2.dp))
             Text(
                 text = "Rooms & Bookings",
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleLarge,
                 color = DreamlandOnDark,
+                fontWeight = FontWeight.SemiBold,
             )
         }
-
-        OutlinedTextField(
-            value = state.searchQuery,
-            onValueChange = vm::setSearchQuery,
-            placeholder = { Text(searchPlaceholder, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, fontSize = 12.sp) },
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(18.dp)) },
-            trailingIcon = {
-                if (state.searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { vm.setSearchQuery("") }) {
-                        Icon(Icons.Filled.Close, contentDescription = "Clear", tint = DreamlandMuted, modifier = Modifier.size(16.dp))
-                    }
-                }
-            },
-            singleLine = true,
-            modifier = Modifier.width(260.dp),
-            shape = RoundedCornerShape(10.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = DreamlandOnDark,
-                unfocusedTextColor = DreamlandOnDark,
-                focusedBorderColor = DreamlandGold.copy(alpha = 0.6f),
-                unfocusedBorderColor = DreamlandGold.copy(alpha = 0.25f),
-                cursorColor = DreamlandGold,
-                focusedContainerColor = DreamlandForestElevated,
-                unfocusedContainerColor = DreamlandForestElevated,
-            ),
-        )
+        if (state.selectedTab == 1) {
+            OutlinedButton(
+                onClick = staysVm::openWalkInAsBooking,
+                border = BorderStroke(1.dp, DreamlandGold),
+                shape = RoundedCornerShape(8.dp),
+            ) {
+                Text("+ Add Booking", color = DreamlandGold, style = MaterialTheme.typography.labelLarge)
+            }
+        }
     }
 }
 
@@ -291,14 +395,14 @@ private fun RoomsBookingsTabRow(
                 unselectedContentColor = DreamlandMuted,
             ) {
                 Row(
-                    modifier = Modifier.padding(vertical = 14.dp, horizontal = 8.dp),
+                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
                         text = label,
                         fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                     )
                     if (count > 0) {
                         Box(
@@ -330,6 +434,20 @@ private fun RoomsBookingsTabRow(
 
 @Composable
 private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookingsViewModel) {
+    // Hoisted so both panels can use it
+    val rangeStart = hotelTimeToday(state.hotelCheckInTime, 0)
+    val rangeEnd   = hotelTimeToday(state.hotelCheckOutTime, 1)
+    val hotelTimesReady = rangeStart != null && rangeEnd != null
+
+    fun roomDisplayStatus(room: RoomInstance): String = when {
+        room.status == "MAINTENANCE" -> "MAINTENANCE"
+        room.status == "CLEANING"    -> "CLEANING"
+        hotelTimesReady && state.activeStaysByRoom[room.roomNumber]?.let { s ->
+            s.expectedCheckOut.after(rangeStart!!)
+        } == true -> "OCCUPIED"
+        else -> "AVAILABLE"
+    }
+
     Row(Modifier.fillMaxSize()) {
 
         // ── Left panel (30%) ──────────────────────────────────────────────────
@@ -339,54 +457,62 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
                 .weight(0.3f)
                 .background(DreamlandForestSurface),
         ) {
-            // Null until hotel data loads from Firestore; no OCCUPIED derived until both times are available
-            val rangeStart = hotelTimeToday(state.hotelCheckInTime, 0)
-            val rangeEnd   = hotelTimeToday(state.hotelCheckOutTime, 1)
-            val hotelTimesReady = rangeStart != null && rangeEnd != null
-
-            fun roomDisplayStatus(room: RoomInstance): String = when {
-                room.status == "MAINTENANCE" -> "MAINTENANCE"
-                room.status == "CLEANING"    -> "CLEANING"
-                hotelTimesReady && state.activeStaysByRoom[room.roomNumber]?.let { s ->
-                    s.expectedCheckOut.after(rangeStart!!)
-                } == true -> "OCCUPIED"
-                else -> "AVAILABLE"
-            }
 
             val allRooms = state.roomsForPanel
-            val summaryMap = mapOf(
-                "AVAILABLE"   to allRooms.count { roomDisplayStatus(it) == "AVAILABLE" },
-                "OCCUPIED"    to allRooms.count { roomDisplayStatus(it) == "OCCUPIED" },
-                "CLEANING"    to allRooms.count { roomDisplayStatus(it) == "CLEANING" },
-                "MAINTENANCE" to allRooms.count { roomDisplayStatus(it) == "MAINTENANCE" },
-            )
-
-            RoomStatusSummary(counts = summaryMap)
-            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
 
             Column(
-                Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                RoomFilterDropdown(
-                    label = "Category",
-                    selected = state.roomCategoryFilter,
-                    options = listOf("" to "All Categories") +
-                        state.categoryNames.entries.sortedBy { it.value }.map { it.key to it.value },
-                    onSelect = vm::setRoomCategoryFilter,
-                )
-                RoomFilterDropdown(
-                    label = "Status",
-                    selected = state.roomStatusFilter,
-                    options = listOf(
-                        "" to "All Statuses",
-                        "AVAILABLE"   to "Available",
-                        "OCCUPIED"    to "Occupied",
-                        "CLEANING"    to "Cleaning",
-                        "MAINTENANCE" to "Maintenance",
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = vm::setSearchQuery,
+                    placeholder = { Text("Search rooms…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, fontSize = 11.sp) },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(15.dp)) },
+                    trailingIcon = {
+                        if (state.searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { vm.setSearchQuery("") }, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Filled.Close, contentDescription = "Clear", tint = DreamlandMuted, modifier = Modifier.size(13.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark,
+                        unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold.copy(alpha = 0.6f),
+                        unfocusedBorderColor = DreamlandGold.copy(alpha = 0.25f),
+                        cursorColor = DreamlandGold,
+                        focusedContainerColor = DreamlandForestElevated,
+                        unfocusedContainerColor = DreamlandForestElevated,
                     ),
-                    onSelect = vm::setRoomStatusFilter,
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    RoomFilterDropdown(
+                        label = "Category",
+                        selected = state.roomCategoryFilter,
+                        options = listOf("" to "All Categories") +
+                            state.categoryNames.entries.sortedBy { it.value }.map { it.key to it.value },
+                        onSelect = vm::setRoomCategoryFilter,
+                        modifier = Modifier.weight(1f),
+                    )
+                    RoomFilterDropdown(
+                        label = "Status",
+                        selected = state.roomStatusFilter,
+                        options = listOf(
+                            "" to "All Statuses",
+                            "AVAILABLE"   to "Available",
+                            "OCCUPIED"    to "Occupied",
+                            "CLEANING"    to "Cleaning",
+                            "MAINTENANCE" to "Maintenance",
+                        ),
+                        onSelect = vm::setRoomStatusFilter,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
@@ -445,7 +571,7 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "${state.rooms.size} rooms · ${state.rooms.count { it.status == "AVAILABLE" }} available",
+                        "${state.rooms.size} rooms · ${state.rooms.count { roomDisplayStatus(it) == "AVAILABLE" }} available",
                         style = MaterialTheme.typography.bodySmall,
                         color = DreamlandMuted.copy(alpha = 0.6f),
                     )
@@ -834,35 +960,6 @@ private fun StayHistoryCard(stay: Stay, fmt: SimpleDateFormat) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Room status summary bar (left panel header)
-// ─────────────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun RoomStatusSummary(counts: Map<String, Int>) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(DreamlandForestElevated)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        counts.forEach { (status, count) ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(roomStatusColor(status)))
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    "$count",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = DreamlandMuted,
-                    fontSize = 10.sp,
-                )
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Room filter dropdown
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -872,53 +969,66 @@ private fun RoomFilterDropdown(
     selected: String,
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = options.find { it.first == selected }?.second ?: label
+    val selectedLabel = options.find { it.first == selected }?.second ?: options.firstOrNull()?.second ?: label
 
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label, fontSize = 11.sp) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = DreamlandOnDark,
-                unfocusedTextColor = DreamlandOnDark,
-                focusedBorderColor = DreamlandGold,
-                unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                cursorColor = DreamlandGold,
-                focusedLabelColor = DreamlandGold,
-                unfocusedLabelColor = DreamlandMuted,
-                focusedTrailingIconColor = DreamlandGold,
-                unfocusedTrailingIconColor = DreamlandMuted,
-            ),
-        )
-        ExposedDropdownMenu(
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 9.sp)
+        Spacer(Modifier.height(2.dp))
+        ExposedDropdownMenuBox(
             expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.background(DreamlandForestElevated),
+            onExpandedChange = { expanded = it },
         ) {
-            options.forEach { (value, displayName) ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            displayName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (selected == value) DreamlandGold else DreamlandOnDark,
-                        )
-                    },
-                    onClick = { onSelect(value); expanded = false },
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                )
+            Box(
+                Modifier
+                    .menuAnchor()
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(DreamlandForestElevated)
+                    .border(
+                        1.dp,
+                        if (expanded) DreamlandGold.copy(alpha = 0.6f) else DreamlandMuted.copy(alpha = 0.3f),
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        selectedLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandOnDark,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                }
+            }
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(DreamlandForestElevated),
+            ) {
+                options.forEach { (value, displayName) ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                displayName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (selected == value) DreamlandGold else DreamlandOnDark,
+                            )
+                        },
+                        onClick = { onSelect(value); expanded = false },
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
     }
@@ -933,6 +1043,7 @@ private fun BookingsTabContent(
     state: RoomsAndBookingsUiState,
     vm: RoomsAndBookingsViewModel,
     onCheckIn: (Booking) -> Unit,
+    onCheckInAll: (List<Booking>) -> Unit = {},
 ) {
     val bookings = state.filteredBookings
 
@@ -960,19 +1071,44 @@ private fun BookingsTabContent(
                 }
             }
             else -> {
+                val groups = state.filteredBookingGroups
+                val checkedInBookingIds = state.activeStaysByRoom.values
+                    .map { it.bookingId }.filter { it.isNotBlank() }.toSet()
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(bookings, key = { it.id }) { booking ->
-                        BookingCard(
-                            booking = booking,
-                            isCheckInToday = state.isCheckInToday(booking),
-                            onAssignRoom = { vm.openAssignRoom(booking) },
-                            onCheckIn = { onCheckIn(booking) },
-                            onCancel = { vm.promptCancelBooking(booking) },
-                            onNoShow = { vm.promptMarkNoShow(booking) },
-                        )
+                    items(groups, key = { group ->
+                        if (group.size == 1) group[0].id else group[0].groupBookingId
+                    }) { group ->
+                        if (group.size == 1) {
+                            val booking = group[0]
+                            BookingCard(
+                                booking = booking,
+                                isCheckInToday = state.isCheckInToday(booking),
+                                isCheckInTodayOrPassed = state.isCheckInTodayOrPassed(booking),
+                                isCheckedIn = booking.id in checkedInBookingIds,
+                                hotelCheckInTime = state.hotelCheckInTime,
+                                onAssignRoom = { vm.openAssignRoom(booking) },
+                                onCheckIn = { onCheckIn(booking) },
+                                onCancel = { vm.promptCancelBooking(booking) },
+                                onNoShow = { vm.promptMarkNoShow(booking) },
+                            )
+                        } else {
+                            GroupBookingCard(
+                                group = group,
+                                isCheckInToday = state.isCheckInToday(group[0]),
+                                isCheckInTodayOrPassed = state.isCheckInTodayOrPassed(group[0]),
+                                checkedInBookingIds = checkedInBookingIds,
+                                hotelCheckInTime = state.hotelCheckInTime,
+                                onAssignRoom = { vm.openAssignRoom(it) },
+                                onCheckIn = { onCheckIn(it) },
+                                onCheckInAll = onCheckInAll,
+                                onCancel = { vm.promptCancelBooking(it) },
+                                onNoShow = { vm.promptMarkNoShow(it) },
+                                onNoShowAll = { vm.promptMarkGroupNoShow(group) },
+                            )
+                        }
                     }
                 }
             }
@@ -982,11 +1118,39 @@ private fun BookingsTabContent(
 
 @Composable
 private fun BookingFilterBar(state: RoomsAndBookingsUiState, vm: RoomsAndBookingsViewModel) {
+    Column(
+        Modifier.fillMaxWidth().background(DreamlandForestElevated),
+    ) {
+        OutlinedTextField(
+            value = state.searchQuery,
+            onValueChange = vm::setSearchQuery,
+            placeholder = { Text("Search bookings…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, fontSize = 11.sp) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(15.dp)) },
+            trailingIcon = {
+                if (state.searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { vm.setSearchQuery("") }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear", tint = DreamlandMuted, modifier = Modifier.size(13.dp))
+                    }
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
+            shape = RoundedCornerShape(8.dp),
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = DreamlandOnDark,
+                unfocusedTextColor = DreamlandOnDark,
+                focusedBorderColor = DreamlandGold.copy(alpha = 0.6f),
+                unfocusedBorderColor = DreamlandGold.copy(alpha = 0.25f),
+                cursorColor = DreamlandGold,
+                focusedContainerColor = DreamlandForestSurface,
+                unfocusedContainerColor = DreamlandForestSurface,
+            ),
+        )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DreamlandForestElevated)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 20.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1071,12 +1235,297 @@ private fun BookingFilterBar(state: RoomsAndBookingsUiState, vm: RoomsAndBooking
             )
         }
     }
+    }
+}
+
+// ── Group booking card (multiple rooms, same groupBookingId) ──────────────────
+
+@Composable
+private fun GroupBookingCard(
+    group: List<Booking>,
+    isCheckInToday: Boolean,
+    isCheckInTodayOrPassed: Boolean = false,
+    checkedInBookingIds: Set<String> = emptySet(),
+    hotelCheckInTime: String = "12:00",
+    onAssignRoom: (Booking) -> Unit,
+    onCheckIn: (Booking) -> Unit,
+    onCheckInAll: (List<Booking>) -> Unit = {},
+    onCancel: (Booking) -> Unit,
+    onNoShow: (Booking) -> Unit,
+    onNoShowAll: () -> Unit = {},
+) {
+    val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
+    val primary = group[0]
+    val allStatuses = group.map { it.status }.distinct()
+    val overallStatus = when {
+        allStatuses.all { it == "CONFIRMED" } -> "CONFIRMED"
+        allStatuses.all { it == "COMPLETED" } -> "COMPLETED"
+        allStatuses.all { it == "CANCELLED" } -> "CANCELLED"
+        else -> "CONFIRMED"
+    }
+    val statusColor = bookingStatusColor(overallStatus)
+    val totalAmount = group.sumOf { it.totalAmount }
+    val totalAdvance = group.sumOf { it.advancePaidAmount }
+
+    val now = Date()
+    val graceDeadline = run {
+        val parts = hotelCheckInTime.split(":")
+        val ciHour = parts.getOrNull(0)?.toIntOrNull() ?: 12
+        val ciMin  = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        Calendar.getInstance().apply {
+            time = primary.checkIn
+            set(Calendar.HOUR_OF_DAY, ciHour); set(Calendar.MINUTE, ciMin)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+            add(Calendar.HOUR_OF_DAY, 12)
+        }.time
+    }
+    val isOverdue = overallStatus == "CONFIRMED" && now.after(graceDeadline)
+    val hoursOverdue = if (isOverdue) ((now.time - graceDeadline.time) / (1000L * 3600)).toInt() else 0
+
+    // Note: show the first non-blank note across group members
+    val sharedNote = group.firstOrNull { it.notes.isNotBlank() }?.notes
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (isOverdue) 1.5.dp else if (isCheckInToday) 1.5.dp else 1.dp,
+                color = when {
+                    isOverdue     -> Color(0xFFF39C12).copy(alpha = 0.6f)
+                    isCheckInToday -> DreamlandGold.copy(alpha = 0.6f)
+                    else           -> DreamlandGold.copy(alpha = 0.12f)
+                },
+                shape = RoundedCornerShape(12.dp),
+            ),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            // ── Header ──────────────────────────────────────────────────────
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            primary.guestName.ifBlank { "Guest" },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = DreamlandOnDark,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(DreamlandGold.copy(alpha = 0.15f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text("${group.size} ROOMS", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, fontSize = 9.sp, letterSpacing = 0.8.sp)
+                        }
+                        if (isOverdue) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFF39C12).copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("OVERDUE", style = MaterialTheme.typography.labelSmall, color = Color(0xFFF39C12), fontSize = 9.sp, letterSpacing = 0.8.sp)
+                            }
+                        } else if (isCheckInToday) {
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(DreamlandGold.copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("CHECK-IN TODAY", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, fontSize = 9.sp, letterSpacing = 0.8.sp)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        "${fmt.format(primary.checkIn)} → ${fmt.format(primary.checkOut)}  ·  ${primary.adults} Adults",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted,
+                    )
+                }
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(statusColor.copy(alpha = 0.15f))
+                        .border(1.dp, statusColor.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(overallStatus, style = MaterialTheme.typography.labelMedium, color = statusColor, fontSize = 10.sp, letterSpacing = 0.8.sp)
+                }
+            }
+
+            // Overdue hint banner
+            if (isOverdue) {
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF39C12).copy(alpha = 0.08f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        if (hoursOverdue == 0) "Grace period passed — no-show eligible"
+                        else "${hoursOverdue}h past grace period — consider marking no-show",
+                        color = Color(0xFFF39C12),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+
+            // Note
+            if (!sharedNote.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(DreamlandForestElevated)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text("Note:", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 10.sp)
+                    Text(sharedNote, style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
+            Spacer(Modifier.height(8.dp))
+
+            // ── Per-room rows ────────────────────────────────────────────────
+            group.forEach { booking ->
+                val hasRoom = booking.roomNumber.isNotBlank()
+                val isConfirmed = booking.status == "CONFIRMED"
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (hasRoom) {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(DreamlandGold.copy(alpha = 0.1f))
+                                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                                ) {
+                                    Text("Room ${booking.roomNumber}", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, fontSize = 11.sp)
+                                }
+                            } else {
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(DreamlandMuted.copy(alpha = 0.1f))
+                                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                                ) {
+                                    Text("No room", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 11.sp)
+                                }
+                            }
+                            if (booking.roomCategoryName.isNotBlank()) {
+                                Text(booking.roomCategoryName, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
+                            }
+                        }
+                    }
+                    if (booking.status == "NO_SHOW") {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF95A5A6).copy(alpha = 0.15f))
+                                .padding(horizontal = 7.dp, vertical = 3.dp),
+                        ) {
+                            Text("NO SHOW", style = MaterialTheme.typography.labelSmall, color = Color(0xFF95A5A6), fontSize = 9.sp, letterSpacing = 0.8.sp)
+                        }
+                    }
+                    if (isConfirmed) {
+                        val isRoomCheckedIn = booking.id in checkedInBookingIds
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (isCheckInTodayOrPassed && !isRoomCheckedIn) {
+                                TextButton(
+                                    onClick = { onNoShow(booking) },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(30.dp),
+                                ) { Text("No-Show", color = Color(0xFFE74C3C), fontSize = 10.sp) }
+                            }
+                            if (!isRoomCheckedIn) {
+                                OutlinedButton(
+                                    onClick = { onAssignRoom(booking) },
+                                    shape = RoundedCornerShape(6.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.45f)),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(30.dp),
+                                ) { Text(if (hasRoom) "Reassign" else "Assign", fontSize = 11.sp) }
+                                Button(
+                                    onClick = { onCheckIn(booking) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                                    shape = RoundedCornerShape(6.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(30.dp),
+                                ) { Text("Check-in", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                            }
+                        }
+                    }
+                }
+                if (booking != group.last()) HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f))
+            }
+
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
+            Spacer(Modifier.height(10.dp))
+
+            // ── Footer: totals + actions ─────────────────────────────────────
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text(formatRupees(totalAmount), style = MaterialTheme.typography.bodyMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                    if (totalAdvance > 0) Text("${formatRupees(totalAdvance)} paid", style = MaterialTheme.typography.bodySmall, color = Color(0xFF2ECC71))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val confirmedInGroup = group.filter { it.status == "CONFIRMED" && it.id !in checkedInBookingIds }
+                    if (confirmedInGroup.isNotEmpty()) {
+                        Button(
+                            onClick = { onCheckInAll(confirmedInGroup) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(32.dp),
+                        ) {
+                            Text("Check In All", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+                    val anyNoShowEligible = group.any { b ->
+                        b.status == "CONFIRMED" && b.id !in checkedInBookingIds && isCheckInTodayOrPassed
+                    }
+                    if (anyNoShowEligible) {
+                        TextButton(
+                            onClick = onNoShowAll,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        ) { Text("No-Show All", color = Color(0xFFE74C3C), fontSize = 12.sp) }
+                    }
+                    TextButton(
+                        onClick = { group.forEach { onCancel(it) } },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) { Text("Cancel All", color = Color(0xFFE74C3C).copy(alpha = 0.8f), fontSize = 12.sp) }
+                }
+            }
+        }
+    }
 }
 
 @Composable
 private fun BookingCard(
     booking: Booking,
     isCheckInToday: Boolean,
+    isCheckInTodayOrPassed: Boolean = false,
+    isCheckedIn: Boolean = false,
+    hotelCheckInTime: String = "12:00",
     onAssignRoom: () -> Unit,
     onCheckIn: () -> Unit,
     onCancel: () -> Unit,
@@ -1087,8 +1536,22 @@ private fun BookingCard(
     val isConfirmed = booking.status == "CONFIRMED"
     val hasRoom = booking.roomNumber.isNotBlank()
     val now = Date()
-    val isOverdue = isConfirmed && booking.checkIn.before(now)
-    val hoursOverdue = if (isOverdue) ((now.time - booking.checkIn.time) / (1000L * 3600)).toInt() else 0
+    // Grace deadline = hotel check-in time on the booking's check-in date + 12 hours
+    val graceDeadline = run {
+        val parts = hotelCheckInTime.split(":")
+        val ciHour = parts.getOrNull(0)?.toIntOrNull() ?: 12
+        val ciMin  = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        Calendar.getInstance().apply {
+            time = booking.checkIn
+            set(Calendar.HOUR_OF_DAY, ciHour)
+            set(Calendar.MINUTE, ciMin)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            add(Calendar.HOUR_OF_DAY, 12)
+        }.time
+    }
+    val isOverdue = isConfirmed && now.after(graceDeadline)
+    val hoursOverdue = if (isOverdue) ((now.time - graceDeadline.time) / (1000L * 3600)).toInt() else 0
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
@@ -1096,10 +1559,11 @@ private fun BookingCard(
         modifier = Modifier
             .fillMaxWidth()
             .border(
-                width = if (isCheckInToday && isConfirmed) 1.5.dp else 1.dp,
+                width = if (isOverdue || (isCheckInToday && isConfirmed)) 1.5.dp else 1.dp,
                 color = when {
+                    isOverdue && isConfirmed     -> Color(0xFFF39C12).copy(alpha = 0.6f)
                     isCheckInToday && isConfirmed -> DreamlandGold.copy(alpha = 0.6f)
-                    else -> DreamlandGold.copy(alpha = 0.12f)
+                    else                          -> DreamlandGold.copy(alpha = 0.12f)
                 },
                 shape = RoundedCornerShape(12.dp),
             ),
@@ -1111,7 +1575,7 @@ private fun BookingCard(
                 verticalAlignment = Alignment.Top,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = booking.guestName.ifBlank { "Guest" },
                             style = MaterialTheme.typography.titleMedium,
@@ -1120,21 +1584,23 @@ private fun BookingCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        if (isCheckInToday && isConfirmed) {
-                            Spacer(Modifier.width(8.dp))
+                        if (isOverdue && isConfirmed) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFF39C12).copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text("OVERDUE", style = MaterialTheme.typography.labelMedium, color = Color(0xFFF39C12), fontSize = 9.sp, letterSpacing = 0.8.sp)
+                            }
+                        } else if (isCheckInToday && isConfirmed) {
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(DreamlandGold.copy(alpha = 0.2f))
                                     .padding(horizontal = 6.dp, vertical = 2.dp),
                             ) {
-                                Text(
-                                    "CHECK-IN TODAY",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = DreamlandGold,
-                                    fontSize = 9.sp,
-                                    letterSpacing = 0.8.sp,
-                                )
+                                Text("CHECK-IN TODAY", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, fontSize = 9.sp, letterSpacing = 0.8.sp)
                             }
                         }
                     }
@@ -1215,25 +1681,39 @@ private fun BookingCard(
                 }
             }
 
+            if (booking.notes.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(DreamlandForestElevated)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Text("Note:", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, fontSize = 10.sp)
+                    Text(booking.notes, style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
             if (isOverdue) {
                 Spacer(Modifier.height(6.dp))
                 Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF39C12).copy(alpha = 0.08f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFFF39C12).copy(alpha = 0.15f))
-                            .padding(horizontal = 8.dp, vertical = 3.dp),
-                    ) {
-                        Text(
-                            "Check-in ${hoursOverdue}h overdue",
-                            color = Color(0xFFF39C12),
-                            fontSize = 10.sp,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
+                    Text(
+                        if (hoursOverdue == 0) "Grace period passed — no-show eligible"
+                        else "${hoursOverdue}h past grace period — consider marking no-show",
+                        color = Color(0xFFF39C12),
+                        fontSize = 10.sp,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                 }
             }
 
@@ -1245,29 +1725,31 @@ private fun BookingCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = onAssignRoom,
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.45f)),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text(
-                            if (hasRoom) "Reassign Room" else "Assign Room",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                    Button(
-                        onClick = onCheckIn,
-                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                    ) {
-                        Text("Check-in", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    if (!isCheckedIn) {
+                        OutlinedButton(
+                            onClick = onAssignRoom,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.45f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            Text(
+                                if (hasRoom) "Reassign Room" else "Assign Room",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Button(
+                            onClick = onCheckIn,
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                        ) {
+                            Text("Check-in", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
                     }
                     Spacer(Modifier.weight(1f))
-                    if (isOverdue) {
+                    if (isCheckInTodayOrPassed && !isCheckedIn) {
                         TextButton(
                             onClick = onNoShow,
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
@@ -1325,9 +1807,25 @@ private fun CancelConfirmDialog(
 @Composable
 private fun NoShowConfirmDialog(
     booking: Booking,
+    hotelCheckInTime: String = "12:00",
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val timeFmt = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())
+    val graceDeadline = run {
+        val parts = hotelCheckInTime.split(":")
+        val ciHour = parts.getOrNull(0)?.toIntOrNull() ?: 12
+        val ciMin  = parts.getOrNull(1)?.toIntOrNull() ?: 0
+        Calendar.getInstance().apply {
+            time = booking.checkIn
+            set(Calendar.HOUR_OF_DAY, ciHour)
+            set(Calendar.MINUTE, ciMin)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            add(Calendar.HOUR_OF_DAY, 12)
+        }.time
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = DreamlandForestSurface,
@@ -1336,21 +1834,34 @@ private fun NoShowConfirmDialog(
         title = { Text("Mark as No-Show?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("This will permanently mark ${booking.guestName}'s booking as No-Show. The room slot will be released.")
-                Text("This action is final and cannot be undone. The guest must make a fresh booking if they arrive later.", fontSize = 12.sp)
+                Text("Permanently mark ${booking.guestName}'s booking as No-Show. The room slot will be released and the guest must make a fresh booking if they arrive later.")
+                Text("This action is final and cannot be undone.", fontSize = 12.sp, color = Color(0xFFEF5350))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(DreamlandForestElevated)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("Grace period ended", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
+                        Text(timeFmt.format(graceDeadline), style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                    }
+                }
                 if (booking.advancePaidAmount > 0) {
-                    Spacer(Modifier.height(2.dp))
                     Box(
                         Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFF39C12).copy(alpha = 0.15f))
-                            .padding(8.dp),
+                            .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                     ) {
-                        Text(
-                            "⚠️  Advance payment of ${formatRupees(booking.advancePaidAmount)} on record. Handle refund per hotel policy.",
-                            color = Color(0xFFF39C12),
-                            fontSize = 11.sp,
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text("Advance payment on record", style = MaterialTheme.typography.labelSmall, color = Color(0xFFF39C12), fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${formatRupees(booking.advancePaidAmount)} — you will be prompted to record the refund outcome after confirming.",
+                                color = Color(0xFFF39C12),
+                                fontSize = 11.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -1367,4 +1878,146 @@ private fun NoShowConfirmDialog(
         },
         shape = RoundedCornerShape(16.dp),
     )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// No-show refund outcome dialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun NoShowRefundOutcomeDialog(
+    state: NoShowRefundDialogState,
+    onStatusSelected: (String) -> Unit,
+    onNoteChanged: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val booking = state.booking
+    Dialog(
+        onDismissRequest = { if (!state.isSaving) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(min = 360.dp, max = 480.dp)
+                .fillMaxWidth(0.45f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .padding(0.dp),
+        ) {
+            Column {
+                // Header band
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                        .padding(horizontal = 22.dp, vertical = 18.dp),
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("ADVANCE PAYMENT — REFUND OUTCOME", style = MaterialTheme.typography.labelSmall, color = Color(0xFFF39C12), letterSpacing = 1.sp)
+                        Text(booking.guestName, style = MaterialTheme.typography.titleLarge, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Advance paid: ${formatRupees(booking.advancePaidAmount)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = DreamlandMuted,
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    Text(
+                        "Record what was decided about the advance payment. This is logged for audit purposes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted,
+                    )
+
+                    // Status selector
+                    val options = listOf(
+                        "REFUNDED"  to "Refunded to guest",
+                        "FORFEITED" to "Forfeited (no refund)",
+                        "PARTIAL"   to "Partially refunded",
+                        "PENDING"   to "Pending — decide later",
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        options.forEach { (status, label) ->
+                            val selected = state.refundStatus == status
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) DreamlandGold.copy(alpha = 0.12f) else DreamlandForestElevated)
+                                    .border(
+                                        1.dp,
+                                        if (selected) DreamlandGold.copy(alpha = 0.5f) else DreamlandMuted.copy(alpha = 0.15f),
+                                        RoundedCornerShape(8.dp),
+                                    )
+                                    .clickable { onStatusSelected(status) }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (selected) Box(Modifier.size(7.dp).clip(CircleShape).background(DreamlandForestSurface))
+                                }
+                                Text(label, color = if (selected) DreamlandOnDark else DreamlandMuted, style = MaterialTheme.typography.bodySmall, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                            }
+                        }
+                    }
+
+                    // Note field
+                    OutlinedTextField(
+                        value = state.note,
+                        onValueChange = onNoteChanged,
+                        label = { Text("Note (optional)", color = DreamlandMuted, fontSize = 12.sp) },
+                        placeholder = { Text("e.g. Refunded via UPI on 04 May", color = DreamlandMuted.copy(alpha = 0.5f), fontSize = 12.sp) },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 3,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DreamlandOnDark,
+                            unfocusedTextColor = DreamlandOnDark,
+                            focusedBorderColor = DreamlandGold,
+                            unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.3f),
+                            cursorColor = DreamlandGold,
+                        ),
+                    )
+
+                    if (state.error != null) {
+                        Text(state.error, color = Color(0xFFEF5350), style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = onDismiss,
+                            enabled = !state.isSaving,
+                            modifier = Modifier.weight(1f).height(44.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandForestElevated),
+                        ) {
+                            Text("Skip for now", color = DreamlandMuted, fontWeight = FontWeight.Medium)
+                        }
+                        Button(
+                            onClick = onConfirm,
+                            enabled = !state.isSaving,
+                            modifier = Modifier.weight(2f).height(44.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                        ) {
+                            if (state.isSaving) CircularProgressIndicator(Modifier.size(18.dp), color = DreamlandForestSurface, strokeWidth = 2.dp)
+                            else Text("Save Outcome", color = DreamlandForestSurface, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

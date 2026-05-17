@@ -4,6 +4,10 @@ package com.example.dreamland_reception.navigation
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.EaseInOutQuart
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.EaseInQuad
 import androidx.compose.animation.core.EaseOutQuad
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -35,12 +39,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Feedback
@@ -68,6 +74,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.zIndex
+import com.example.dreamland_reception.ui.viewmodel.BookingNotification
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -89,6 +98,7 @@ import com.example.dreamland_reception.ComplaintsScreen
 import com.example.dreamland_reception.DashboardScreen
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.DreamlandForest
+import com.example.dreamland_reception.stays.WalkInDialog
 import com.example.dreamland_reception.DreamlandForestElevated
 import com.example.dreamland_reception.DreamlandForestSurface
 import com.example.dreamland_reception.DreamlandGold
@@ -147,10 +157,14 @@ private val dreamlandNavItems: List<NavItem> = listOf(
 fun DreamlandApp() {
     var selectedTab by remember { mutableStateOf(MainTab.Dashboard) }
     var pendingBillingStayId by remember { mutableStateOf("") }
+    var pendingBillingBillId by remember { mutableStateOf("") }
     var isSidebarExpanded by remember { mutableStateOf(true) }
     var isSidebarVisible by remember { mutableStateOf(true) }
 
     val globalLoading by DreamlandLoadCoordinator.loading.collectAsStateWithLifecycle()
+
+    val staysVm = DreamlandAppInitializer.getStaysViewModel()
+    val walkInState by staysVm.walkInState.collectAsStateWithLifecycle()
 
     val contentInteractionSource = remember { MutableInteractionSource() }
     val isContentHovered by contentInteractionSource.collectIsHoveredAsState()
@@ -158,6 +172,20 @@ fun DreamlandApp() {
     LaunchedEffect(isContentHovered) {
         if (isContentHovered && isSidebarExpanded && isSidebarVisible) {
             isSidebarExpanded = false
+        }
+    }
+
+    // ── Booking notification banner ───────────────────────────────────────────
+    var banner by remember { mutableStateOf<BookingNotification?>(null) }
+    LaunchedEffect(Unit) {
+        DreamlandAppInitializer.getAppViewModel().notificationFlow.collect { notification ->
+            banner = notification
+        }
+    }
+    LaunchedEffect(banner) {
+        if (banner != null) {
+            delay(4_000)
+            banner = null
         }
     }
 
@@ -214,24 +242,26 @@ fun DreamlandApp() {
                             onNavigateToStaff = { selectedTab = MainTab.Staff },
                         )
                         MainTab.RoomsAndBookings -> RoomsAndBookingsScreen(
-                            onCheckIn = { booking ->
-                                DreamlandAppInitializer.getStaysViewModel().prefillFromBooking(booking)
-                                selectedTab = MainTab.Stays
-                            },
+                            onCheckIn = { booking -> staysVm.prefillFromBooking(booking) },
+                            onCheckInAll = { group -> staysVm.prefillGroupBooking(group) },
                         )
                         MainTab.Stays -> StaysScreen(onNavigateToBilling = { stayId ->
                             pendingBillingStayId = stayId
                             selectedTab = MainTab.Billing
                         })
-                        MainTab.Billing -> if (pendingBillingStayId.isNotBlank()) {
-                            StayBillingScreen(
+                        MainTab.Billing -> when {
+                            pendingBillingStayId.isNotBlank() -> StayBillingScreen(
                                 stayId = pendingBillingStayId,
                                 onBack = { pendingBillingStayId = "" },
                             )
-                        } else {
-                            BillingScreen(onOpenStayBilling = { stayId ->
-                                pendingBillingStayId = stayId
-                            })
+                            pendingBillingBillId.isNotBlank() -> StayBillingScreen(
+                                billId = pendingBillingBillId,
+                                onBack = { pendingBillingBillId = "" },
+                            )
+                            else -> BillingScreen(
+                                onOpenStayBilling = { stayId -> pendingBillingStayId = stayId },
+                                onOpenBillById = { billId -> pendingBillingBillId = billId },
+                            )
                         }
                         MainTab.Orders -> OrdersScreen()
                         MainTab.Complaints -> ComplaintsScreen()
@@ -245,6 +275,95 @@ fun DreamlandApp() {
 
         if (globalLoading) {
             DreamlandGlobalLoadingOverlay()
+        }
+
+        // Global WalkInDialog — shown over any tab so check-in from Rooms & Bookings
+        // doesn't force a tab switch
+        if (walkInState.isOpen) WalkInDialog(walkInState, staysVm)
+
+        // Booking notification banner — slides in from top-right, auto-dismisses in 4s
+        AnimatedVisibility(
+            visible = banner != null,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(animationSpec = tween(300)),
+            exit  = slideOutVertically(targetOffsetY = { -it }) + fadeOut(animationSpec = tween(200)),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .zIndex(100f)
+                .padding(top = 16.dp, end = 20.dp),
+        ) {
+            banner?.let { BookingNotificationBanner(it, onDismiss = { banner = null }) }
+        }
+    }
+}
+
+// ── Booking notification banner composable ────────────────────────────────────
+
+@Composable
+private fun BookingNotificationBanner(
+    notification: BookingNotification,
+    onDismiss: () -> Unit,
+) {
+    val dateFmt = java.text.SimpleDateFormat("d MMM", java.util.Locale.getDefault())
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .widthIn(min = 280.dp, max = 380.dp)
+            .border(1.dp, DreamlandGold.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .background(DreamlandGold.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Hotel,
+                    contentDescription = null,
+                    tint = DreamlandGold,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "New Booking",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = DreamlandGold,
+                    letterSpacing = 1.sp,
+                )
+                Text(
+                    notification.guestName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DreamlandOnDark,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (notification.roomCategory.isNotBlank()) {
+                    Text(
+                        "${notification.roomCategory}  ·  ${dateFmt.format(notification.checkIn)} → ${dateFmt.format(notification.checkOut)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = DreamlandMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Dismiss",
+                    tint = DreamlandMuted,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
         }
     }
 }

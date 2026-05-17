@@ -92,7 +92,8 @@ data class CreateOrderDialogState(
     val isLoadingCatalog: Boolean = false,
 ) {
     val categories: List<String>
-        get() = catalogItems.flatMap { it.category.split(",").map(String::trim) }
+        get() = catalogItems.filter { it.isAvailable }
+            .flatMap { it.category.split(",").map(String::trim) }
             .filter { it.isNotBlank() }.distinct()
 
     val filteredStays: List<Stay>
@@ -213,11 +214,11 @@ class OrdersViewModel(
             val stays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
             val foodItems = runCatching { foodItemRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
-            val catalog = foodItems.filter { it.isAvailable }
-                .map { CatalogItem(it.name, it.price, it.category.ifBlank { "Food" }) } +
-                services.filter { it.isActive }
-                .map { CatalogItem(it.name, it.price, "Services") }
-            val firstCategory = catalog.map { it.category }.distinct().firstOrNull() ?: ""
+            val catalog = foodItems
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
+                services
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = "Services", isAvailable = it.isActive) }
+            val firstCategory = catalog.filter { it.isAvailable }.map { it.category }.distinct().firstOrNull() ?: ""
             _createOrderDialog.update { it.copy(
                 activeStays = stays,
                 catalogItems = catalog,
@@ -236,10 +237,10 @@ class OrdersViewModel(
         launchWithGlobalLoading {
             val foodItems = runCatching { foodItemRepo.getByHotel(hotelId) }.getOrElse { return@launchWithGlobalLoading }
             val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { return@launchWithGlobalLoading }
-            val catalog = foodItems.filter { it.isAvailable }
-                .map { CatalogItem(it.name, it.price, it.category.ifBlank { "Food" }) } +
-                services.filter { it.isActive }
-                .map { CatalogItem(it.name, it.price, "Services") }
+            val catalog = foodItems
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
+                services
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = "Services", isAvailable = it.isActive) }
             // Re-filter suggestions for all current items so "Add new" disappears immediately
             // for any item whose name now exists in the refreshed catalog
             _createOrderDialog.update { s ->
@@ -295,8 +296,8 @@ class OrdersViewModel(
                     (itemCategory.isBlank() || item.category.split(",").map(String::trim).any { it == itemCategory })
             }.take(6)
         }
-        // Auto-fill price when typed name exactly matches a catalog item and price is still blank
-        val exactMatch = s.catalogItems.find { it.name.equals(v.trim(), ignoreCase = true) }
+        // Auto-fill price when typed name exactly matches an available catalog item and price is blank
+        val exactMatch = s.catalogItems.find { it.name.equals(v.trim(), ignoreCase = true) && it.isAvailable }
         val currentEntry = s.items[index]
         val autoPrice = if (exactMatch != null && currentEntry.price.isBlank() && exactMatch.price > 0)
             exactMatch.price.toLong().toString() else currentEntry.price

@@ -4,6 +4,7 @@ import com.example.dreamland_reception.data.firebase.FirebaseManager
 import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillingRepository
 import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
+import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintTypeRepository
 import com.example.dreamland_reception.data.repository.FirestoreFoodItemRepository
@@ -15,6 +16,7 @@ import com.example.dreamland_reception.data.repository.FirestoreRoomRepository
 import com.example.dreamland_reception.data.repository.FirestoreServiceRepository
 import com.example.dreamland_reception.data.repository.FirestoreStaffRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.ui.viewmodel.AppViewModel
 import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
 import com.example.dreamland_reception.ui.viewmodel.BillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.BookingsViewModel
@@ -36,6 +38,9 @@ object DreamlandAppInitializer {
 
     @Volatile
     private var reposWired = false
+
+    @Volatile
+    private var appVm: AppViewModel? = null
 
     @Volatile
     private var dashboardVm: DashboardViewModel? = null
@@ -94,13 +99,23 @@ object DreamlandAppInitializer {
                 FirestoreServiceRepository.initialize(fs)
                 FirestoreFoodItemRepository.initialize(fs)
                 FirestoreComplaintTypeRepository.initialize(fs)
+                FirestoreBookingSourceRepository.initialize(fs)
             }.onSuccess {
                 reposWired = true
+                // Start global booking notification listener immediately after Firebase is ready
+                getAppViewModel().startListening(com.example.dreamland_reception.data.AppContext.hotelId)
             }
         }
     }
 
+    fun getAppViewModel(): AppViewModel =
+        appVm ?: synchronized(this) {
+            appVm ?: AppViewModel().also { appVm = it }
+        }
+
     fun refreshAllViewModels() {
+        // Restart notification listener for the (possibly new) hotel
+        getAppViewModel().startListening(com.example.dreamland_reception.data.AppContext.hotelId)
         getDashboardViewModel().load()
         getBookingsViewModel().load()
         getRoomsAndBookingsViewModel().refresh()

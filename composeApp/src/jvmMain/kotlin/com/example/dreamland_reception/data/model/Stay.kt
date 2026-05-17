@@ -2,6 +2,12 @@ package com.example.dreamland_reception.data.model
 
 import java.util.Date
 
+data class GuestRecord(
+    val name: String = "",
+    val phone: String = "",
+    val idProofVerified: Boolean = false,
+)
+
 data class Stay(
     val id: String = "",
     val hotelId: String = "",
@@ -22,7 +28,12 @@ data class Stay(
     val extraBed: Boolean = false,
     val earlyCheckIn: Boolean = false,
     val lateCheckOut: Boolean = false,
+    val earlyCheckInCharge: Double = 0.0,
+    val lateCheckOutCharge: Double = 0.0,
+    val advanceAmount: Double = 0.0,
     val totalBilled: Double = 0.0,
     val specialRequests: String = "",
     val createdAt: Date = Date(),
+    val guests: List<GuestRecord> = emptyList(),
+    val groupStayId: String = "",
 )

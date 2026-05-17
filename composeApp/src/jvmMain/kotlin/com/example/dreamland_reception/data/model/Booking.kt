@@ -30,9 +30,15 @@ data class Booking(
     val lateCheckOutEnabled: Boolean = false,
     val lateCheckOutCharge: Double = 0.0,
     val status: String = "CONFIRMED",       // CONFIRMED | COMPLETED | CANCELLED | NO_SHOW
-    val source: String = "APP",             // APP | WALK_IN
+    val source: String = "APP",             // APP | WALK_IN | from bookingSources.name
+    val sourceId: String = "",              // bookingSources document id (empty for legacy records)
     val totalAmount: Double = 0.0,
     val advancePaidAmount: Double = 0.0,
     val notes: String = "",
+    val groupBookingId: String = "",
     val createdAt: Date = Date(),
+    // No-show audit fields (set only when status = NO_SHOW)
+    val noShowMarkedAt: Date? = null,
+    val noShowRefundStatus: String = "",   // "" | "PENDING" | "REFUNDED" | "FORFEITED" | "PARTIAL"
+    val noShowRefundNote: String = "",
 )

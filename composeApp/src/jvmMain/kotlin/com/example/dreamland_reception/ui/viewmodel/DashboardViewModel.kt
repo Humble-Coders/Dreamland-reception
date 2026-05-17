@@ -3,14 +3,14 @@ package com.example.dreamland_reception.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
-import com.example.dreamland_reception.data.model.BillingInvoice
+import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.Complaint
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
-import com.example.dreamland_reception.data.repository.BillingRepository
+import com.example.dreamland_reception.data.repository.BillRepository
 import com.example.dreamland_reception.data.repository.ComplaintRepository
-import com.example.dreamland_reception.data.repository.FirestoreBillingRepository
+import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
 import com.example.dreamland_reception.data.repository.FirestoreRoomInstanceRepository
@@ -100,7 +100,7 @@ class DashboardViewModel(
     private val orderRepo: OrderRepository = FirestoreOrderRepository,
     private val complaintRepo: ComplaintRepository = FirestoreComplaintRepository,
     private val roomInstanceRepo: RoomInstanceRepository = FirestoreRoomInstanceRepository,
-    private val billingRepo: BillingRepository = FirestoreBillingRepository,
+    private val billRepo: BillRepository = FirestoreBillRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DashboardState())
@@ -111,8 +111,8 @@ class DashboardViewModel(
     private val _orders = MutableStateFlow<List<Order>>(emptyList())
     private val _complaints = MutableStateFlow<List<Complaint>>(emptyList())
     private val _rooms = MutableStateFlow<List<RoomInstance>>(emptyList())
-    private val _allInvoices = MutableStateFlow<List<BillingInvoice>>(emptyList())
-    private val _hotelInvoices = MutableStateFlow<List<BillingInvoice>>(emptyList())
+    private val _allInvoices = MutableStateFlow<List<Bill>>(emptyList())
+    private val _hotelInvoices = MutableStateFlow<List<Bill>>(emptyList())
 
     // Listener job refs (cancelled on date change)
     private var staysJob: Job? = null
@@ -184,7 +184,7 @@ class DashboardViewModel(
         }
         // Billing: no real-time listener available — fetch once on load
         viewModelScope.launch {
-            runCatching { billingRepo.getAll() }
+            runCatching { billRepo.getByHotel(AppContext.hotelId) }
                 .onSuccess { invoices ->
                     _allInvoices.value = invoices
                     recomputeHotelInvoices()
@@ -202,7 +202,7 @@ class DashboardViewModel(
                 _orders.value = orderRepo.getByHotel(hotelId)
                 _complaints.value = complaintRepo.getByHotel(hotelId)
                 _rooms.value = roomInstanceRepo.listenByHotel(hotelId).first()
-                _allInvoices.value = billingRepo.getAll()
+                _allInvoices.value = billRepo.getByHotel(AppContext.hotelId)
             }
             .onSuccess {
                 recomputeHotelInvoices()
@@ -227,7 +227,7 @@ class DashboardViewModel(
         val hotelInvoices = _hotelInvoices.value
         val now = Date()
 
-        val revenueToday = hotelInvoices.filter { isSameDay(it.issuedAt, date) }.sumOf { it.totalAmount }
+        val revenueToday = hotelInvoices.filter { isSameDay(it.createdAt, date) }.sumOf { it.totalAmount }
 
         // OCCUPIED is not a DB status; derive from active stays (rooms with an active stay = occupied)
         val activeRoomIds = stays.filter { it.status == "ACTIVE" }.map { it.roomInstanceId }.toSet()
@@ -294,7 +294,7 @@ class DashboardViewModel(
                 checkInsCount = checkInsCount,
                 checkOutsCount = checkOutsCount,
                 pendingPaymentsCount = pendingInvoices.size,
-                pendingPaymentsAmount = pendingInvoices.sumOf { inv -> inv.totalAmount - inv.amountPaid },
+                pendingPaymentsAmount = pendingInvoices.sumOf { it.pendingAmount },
                 activeComplaintsCount = complaints.count { it.status in listOf("NEW", "ASSIGNED") },
                 roomStatus = roomStatus,
                 alerts = buildAlerts(orders, complaints, rooms, pendingInvoices),
@@ -308,7 +308,7 @@ class DashboardViewModel(
         orders: List<Order>,
         complaints: List<Complaint>,
         rooms: List<RoomInstance>,
-        pendingInvoices: List<BillingInvoice>,
+        pendingInvoices: List<Bill>,
     ): List<DashboardAlert> {
         val alerts = mutableListOf<DashboardAlert>()
 
@@ -342,7 +342,7 @@ class DashboardViewModel(
         }
 
         if (pendingInvoices.isNotEmpty()) {
-            val pendingAmt = pendingInvoices.sumOf { it.totalAmount - it.amountPaid }
+            val pendingAmt = pendingInvoices.sumOf { it.pendingAmount }
             alerts.add(DashboardAlert(
                 id = "pending_bills", type = AlertType.PENDING_BILL,
                 title = "${pendingInvoices.size} Pending Payment${if (pendingInvoices.size > 1) "s" else ""}",
@@ -368,7 +368,7 @@ class DashboardViewModel(
                 Calendar.FRIDAY -> "Fri"; Calendar.SATURDAY -> "Sat"
                 else -> "Sun"
             }
-            val revenue = _hotelInvoices.value.filter { isSameDay(it.issuedAt, date) }.sumOf { it.totalAmount }
+            val revenue = _hotelInvoices.value.filter { isSameDay(it.createdAt, date) }.sumOf { it.totalAmount }
             val noonDate = Calendar.getInstance().apply {
                 time = date; set(Calendar.HOUR_OF_DAY, 12)
             }.time

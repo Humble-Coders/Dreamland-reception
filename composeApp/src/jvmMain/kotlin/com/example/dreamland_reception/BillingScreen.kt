@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,8 +20,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material3.Button
@@ -31,27 +34,39 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.billing.BillSummaryCard
 import com.example.dreamland_reception.billing.PaymentRow
 import com.example.dreamland_reception.billing.StayInfoCard
 import com.example.dreamland_reception.billing.TypeChip
 import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.stays.DateSelectorField
 import com.example.dreamland_reception.ui.viewmodel.BillingScreenState
 import com.example.dreamland_reception.ui.viewmodel.BillingViewModel
+import com.example.dreamland_reception.ui.viewmodel.CreateBillDialogState
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -61,8 +76,17 @@ private val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 fun BillingScreen(
     vm: BillingViewModel = DreamlandAppInitializer.getBillingViewModel(),
     onOpenStayBilling: (stayId: String) -> Unit = {},
+    onOpenBillById: (billId: String) -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+
+    // Navigate to StayBillingScreen when a new standalone bill is created
+    LaunchedEffect(state.createBillDialog.createdBillId) {
+        state.createBillDialog.createdBillId?.let { billId ->
+            vm.clearCreatedBillId()
+            onOpenBillById(billId)
+        }
+    }
 
     Column(Modifier.fillMaxSize().background(DreamlandForest)) {
         // ── Header ─────────────────────────────────────────────────────────────
@@ -75,12 +99,26 @@ fun BillingScreen(
         ) {
             Icon(Icons.Filled.CreditCard, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(28.dp))
             Spacer(Modifier.width(12.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text("PAYMENTS", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
                 Text("Billing", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
             }
+            Button(
+                onClick = vm::openCreateBillDialog,
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("New Bill", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
         }
         HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+        if (state.createBillDialog.show) {
+            CreateBillDialog(state = state.createBillDialog, vm = vm)
+        }
 
         // ── Summary bar ─────────────────────────────────────────────────────────
         if (state.bills.isNotEmpty()) {
@@ -150,7 +188,11 @@ fun BillingScreen(
                             Text("Select a record to view details", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
                         }
                     } else {
-                        BillDetailPanel(bill = selected, onOpenFull = { onOpenStayBilling(it) })
+                        BillDetailPanel(
+                            bill = selected,
+                            onOpenFull = { onOpenStayBilling(it) },
+                            onOpenBillById = onOpenBillById,
+                        )
                     }
                 }
             }
@@ -282,7 +324,8 @@ private fun BillListCard(bill: Bill, selected: Boolean, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text("Room ${bill.roomNumber}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            val roomLabel = if (bill.roomNumbers.size > 1) "${bill.roomNumbers.size} Rooms: ${bill.roomNumbers.joinToString(", ")}" else "Room ${bill.roomNumber}"
+            Text(roomLabel, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(dateFmt.format(bill.createdAt), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
         }
         Column(horizontalAlignment = Alignment.End) {
@@ -302,7 +345,11 @@ private fun BillListCard(bill: Bill, selected: Boolean, onClick: () -> Unit) {
 // ── Bill detail panel (read-only) ─────────────────────────────────────────────
 
 @Composable
-private fun BillDetailPanel(bill: Bill, onOpenFull: (stayId: String) -> Unit) {
+private fun BillDetailPanel(
+    bill: Bill,
+    onOpenFull: (stayId: String) -> Unit,
+    onOpenBillById: (billId: String) -> Unit = {},
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -314,7 +361,8 @@ private fun BillDetailPanel(bill: Bill, onOpenFull: (stayId: String) -> Unit) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text(bill.guestName, style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
-                Text("Room ${bill.roomNumber}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                val detailRoomLabel = if (bill.roomNumbers.size > 1) "${bill.roomNumbers.size} Rooms: ${bill.roomNumbers.joinToString(", ")}" else "Room ${bill.roomNumber}"
+                Text(detailRoomLabel, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
             }
             val statusColor = when (bill.status) {
                 "PAID" -> Color(0xFF4CAF50)
@@ -402,19 +450,151 @@ private fun BillDetailPanel(bill: Bill, onOpenFull: (stayId: String) -> Unit) {
 
         HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
 
-        // Open Full Billing Screen button
-        if (bill.stayId.isNotBlank()) {
-            Button(
-                onClick = { onOpenFull(bill.stayId) },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold),
-            ) {
-                Text("Open Full Billing Screen", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
-            }
+        // Open Full Billing Screen button — works for both stay-linked and standalone bills
+        OutlinedButton(
+            onClick = {
+                if (bill.stayId.isNotBlank()) onOpenFull(bill.stayId)
+                else onOpenBillById(bill.id)
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+        ) {
+            Text("Open Full Billing Screen", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
         }
 
         Spacer(Modifier.height(8.dp))
     }
+}
+
+// ── Create Standalone Bill Dialog ─────────────────────────────────────────────
+
+@Composable
+private fun CreateBillDialog(state: CreateBillDialogState, vm: BillingViewModel) {
+    Dialog(
+        onDismissRequest = vm::dismissCreateBillDialog,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            modifier = androidx.compose.ui.Modifier
+                .fillMaxWidth(0.44f)
+                .heightIn(max = 620.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // Header
+            Row(
+                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("NEW BILL", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                    Text("Create Manual Bill", style = MaterialTheme.typography.headlineMedium, color = DreamlandOnDark)
+                }
+                TextButton(onClick = vm::dismissCreateBillDialog) {
+                    Text("Cancel", color = DreamlandMuted)
+                }
+            }
+
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
+
+            // Guest info
+            Text("GUEST INFORMATION", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 1.5.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                BillingTextField(
+                    modifier = androidx.compose.ui.Modifier.weight(1f),
+                    value = state.guestName,
+                    onValueChange = vm::onCreateBillGuestName,
+                    label = "Guest Name *",
+                )
+                BillingTextField(
+                    modifier = androidx.compose.ui.Modifier.weight(1f),
+                    value = state.guestPhone,
+                    onValueChange = vm::onCreateBillGuestPhone,
+                    label = "Phone Number",
+                    keyboardType = KeyboardType.Phone,
+                )
+            }
+
+            // Room
+            Text("ROOM", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 1.5.sp)
+            BillingTextField(
+                modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+                value = state.roomNumber,
+                onValueChange = vm::onCreateBillRoomNumber,
+                label = "Room Number(s)",
+            )
+
+            // Dates
+            Text("STAY DATES", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 1.5.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DateSelectorField(
+                    modifier = androidx.compose.ui.Modifier.weight(1f),
+                    label = "Check-in",
+                    date = state.checkInDate,
+                    onDateSelected = { vm.onCreateBillCheckIn(it) },
+                    minDate = null,
+                )
+                DateSelectorField(
+                    modifier = androidx.compose.ui.Modifier.weight(1f),
+                    label = "Check-out",
+                    date = state.checkOutDate,
+                    onDateSelected = { vm.onCreateBillCheckOut(it) },
+                    minDate = state.checkInDate,
+                )
+            }
+
+            if (state.error != null) {
+                Text(state.error, color = Color(0xFFEF5350), style = MaterialTheme.typography.bodySmall)
+            }
+
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+            Text(
+                "After creation you can add bill items, payments, tax and discount from the billing screen.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DreamlandMuted,
+            )
+
+            Button(
+                onClick = vm::submitCreateBill,
+                enabled = !state.isSaving,
+                modifier = androidx.compose.ui.Modifier.fillMaxWidth().height(48.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, disabledContainerColor = DreamlandGold.copy(alpha = 0.35f)),
+                shape = RoundedCornerShape(10.dp),
+            ) {
+                if (state.isSaving) {
+                    CircularProgressIndicator(color = Color(0xFF0D1F17), strokeWidth = 2.dp, modifier = androidx.compose.ui.Modifier.size(18.dp))
+                    Spacer(androidx.compose.ui.Modifier.width(8.dp))
+                }
+                Text(if (state.isSaving) "Creating…" else "Create Bill", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun BillingTextField(
+    modifier: androidx.compose.ui.Modifier = androidx.compose.ui.Modifier,
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    keyboardType: KeyboardType = KeyboardType.Text,
+) {
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange,
+        label = { Text(label, color = DreamlandMuted, fontSize = 13.sp) },
+        modifier = modifier, singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+            cursorColor = DreamlandGold,
+        ),
+    )
 }

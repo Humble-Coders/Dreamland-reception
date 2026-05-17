@@ -47,8 +47,16 @@ object FirestoreRoomRepository : RoomRepository {
         col.document(id).update("status", status).get(); Unit
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun com.google.cloud.firestore.DocumentSnapshot.toRoom() = runCatching {
+        @Suppress("UNCHECKED_CAST")
+        val seasonal = (get("seasonalPricing") as? List<Map<String, Any>>)?.map { s ->
+            SeasonalPricing(
+                label = s["label"] as? String ?: "",
+                from  = s["from"]  as? String ?: "",
+                to    = s["to"]    as? String ?: "",
+                price = (s["price"] as? Number)?.toDouble() ?: 0.0,
+            )
+        } ?: emptyList()
         Room(
             id = id,
             hotelId = getString("hotelId") ?: "",
@@ -67,9 +75,12 @@ object FirestoreRoomRepository : RoomRepository {
             // "price" is the Firestore field; fall back to "pricePerNight"
             pricePerNight = getDouble("price") ?: getDouble("pricePerNight") ?: 0.0,
             breakfastPrice = getDouble("breakfastPrice") ?: 0.0,
+            taxPercentage = getDouble("taxPercentage") ?: getDouble("tax") ?: getDouble("gstRate") ?: 0.0,
             status = getString("status") ?: "available",
+            available = getBoolean("available") ?: true,
             amenities = (get("amenities") as? List<String>) ?: emptyList(),
             description = getString("description") ?: "",
+            seasonalPricing = seasonal,
         )
     }.getOrNull()
 

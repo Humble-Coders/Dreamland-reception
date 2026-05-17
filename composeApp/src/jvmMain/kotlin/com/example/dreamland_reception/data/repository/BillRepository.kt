@@ -10,10 +10,12 @@ import java.util.Date
 
 interface BillRepository {
     suspend fun getByStay(stayId: String): Bill?
+    suspend fun getById(billId: String): Bill?
     suspend fun getByHotel(hotelId: String): List<Bill>
     suspend fun createForStay(bill: Bill): String
     suspend fun updateItems(id: String, items: List<BillItem>, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
     suspend fun addTransaction(id: String, tx: PaymentTransaction, totalPaid: Double, pendingAmount: Double, status: String)
+    suspend fun updateTransactions(id: String, transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTaxDiscount(id: String, taxEnabled: Boolean, taxPercentage: Double, discountType: String, discountValue: Double, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
 }
 
@@ -26,7 +28,13 @@ object FirestoreBillRepository : BillRepository {
     private val col get() = FirestoreRepositorySupport.get().collection("bills")
 
     override suspend fun getByStay(stayId: String): Bill? = withContext(Dispatchers.IO) {
+        // Try primary stayId first, then fall back to stayIds array (group bills)
         col.whereEqualTo("stayId", stayId).get().get().documents.firstOrNull()?.toBill()
+            ?: col.whereArrayContains("stayIds", stayId).get().get().documents.firstOrNull()?.toBill()
+    }
+
+    override suspend fun getById(billId: String): Bill? = withContext(Dispatchers.IO) {
+        col.document(billId).get().get().toBill()
     }
 
     override suspend fun getByHotel(hotelId: String): List<Bill> = withContext(Dispatchers.IO) {
@@ -72,6 +80,22 @@ object FirestoreBillRepository : BillRepository {
         )).get(); Unit
     }
 
+    override suspend fun updateTransactions(
+        id: String,
+        transactions: List<PaymentTransaction>,
+        totalPaid: Double,
+        pendingAmount: Double,
+        status: String,
+    ) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "transactions" to transactions.map { it.toMap() },
+            "totalPaid" to totalPaid,
+            "pendingAmount" to pendingAmount,
+            "status" to status,
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
     override suspend fun updateTaxDiscount(
         id: String, taxEnabled: Boolean, taxPercentage: Double,
         discountType: String, discountValue: Double,
@@ -98,12 +122,18 @@ object FirestoreBillRepository : BillRepository {
         val itemsList = get("items") as? List<Map<String, Any>> ?: emptyList()
         @Suppress("UNCHECKED_CAST")
         val txList = get("transactions") as? List<Map<String, Any>> ?: emptyList()
+        @Suppress("UNCHECKED_CAST")
+        val stayIdsList = get("stayIds") as? List<String> ?: emptyList()
+        @Suppress("UNCHECKED_CAST")
+        val roomNumbersList = get("roomNumbers") as? List<String> ?: emptyList()
         Bill(
             id = id,
             hotelId = getString("hotelId") ?: "",
             stayId = getString("stayId") ?: "",
+            stayIds = stayIdsList,
             guestName = getString("guestName") ?: "",
             roomNumber = getString("roomNumber") ?: "",
+            roomNumbers = roomNumbersList,
             checkInDate = getTimestamp("checkInDate")?.toDate(),
             checkOutDate = getTimestamp("checkOutDate")?.toDate(),
             items = itemsList.map { it.toBillItem() },
@@ -147,8 +177,10 @@ object FirestoreBillRepository : BillRepository {
     private fun Bill.toMap() = mapOf(
         "hotelId" to hotelId,
         "stayId" to stayId,
+        "stayIds" to stayIds,
         "guestName" to guestName,
         "roomNumber" to roomNumber,
+        "roomNumbers" to roomNumbers,
         "checkInDate" to checkInDate,
         "checkOutDate" to checkOutDate,
         "items" to items.map { it.toMap() },

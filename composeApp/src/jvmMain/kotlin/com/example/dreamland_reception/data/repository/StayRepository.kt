@@ -1,5 +1,6 @@
 package com.example.dreamland_reception.data.repository
 
+import com.example.dreamland_reception.data.model.GuestRecord
 import com.example.dreamland_reception.data.model.Stay
 import com.google.cloud.firestore.Firestore
 import kotlinx.coroutines.Dispatchers
@@ -15,7 +16,13 @@ interface StayRepository {
     suspend fun getById(id: String): Stay?
     suspend fun add(stay: Stay): String
     suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String
-    suspend fun checkOut(id: String, checkOutTime: Date)
+    suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double = 0.0)
+    suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date)
+    suspend fun changeRoom(
+        stayId: String, oldInstanceId: String,
+        newInstanceId: String, newRoomNumber: String,
+        newCategoryId: String, newCategoryName: String,
+    )
     suspend fun getCompleted(hotelId: String): List<Stay>
     fun listenActive(hotelId: String): Flow<List<Stay>>
 }
@@ -69,10 +76,37 @@ object FirestoreStayRepository : StayRepository {
         stayId
     }
 
-    override suspend fun checkOut(id: String, checkOutTime: Date) = withContext(Dispatchers.IO) {
+    override suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double) = withContext(Dispatchers.IO) {
         col.document(id).update(
-            mapOf("status" to "COMPLETED", "checkOutActual" to checkOutTime),
+            mapOf(
+                "status" to "COMPLETED",
+                "checkOutActual" to checkOutTime,
+                "lateCheckOutCharge" to lateCheckOutCharge,
+            ),
         ).get(); Unit
+    }
+
+    override suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date) = withContext(Dispatchers.IO) {
+        col.document(id).update("expectedCheckOut", newCheckOut).get(); Unit
+    }
+
+    override suspend fun changeRoom(
+        stayId: String, oldInstanceId: String,
+        newInstanceId: String, newRoomNumber: String,
+        newCategoryId: String, newCategoryName: String,
+    ) = withContext(Dispatchers.IO) {
+        val fs = FirestoreRepositorySupport.get()
+        val batch = fs.batch()
+        batch.update(col.document(stayId), mapOf(
+            "roomInstanceId" to newInstanceId,
+            "roomNumber" to newRoomNumber,
+            "roomCategoryId" to newCategoryId,
+            "roomCategoryName" to newCategoryName,
+        ))
+        batch.update(fs.collection("roomInstances").document(oldInstanceId), mapOf("currentStayId" to null))
+        batch.update(fs.collection("roomInstances").document(newInstanceId), mapOf("currentStayId" to stayId))
+        batch.commit().get()
+        Unit
     }
 
     override fun listenActive(hotelId: String): Flow<List<Stay>> = callbackFlow {
@@ -107,9 +141,22 @@ object FirestoreStayRepository : StayRepository {
             extraBed = getBoolean("extraBed") ?: false,
             earlyCheckIn = getBoolean("earlyCheckIn") ?: false,
             lateCheckOut = getBoolean("lateCheckOut") ?: false,
+            earlyCheckInCharge = getDouble("earlyCheckInCharge") ?: 0.0,
+            lateCheckOutCharge = getDouble("lateCheckOutCharge") ?: 0.0,
+            advanceAmount = getDouble("advanceAmount") ?: 0.0,
             totalBilled = getDouble("totalBilled") ?: 0.0,
             specialRequests = getString("specialRequests") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
+            guests = (get("guests") as? List<*>)?.mapNotNull { entry ->
+                (entry as? Map<*, *>)?.let {
+                    GuestRecord(
+                        name = it["name"] as? String ?: "",
+                        phone = it["phone"] as? String ?: "",
+                        idProofVerified = it["idProofVerified"] as? Boolean ?: false,
+                    )
+                }
+            } ?: emptyList(),
+            groupStayId = getString("groupStayId") ?: "",
         )
     }.getOrNull()
 
@@ -132,8 +179,15 @@ object FirestoreStayRepository : StayRepository {
         "extraBed" to extraBed,
         "earlyCheckIn" to earlyCheckIn,
         "lateCheckOut" to lateCheckOut,
+        "earlyCheckInCharge" to earlyCheckInCharge,
+        "lateCheckOutCharge" to lateCheckOutCharge,
+        "advanceAmount" to advanceAmount,
         "totalBilled" to totalBilled,
         "specialRequests" to specialRequests,
         "createdAt" to createdAt,
+        "guests" to guests.map { g ->
+            mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified)
+        },
+        "groupStayId" to groupStayId,
     )
 }

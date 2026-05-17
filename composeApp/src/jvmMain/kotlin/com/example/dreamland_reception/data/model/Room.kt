@@ -21,4 +21,5 @@ data class Room(
     val amenities: List<String> = emptyList(),
     val description: String = "",
     val seasonalPricing: List<SeasonalPricing> = emptyList(),
+    val taxPercentage: Double = 0.0,
 )

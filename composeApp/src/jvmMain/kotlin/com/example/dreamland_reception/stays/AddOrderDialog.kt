@@ -30,6 +30,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -195,6 +197,14 @@ fun AddOrderDialog(
                                 },
                                 addNewLabel = if (isServiceCategory) "Add as new service" else "Add as new food item",
                                 allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
+                                onToggleItemAvailability = { catalogItem ->
+                                    if (catalogItem.category == "Services") {
+                                        settingsVm.toggleService(catalogItem.id, true)
+                                    } else {
+                                        settingsVm.toggleFoodItem(catalogItem.id, true)
+                                    }
+                                    vm.refreshAddOrderCatalog()
+                                },
                             )
 
                             Spacer(Modifier.height(8.dp))
@@ -313,6 +323,7 @@ internal fun AutocompleteItemField(
     // Full catalog (all categories) used for exact-match check so "Add new" disappears as soon
     // as the item is saved, regardless of category filtering on suggestions.
     allCatalogNames: Set<String> = emptySet(),
+    onToggleItemAvailability: ((CatalogItem) -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     var fieldWidthDp by remember { mutableStateOf(0.dp) }
@@ -351,32 +362,68 @@ internal fun AutocompleteItemField(
                 .background(DreamlandForestElevated),
         ) {
             suggestions.forEachIndexed { i, suggestion ->
-                DropdownMenuItem(
-                    text = {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                suggestion.name,
-                                color = DreamlandOnDark,
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.weight(1f),
-                            )
-                            if (suggestion.price > 0) {
-                                Text(
-                                    "₹${suggestion.price.toLong()}",
-                                    color = DreamlandGold,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
+                if (!suggestion.isAvailable) {
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        suggestion.name,
+                                        color = DreamlandMuted,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        "Inactive",
+                                        color = Color(0xFFFFA726),
+                                        fontSize = 10.sp,
+                                    )
+                                }
+                                Switch(
+                                    checked = false,
+                                    onCheckedChange = { onToggleItemAvailability?.invoke(suggestion) },
+                                    colors = SwitchDefaults.colors(
+                                        uncheckedThumbColor = DreamlandMuted,
+                                        uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.3f),
+                                    ),
                                 )
                             }
-                        }
-                    },
-                    onClick = { onSuggestionSelected(suggestion) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                        },
+                        onClick = {},
+                        enabled = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    suggestion.name,
+                                    color = DreamlandOnDark,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (suggestion.price > 0) {
+                                    Text(
+                                        "₹${suggestion.price.toLong()}",
+                                        color = DreamlandGold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                            }
+                        },
+                        onClick = { onSuggestionSelected(suggestion) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 if (i < suggestions.lastIndex || showAddNew) {
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
                 }

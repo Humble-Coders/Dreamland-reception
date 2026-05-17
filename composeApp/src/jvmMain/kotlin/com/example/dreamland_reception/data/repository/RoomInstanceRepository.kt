@@ -13,7 +13,7 @@ interface RoomInstanceRepository {
     suspend fun getAll(): List<RoomInstance>
     suspend fun getById(id: String): RoomInstance?
     suspend fun getAvailable(): List<RoomInstance>
-    suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean = false): List<RoomInstance>
+    suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean = false, includeCleaning: Boolean = false): List<RoomInstance>
     suspend fun updateStatus(id: String, status: String, currentStayId: String? = null)
     fun listenByHotel(hotelId: String): Flow<List<RoomInstance>>
 }
@@ -38,10 +38,10 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
         col.whereEqualTo("status", "AVAILABLE").get().get().documents.mapNotNull { it.toRoomInstance() }
     }
 
-    override suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean): List<RoomInstance> = withContext(Dispatchers.IO) {
+    override suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean, includeCleaning: Boolean): List<RoomInstance> = withContext(Dispatchers.IO) {
         col.whereEqualTo("categoryId", categoryId)
             .get().get().documents.mapNotNull { it.toRoomInstance() }
-            .filter { it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING") }
+            .filter { it.hotelId == hotelId && it.status != "MAINTENANCE" && (includeCleaning || it.status != "CLEANING") }
     }
 
     override suspend fun updateStatus(id: String, status: String, currentStayId: String?) = withContext(Dispatchers.IO) {

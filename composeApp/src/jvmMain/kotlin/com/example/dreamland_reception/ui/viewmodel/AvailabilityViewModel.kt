@@ -14,9 +14,12 @@ import com.example.dreamland_reception.data.repository.HotelRepository
 import com.example.dreamland_reception.data.repository.RoomInstanceRepository
 import com.example.dreamland_reception.data.repository.RoomRepository
 import com.example.dreamland_reception.data.repository.StayRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Calendar
@@ -29,7 +32,6 @@ data class AvailableCategory(
 )
 
 data class AvailabilityUiState(
-    // Dates initialised to midnight; updated to actual hotel times once hotel is fetched
     val checkIn: Date = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -57,9 +59,11 @@ class AvailabilityViewModel(
     private val _uiState = MutableStateFlow(AvailabilityUiState())
     val uiState: StateFlow<AvailabilityUiState> = _uiState.asStateFlow()
 
-    // Hotel times fetched from Firestore on init; used for default check-in/out window
     private var hotelCheckInTime: String = ""
     private var hotelCheckOutTime: String = ""
+
+    // Tracks the 3 parallel real-time listeners; cancelled on new search or screen exit
+    private var searchJob: Job? = null
 
     init {
         loadHotelTimes()
@@ -72,11 +76,10 @@ class AvailabilityViewModel(
                     if (hotel == null) return@onSuccess
                     hotelCheckInTime  = hotel.checkInTime
                     hotelCheckOutTime = hotel.checkOutTime
-                    // Update default dates to reflect actual hotel policy
                     _uiState.update { it.copy(
                         checkIn  = buildDate(hotel.checkInTime,  0),
                         checkOut = buildDate(hotel.checkOutTime, 1),
-                    )}
+                    ) }
                 }
         }
     }
@@ -92,77 +95,98 @@ class AvailabilityViewModel(
         }.time
     }
 
-    fun setCheckIn(d: Date) = _uiState.update { it.copy(checkIn = d, searched = false) }
+    fun setCheckIn(d: Date)  = _uiState.update { it.copy(checkIn  = d, searched = false) }
     fun setCheckOut(d: Date) = _uiState.update { it.copy(checkOut = d, searched = false) }
-    fun setGuests(n: Int) = _uiState.update { it.copy(guests = n.coerceAtLeast(1), searched = false) }
-    fun clearError() = _uiState.update { it.copy(error = null) }
+    fun setGuests(n: Int)    = _uiState.update { it.copy(guests   = n.coerceAtLeast(1), searched = false) }
+    fun clearError()         = _uiState.update { it.copy(error = null) }
 
-    fun reset() = _uiState.update { it.copy(
-        results = emptyList(), searched = false, error = null,
-        checkIn  = buildDate(hotelCheckInTime.ifBlank { "00:00" },  0),
-        checkOut = buildDate(hotelCheckOutTime.ifBlank { "00:00" }, 1),
-        guests = 1,
-    )}
+    fun reset() {
+        searchJob?.cancel()
+        searchJob = null
+        _uiState.update { it.copy(
+            results = emptyList(), searched = false, error = null,
+            checkIn  = buildDate(hotelCheckInTime.ifBlank  { "00:00" }, 0),
+            checkOut = buildDate(hotelCheckOutTime.ifBlank { "00:00" }, 1),
+            guests = 1,
+        ) }
+    }
 
+    /**
+     * Starts (or restarts) 3 parallel real-time Firestore listeners.
+     * Availability recalculates reactively whenever any of the 3 streams emits.
+     * The previous search's listeners are cancelled before the new ones start.
+     */
     fun search() {
         val state = _uiState.value
         if (!state.checkOut.after(state.checkIn)) {
             _uiState.update { it.copy(error = "Check-out must be after check-in") }
             return
         }
-        _uiState.update { it.copy(loading = true, error = null, results = emptyList()) }
-        launchWithGlobalLoading {
-            runCatching {
-                val hotelId = AppContext.hotelId
-                val checkIn  = state.checkIn
-                val checkOut = state.checkOut
-                val guests   = state.guests
 
-                // Step 1: CONFIRMED bookings overlapping the range, grouped by categoryId
-                val confirmedBookings = bookingRepo.getConfirmedByHotel(hotelId)
-                val bookedByCategory = confirmedBookings
-                    .filter { b -> b.checkIn.before(checkOut) && b.checkOut.after(checkIn) }
-                    .groupBy { it.roomCategoryId }
-                    .mapValues { it.value.size }
+        searchJob?.cancel()
+        _uiState.update { it.copy(loading = true, error = null, results = emptyList(), searched = false) }
 
-                // Step 2: ACTIVE stays overlapping the range, grouped by categoryId
-                val activeStays = stayRepo.getActive(hotelId)
-                val occupiedByCategory = activeStays
-                    .filter { s -> s.expectedCheckOut.after(checkIn) }
-                    .groupBy { it.roomCategoryId }
-                    .mapValues { it.value.size }
+        val hotelId = AppContext.hotelId
+        val checkIn  = state.checkIn
+        val checkOut = state.checkOut
+        val guests   = state.guests
 
-                // Step 3+4: count usable room instances per category
-                val allCategories = roomRepo.getByHotel(hotelId)
-                val allInstances  = roomInstanceRepo.getAll().filter { it.hotelId == hotelId }
+        searchJob = viewModelScope.launch {
+            // One-shot: room categories (rarely change, no need for real-time)
+            val allCategories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
 
-                allCategories
-                    .filter { cat ->
-                        val usable = allInstances.count { inst ->
-                            inst.categoryId == cat.id &&
-                            inst.status !in setOf("MAINTENANCE", "CLEANING")
-                        }
-                        val committed = (bookedByCategory[cat.id] ?: 0) + (occupiedByCategory[cat.id] ?: 0)
-                        val available = usable - committed
-                        // Step 5+6: available > 0, capacity >= guests, category not in maintenance
-                        available > 0 && cat.capacity >= guests && cat.status.lowercase() != "maintenance"
-                    }
-                    .map { cat ->
-                        val usable = allInstances.count { inst ->
-                            inst.categoryId == cat.id &&
-                            inst.status !in setOf("MAINTENANCE", "CLEANING")
-                        }
-                        val committed = (bookedByCategory[cat.id] ?: 0) + (occupiedByCategory[cat.id] ?: 0)
+            // 3 parallel real-time listeners
+            combine(
+                // Stream 1: confirmed bookings for this hotel
+                bookingRepo.listenByHotel(hotelId),
+                // Stream 2: active stays for this hotel
+                stayRepo.listenActive(hotelId),
+                // Stream 3: room instances for this hotel
+                roomInstanceRepo.listenByHotel(hotelId),
+            ) { bookings, stays, instances ->
+                // Bookings that have already been checked in have an active stay;
+                // exclude them from the booking count to avoid double-counting.
+                val checkedInBookingIds = stays.map { it.bookingId }.filter { it.isNotBlank() }.toSet()
+
+                // Step 1 — confirmed bookings overlapping [checkIn, checkOut), not yet checked in
+                val bookedByCat = bookings
+                    .filter { it.status == "CONFIRMED" && it.id !in checkedInBookingIds && it.checkIn.before(checkOut) && it.checkOut.after(checkIn) }
+                    .groupingBy { it.roomCategoryId }.eachCount()
+
+                // Step 2 — active stays overlapping (expectedCheckOut > checkIn)
+                val staysByCat = stays
+                    .filter { it.expectedCheckOut.after(checkIn) }
+                    .groupingBy { it.roomCategoryId }.eachCount()
+
+                // Step 4 — usable instances (not MAINTENANCE, not CLEANING)
+                val usable = instances.filter {
+                    it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING")
+                }
+                val usableByCat = usable.groupingBy { it.categoryId }.eachCount()
+
+                // Steps 5-6 — availability per category, filter by guest count + active flag
+                allCategories.mapNotNull { cat ->
+                    val committed = (bookedByCat[cat.id] ?: 0) + (staysByCat[cat.id] ?: 0)
+                    val usableCount = usableByCat[cat.id] ?: 0
+                    val available = usableCount - committed
+                    if (available > 0 && cat.capacity >= guests && cat.available) {
                         AvailableCategory(
                             room = cat,
-                            availableCount = usable - committed,
+                            availableCount = available,
                             pricePerNight = cat.pricePerNight,
                         )
-                    }
-                    .sortedByDescending { it.availableCount }
+                    } else null
+                }.sortedByDescending { it.availableCount }
             }
-            .onSuccess { results -> _uiState.update { it.copy(loading = false, results = results, searched = true) } }
-            .onFailure { e -> _uiState.update { it.copy(loading = false, error = e.message) } }
+            .catch { e -> _uiState.update { it.copy(loading = false, error = e.message) } }
+            .collect { results ->
+                _uiState.update { it.copy(loading = false, results = results, searched = true) }
+            }
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        searchJob?.cancel()
     }
 }

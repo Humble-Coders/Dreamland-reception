@@ -2,7 +2,6 @@ package com.example.dreamland_reception.roomsbookings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +23,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,7 +41,6 @@ import com.example.dreamland_reception.DreamlandForestSurface
 import com.example.dreamland_reception.DreamlandGold
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
-import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsUiState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
@@ -53,6 +52,20 @@ fun AssignRoomDialog(
 ) {
     val booking = state.assignRoomDialogBooking ?: return
 
+    // Filter to the booking's category only; show all if category is unknown
+    val filteredRooms = if (booking.roomCategoryId.isBlank()) {
+        state.availableRoomsForAssign
+    } else {
+        state.availableRoomsForAssign.filter { it.categoryId == booking.roomCategoryId }
+    }
+
+    // Currently assigned room first, then alphabetical by room number
+    val sortedRooms = filteredRooms.sortedWith(compareBy(
+        { it.id != booking.roomInstanceId },   // currently assigned room sorts first
+        { it.roomNumber.length },
+        { it.roomNumber },
+    ))
+
     Dialog(
         onDismissRequest = { vm.closeAssignRoom() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -60,7 +73,7 @@ fun AssignRoomDialog(
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.52f)
-                .heightIn(max = 560.dp)
+                .heightIn(max = 580.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(DreamlandForestSurface)
                 .border(1.dp, DreamlandGold.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
@@ -118,14 +131,15 @@ fun AssignRoomDialog(
                             CircularProgressIndicator(color = DreamlandGold, strokeWidth = 2.dp)
                         }
                     }
-                    state.availableRoomsForAssign.isEmpty() -> {
+                    sortedRooms.isEmpty() -> {
                         Box(
                             modifier = Modifier.fillMaxWidth().height(180.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text(
-                                    text = "No available rooms",
+                                    text = if (booking.roomCategoryName.isBlank()) "No available rooms"
+                                           else "No ${booking.roomCategoryName} rooms available",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = DreamlandMuted,
                                 )
@@ -140,12 +154,14 @@ fun AssignRoomDialog(
                     }
                     else -> {
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(state.availableRoomsForAssign) { room ->
+                            items(sortedRooms) { room ->
+                                val isCurrentlyAssigned = room.id == booking.roomInstanceId
                                 AvailableRoomRow(
                                     room = room,
-                                    booking = booking,
-                                    resolvedCategoryName = state.categoryNames[room.categoryId] ?: room.categoryName,
+                                    categoryName = state.categoryNames[room.categoryId] ?: room.categoryName,
+                                    isCurrentlyAssigned = isCurrentlyAssigned,
                                     onSelect = { vm.confirmAssignRoom(room) },
+                                    onDeselect = { vm.unassignRoom() },
                                 )
                             }
                         }
@@ -159,39 +175,30 @@ fun AssignRoomDialog(
 @Composable
 private fun AvailableRoomRow(
     room: RoomInstance,
-    booking: Booking,
-    resolvedCategoryName: String,
+    categoryName: String,
+    isCurrentlyAssigned: Boolean,
     onSelect: () -> Unit,
+    onDeselect: () -> Unit,
 ) {
-    val isMatchingCategory = booking.roomCategoryName.isNotBlank() &&
-        resolvedCategoryName.contains(booking.roomCategoryName, ignoreCase = true)
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(DreamlandForestElevated)
-            .then(
-                if (isMatchingCategory)
-                    Modifier.border(1.dp, DreamlandGold.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
-                else Modifier,
+            .background(
+                if (isCurrentlyAssigned) DreamlandGold.copy(alpha = 0.08f) else DreamlandForestElevated,
             )
-            .clickable(onClick = onSelect)
+            .border(
+                1.dp,
+                if (isCurrentlyAssigned) DreamlandGold.copy(alpha = 0.55f) else DreamlandGold.copy(alpha = 0.45f),
+                RoundedCornerShape(10.dp),
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // weight(1f) ensures the info section never crowds out the Select button
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // Availability dot
+        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF2ECC71)),
+                modifier = Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF2ECC71)),
             )
             Spacer(Modifier.width(12.dp))
             Column {
@@ -202,27 +209,26 @@ private fun AvailableRoomRow(
                         fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.bodyLarge,
                     )
-                    if (isMatchingCategory) {
-                        Spacer(Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(DreamlandGold.copy(alpha = 0.18f))
-                                .padding(horizontal = 6.dp, vertical = 2.dp),
-                        ) {
-                            Text(
-                                text = "MATCH",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = DreamlandGold,
-                                fontSize = 9.sp,
-                                letterSpacing = 1.sp,
-                            )
-                        }
+                    // MATCH badge — always shown since all listed rooms match the category
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DreamlandGold.copy(alpha = 0.18f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = if (isCurrentlyAssigned) "ASSIGNED" else "MATCH",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = DreamlandGold,
+                            fontSize = 9.sp,
+                            letterSpacing = 1.sp,
+                        )
                     }
                 }
-                if (resolvedCategoryName.isNotBlank()) {
+                if (categoryName.isNotBlank()) {
                     Text(
-                        text = resolvedCategoryName,
+                        text = categoryName,
                         style = MaterialTheme.typography.bodySmall,
                         color = DreamlandMuted,
                     )
@@ -232,18 +238,24 @@ private fun AvailableRoomRow(
 
         Spacer(Modifier.width(12.dp))
 
-        Button(
-            onClick = onSelect,
-            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-        ) {
-            Text(
-                text = "Select",
-                color = Color(0xFF0D1F17),
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 13.sp,
-            )
+        if (isCurrentlyAssigned) {
+            OutlinedButton(
+                onClick = onDeselect,
+                border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.6f)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+            ) {
+                Text("Deselect", color = DreamlandGold, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+        } else {
+            Button(
+                onClick = onSelect,
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+            ) {
+                Text("Select", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
         }
     }
 }
