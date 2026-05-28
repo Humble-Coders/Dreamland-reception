@@ -181,7 +181,7 @@ class StayBillingViewModel(
                 val advance = stay.advanceAmount
                 val subtotal = items.sumOf { it.total }
                 val taxEnabled = taxPercentage > 0
-                val taxAmount = if (taxEnabled) subtotal * taxPercentage / 100.0 else 0.0
+                val taxAmount = if (taxEnabled) Math.round(subtotal * taxPercentage / 100.0).toDouble() else 0.0
                 val total = subtotal + taxAmount
                 val pending = (total - advance).coerceAtLeast(0.0)
                 val status = when {
@@ -490,7 +490,7 @@ class StayBillingViewModel(
 
     private fun recalculate(bill: Bill): Bill {
         val subtotal = bill.items.sumOf { it.total }
-        val taxAmount = if (bill.taxEnabled) subtotal * bill.taxPercentage / 100.0 else 0.0
+        val taxAmount = if (bill.taxEnabled) Math.round(subtotal * bill.taxPercentage / 100.0).toDouble() else 0.0
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0
             else -> bill.discountValue

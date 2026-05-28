@@ -63,6 +63,7 @@ import com.example.dreamland_reception.stays.DreamlandTextField
 import com.example.dreamland_reception.stays.SectionLabel
 import com.example.dreamland_reception.stays.DateSelectorField
 import com.example.dreamland_reception.util.dateFromPicker
+import com.example.dreamland_reception.util.toMidnightUtc
 import com.example.dreamland_reception.ui.viewmodel.RoomCategoryEntry
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsUiState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
@@ -108,7 +109,7 @@ fun AddBookingDialog(
 
     // Compute auto total from selected rooms + nights
     val nightsComputed = if (datesSet)
-        java.time.temporal.ChronoUnit.DAYS.between(checkIn!!.toInstant(), checkOut!!.toInstant()).coerceAtLeast(1)
+        java.time.temporal.ChronoUnit.DAYS.between(checkIn!!.toMidnightUtc().toInstant(), checkOut!!.toMidnightUtc().toInstant()).coerceAtLeast(1)
     else 0L
     val autoTotal = if (nightsComputed > 0) {
         roomCounts.entries.sumOf { (catId, count) ->

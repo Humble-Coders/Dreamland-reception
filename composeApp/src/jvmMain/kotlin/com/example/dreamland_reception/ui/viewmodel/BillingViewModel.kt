@@ -64,7 +64,19 @@ class BillingViewModel(
         launchWithGlobalLoading {
             _state.update { it.copy(isLoading = true, error = null) }
             runCatching { billRepo.getByHotel(AppContext.hotelId) }
-                .onSuccess { bills -> _state.update { it.copy(bills = bills, isLoading = false) } }
+                .onSuccess { bills ->
+                    val normalized = bills.map { bill ->
+                        val roundedPending = Math.round(bill.pendingAmount).toDouble()
+                        val correctedStatus = when {
+                            roundedPending <= 0 && bill.totalAmount > 0 -> "PAID"
+                            bill.totalPaid + bill.advancePayment > 0 -> "PARTIAL"
+                            else -> "PENDING"
+                        }
+                        if (correctedStatus != bill.status) bill.copy(pendingAmount = roundedPending, status = correctedStatus)
+                        else bill
+                    }
+                    _state.update { it.copy(bills = normalized, isLoading = false) }
+                }
                 .onFailure { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
         }
     }

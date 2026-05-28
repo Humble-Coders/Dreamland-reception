@@ -1653,7 +1653,7 @@ class StaysViewModel(
 
         val subtotal = allItems.sumOf { it.total }
         val taxEnabled = taxPercentage > 0
-        val taxAmount = if (taxEnabled) subtotal * taxPercentage / 100.0 else 0.0
+        val taxAmount = if (taxEnabled) Math.round(subtotal * taxPercentage / 100.0).toDouble() else 0.0
         val total = subtotal + taxAmount
         val pending = (total - totalAdvance).coerceAtLeast(0.0)
         val status = when {

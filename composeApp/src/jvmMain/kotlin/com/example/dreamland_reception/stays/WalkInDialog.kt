@@ -78,6 +78,7 @@ import com.example.dreamland_reception.ui.viewmodel.GuestEntry
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import com.example.dreamland_reception.ui.viewmodel.WalkInState
 import com.example.dreamland_reception.util.dateFromPicker
+import com.example.dreamland_reception.util.toMidnightUtc
 import java.text.SimpleDateFormat
 import java.time.temporal.ChronoUnit
 import java.util.Calendar
@@ -813,7 +814,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
     val fmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
     val roomNumbers = state.selectedInstanceDetails.values.mapNotNull { it.roomNumber.ifBlank { null } }
     val nights = if (state.expectedCheckOut != null)
-        ChronoUnit.DAYS.between(state.checkInTime.toInstant(), state.expectedCheckOut.toInstant()).coerceAtLeast(1)
+        ChronoUnit.DAYS.between(state.checkInTime.toMidnightUtc().toInstant(), state.expectedCheckOut.toMidnightUtc().toInstant()).coerceAtLeast(1)
     else 1L
 
     // Summary card
@@ -1402,7 +1403,7 @@ internal fun GuestEntryRow(
 private fun PricingPreviewCard(state: WalkInState) {
     val checkOut = state.expectedCheckOut
     val nights = if (checkOut != null)
-        ChronoUnit.DAYS.between(state.checkInTime.toInstant(), checkOut.toInstant()).coerceAtLeast(1)
+        ChronoUnit.DAYS.between(state.checkInTime.toMidnightUtc().toInstant(), checkOut.toMidnightUtc().toInstant()).coerceAtLeast(1)
     else 1L
 
     val grouped = state.selectedInstanceDetails.values.groupBy { it.categoryId }
@@ -1416,10 +1417,24 @@ private fun PricingPreviewCard(state: WalkInState) {
         val label = if (count > 1) "$catName × $count rooms × $nights nights" else "$catName × $nights night${if (nights != 1L) "s" else ""}"
         label to charge
     }.ifEmpty {
-        val cat = state.categories.find { it.id == state.selectedCategoryId }
-        val price = state.categoryPrices[state.selectedCategoryId] ?: cat?.pricePerNight ?: 0.0
-        roomTotal = price * nights
-        listOf("Room charges" to roomTotal)
+        val countsToUse = state.bookingRoomCountsByCategory.filter { it.value > 0 }
+        if (countsToUse.isNotEmpty()) {
+            countsToUse.map { (catId, count) ->
+                val cat = state.categories.find { it.id == catId }
+                val price = state.categoryPrices[catId] ?: cat?.pricePerNight ?: 0.0
+                val charge = price * nights * count
+                roomTotal += charge
+                val catName = cat?.type ?: catId
+                val label = if (count > 1) "$catName × $count rooms × $nights nights"
+                            else "$catName × $nights night${if (nights != 1L) "s" else ""}"
+                label to charge
+            }
+        } else {
+            val cat = state.categories.find { it.id == state.selectedCategoryId }
+            val price = state.categoryPrices[state.selectedCategoryId] ?: cat?.pricePerNight ?: 0.0
+            roomTotal = price * nights
+            listOf("Room charges" to roomTotal)
+        }
     }
 
     val breakfastCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0

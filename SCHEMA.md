@@ -3,7 +3,7 @@
 > **Source of truth:** `src/schema.js`
 > This file mirrors the schema in human-readable form.
 > When you update `src/schema.js`, update this file too.
-> Last updated: 2026-05-04 (no-show audit fields added)
+> Last updated: 2026-05-26 (full audit: fixed orders/complaints/staff fields, expanded settings, added billing collection, added groupStayId/sourceId)
 
 ---
 
@@ -203,8 +203,9 @@ Represents a **room category/type** (not a specific room number).
 | `description` | string | — | |
 | `capacity` | number | ✅ | Guests included |
 | `maxOccupancy` | number | — | |
-| `price` | number | ✅ | Price per night (₹) |
-| `tax` | number | — | Tax (%) |
+| `price` | number | ✅ | Price per night (₹); read by reception as `pricePerNight` |
+| `tax` | number | — | Tax (%); read by reception as `taxPercentage` |
+| `breakfastPrice` | number | — | Breakfast price per person per night (₹); used by reception billing |
 | `available` | boolean | — | Default: `true` |
 | `bedType` | string | — | From `bedTypes` lookup collection; supports custom values |
 | `noOfBeds` | number | — | |
@@ -320,6 +321,7 @@ Collections used by the Dreamland Reception desktop app. All flat — no subcoll
 | `notes` | string | |
 | `groupBookingId` | string | Optional; links grouped bookings; empty string when not part of a group |
 | `source` | string | Free-form string; references a `name` from the `bookingSources` lookup collection |
+| `sourceId` | string | Document ID from `bookingSources`; empty for legacy records |
 | `createdAt` | timestamp | |
 | `noShowMarkedAt` | timestamp | Set when `status` transitions to `NO_SHOW`; `null` otherwise |
 | `noShowRefundStatus` | string | `""` (no advance) \| `"PENDING"` \| `"REFUNDED"` \| `"FORFEITED"` \| `"PARTIAL"` |
@@ -360,6 +362,7 @@ Active and completed guest stays. Created at check-in (walk-in or from-booking).
 | `specialRequests` | string | Free-form guest requests |
 | `createdAt` | timestamp | |
 | `guests` | object[] | All guests on the stay — see **GuestRecord** below |
+| `groupStayId` | string | Links related stays in a group checkout; empty string when not part of a group |
 
 ### GuestRecord (nested array in `guests`)
 | Field | Type | Notes |
@@ -397,13 +400,16 @@ Room-service, laundry, and other in-stay service orders.
 |-------|------|-------|
 | `hotelId` | string | |
 | `stayId` | string | |
-| `roomInstanceId` | string | |
+| `roomNumber` | string | Denormalized |
+| `guestName` | string | Denormalized |
 | `type` | enum | `ROOM_SERVICE` \| `ORDER` \| `SERVICE` |
-| `items[]` | object[] | Each: `itemId`, `name`, `price` (₹), `quantity` |
+| `items[]` | object[] | Each: `name`, `price` (₹), `quantity` |
 | `totalAmount` | number | ₹ |
 | `status` | enum | `NEW` \| `ASSIGNED` \| `COMPLETED` |
+| `notes` | string | |
+| `orderedAt` | timestamp | |
 | `assignedTo` | string | Staff ID |
-| `createdAt` | timestamp | |
+| `assignedToName` | string | Denormalized staff name |
 
 ---
 
@@ -413,14 +419,15 @@ Room-service, laundry, and other in-stay service orders.
 |-------|------|-------|
 | `hotelId` | string | |
 | `stayId` | string | |
-| `roomInstanceId` | string | |
+| `guestName` | string | Denormalized |
+| `roomNumber` | string | Denormalized |
 | `type` | string | Ref to `complaintTypes` document ID |
 | `description` | string | |
 | `priority` | enum | `HIGH` \| `MEDIUM` \| `LOW` |
 | `status` | enum | `NEW` \| `ASSIGNED` \| `COMPLETED` |
 | `assignedTo` | string | Staff ID |
-| `staffName` | string | Denormalized |
-| `createdAt` | timestamp | |
+| `assignedToName` | string | Denormalized staff name |
+| `reportedAt` | timestamp | |
 | `resolvedAt` | timestamp | `null` until resolved |
 
 ---
@@ -431,11 +438,15 @@ Room-service, laundry, and other in-stay service orders.
 |-------|------|-------|
 | `hotelId` | string | |
 | `name` | string | |
-| `role` | enum | `HOUSEKEEPING` \| `MAINTENANCE` \| `RECEPTION` |
+| `email` | string | |
 | `phone` | string | |
+| `role` | enum | `HOUSEKEEPING` \| `MAINTENANCE` \| `RECEPTION` |
+| `department` | string | |
+| `shift` | string | `morning` \| `afternoon` \| `night` |
+| `joiningDate` | timestamp | |
 | `isActive` | boolean | |
 | `isAvailable` | boolean | Currently on shift and free |
-| `createdAt` | timestamp | |
+| `salary` | number | ₹ |
 
 ---
 
@@ -489,9 +500,11 @@ Detailed billing records for guest stays. One document per stay, created at chec
 | Field | Type | Notes |
 |-------|------|-------|
 | `hotelId` | string | |
-| `stayId` | string | Ref to `stays` |
+| `stayId` | string | Primary stay ref (single and group bills) |
+| `stayIds` | string[] | All stay IDs for group bills; empty for single-stay bills |
 | `guestName` | string | Denormalized |
-| `roomNumber` | string | Denormalized |
+| `roomNumber` | string | `"22"` for single or `"22, 23, 24"` for group (denormalized) |
+| `roomNumbers` | string[] | Individual room numbers for group bills e.g. `["22","23","24"]`; empty for single-room bills |
 | `checkInDate` | timestamp | |
 | `checkOutDate` | timestamp | |
 | `items` | object[] | See `BillItem` below |
@@ -536,16 +549,54 @@ Detailed billing records for guest stays. One document per stay, created at chec
 
 ## Collection: `settings`
 
-Per-hotel operational configuration.
+Per-hotel operational configuration. Document ID = `hotelId`.
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `hotelId` | string | |
-| `taxPercentage` | number | e.g. `18` |
+| `hotelName` | string | Denormalized hotel name |
 | `currency` | string | e.g. `INR` |
+| `contactInfo` | string | Free-form contact details |
+| `taxPercentage` | number | Default tax % e.g. `18` |
+| `taxEnabled` | boolean | Whether tax applies by default |
+| `defaultDiscountType` | string | `PERCENTAGE` \| `FLAT` |
+| `defaultDiscountValue` | number | Default discount amount |
 | `checkInTime` | string | e.g. `12:00` |
 | `checkOutTime` | string | e.g. `11:00` |
 | `autoAssignRoom` | boolean | Auto-assign room on booking confirmation |
+| `breakfastEnabled` | boolean | Whether breakfast option is offered |
+| `breakfastPricePerPerson` | number | ₹ per person per night |
+| `extraBedEnabled` | boolean | |
+| `extraBedPrice` | number | ₹ |
+| `earlyCheckInEnabled` | boolean | |
+| `earlyCheckInCharge` | number | ₹ |
+| `lateCheckOutEnabled` | boolean | |
+| `lateCheckOutCharge` | number | ₹ |
+
+---
+
+## Collection: `billing`
+
+Legacy per-stay invoice records (created by `BillingRepository` / `BillingInvoice` model). Superseded by the `bills` collection for new stays but still queried for older records.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `bookingId` | string | Ref to `bookings` |
+| `stayId` | string | Ref to `stays` |
+| `guestName` | string | Denormalized |
+| `roomNumber` | string | Denormalized |
+| `roomCharges` | number | ₹ |
+| `serviceCharges` | number | ₹ |
+| `earlyCheckInCharge` | number | ₹ |
+| `lateCheckOutCharge` | number | ₹ |
+| `tax` | number | ₹ computed tax |
+| `discount` | number | ₹ |
+| `totalAmount` | number | ₹ |
+| `amountPaid` | number | ₹ |
+| `paymentMethod` | string | `cash` \| `card` \| `upi` \| `bank_transfer` |
+| `status` | enum | `PENDING` \| `PARTIAL` \| `PAID` |
+| `issuedAt` | timestamp | |
+| `paidAt` | timestamp | `null` until fully paid |
 
 ---
 
