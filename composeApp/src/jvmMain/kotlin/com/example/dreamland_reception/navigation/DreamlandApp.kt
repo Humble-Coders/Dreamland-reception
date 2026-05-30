@@ -45,7 +45,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Dashboard
@@ -106,7 +106,7 @@ import com.example.dreamland_reception.DreamlandGoldBright
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
 import com.example.dreamland_reception.OrdersScreen
-import com.example.dreamland_reception.ReportsScreen
+import com.example.dreamland_reception.UsersScreen
 import com.example.dreamland_reception.RoomsAndBookingsScreen
 import com.example.dreamland_reception.SettingsScreen
 import com.example.dreamland_reception.StaffScreen
@@ -127,7 +127,7 @@ internal enum class MainTab(val label: String) {
     Orders("Orders"),
     Complaints("Complaints"),
     Staff("Staff"),
-    Reports("Reports"),
+    Reports("Users"),
     Settings("Settings"),
 }
 
@@ -145,7 +145,7 @@ private val dreamlandNavItems: List<NavItem> = listOf(
     NavItem(MainTab.Orders, Icons.Filled.ShoppingBag, "Orders"),
     NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"),
     NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"),
-    NavItem(MainTab.Reports, Icons.Filled.BarChart, "Reports"),
+    NavItem(MainTab.Reports, Icons.Filled.Person, "Users"),
     NavItem(MainTab.Settings, Icons.Filled.Settings, "Settings"),
 )
 
@@ -266,7 +266,7 @@ fun DreamlandApp() {
                         MainTab.Orders -> OrdersScreen()
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()
-                        MainTab.Reports -> ReportsScreen()
+                        MainTab.Reports -> UsersScreen()
                         MainTab.Settings -> SettingsScreen()
                     }
                 }

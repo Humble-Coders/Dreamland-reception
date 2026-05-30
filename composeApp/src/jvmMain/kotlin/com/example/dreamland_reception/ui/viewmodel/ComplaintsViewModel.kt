@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.awt.Toolkit
+import com.example.dreamland_reception.ui.notification.NotificationManager
 import java.util.Date
 
 // ── Backward-compat sealed state ──────────────────────────────────────────────
@@ -166,7 +166,7 @@ class ComplaintsViewModel(
                     val firstEmit = previousComplaintIds.isEmpty() && _screenState.value.complaints.isEmpty()
                     val newArrivals = currentIds - previousComplaintIds
                     if (!firstEmit && newArrivals.isNotEmpty()) {
-                        runCatching { Toolkit.getDefaultToolkit().beep() }
+                        runCatching { NotificationManager.playSound() }
                     }
                     previousComplaintIds = currentIds
                     _screenState.update { it.copy(complaints = complaints, isLoading = false, error = null) }

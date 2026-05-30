@@ -504,7 +504,6 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
                         selected = state.roomStatusFilter,
                         options = listOf(
                             "" to "All Statuses",
-                            "AVAILABLE"   to "Available",
                             "OCCUPIED"    to "Occupied",
                             "CLEANING"    to "Cleaning",
                             "MAINTENANCE" to "Maintenance",
@@ -534,8 +533,10 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
                         val displayStatus = roomDisplayStatus(room)
                         val guestName = if (displayStatus == "OCCUPIED")
                             state.activeStaysByRoom[room.roomNumber]?.guestName else null
+                        val categoryName = state.categoryNames[room.categoryId] ?: room.categoryName
                         RoomListItem(
                             room = room,
+                            categoryName = categoryName,
                             guestName = guestName,
                             displayStatus = displayStatus,
                             isSelected = room.id == state.selectedRoomId,
@@ -590,6 +591,7 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
 @Composable
 private fun RoomListItem(
     room: RoomInstance,
+    categoryName: String,
     guestName: String?,
     displayStatus: String,
     isSelected: Boolean,
@@ -609,42 +611,52 @@ private fun RoomListItem(
                 RoundedCornerShape(8.dp),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             Modifier
                 .width(3.dp)
-                .height(36.dp)
+                .height(44.dp)
                 .clip(RoundedCornerShape(2.dp))
                 .background(statusColor),
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(
-                "Room ${room.roomNumber}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = DreamlandOnDark,
-                fontWeight = FontWeight.SemiBold,
-            )
-            if (room.categoryName.isNotBlank()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    room.categoryName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = DreamlandMuted,
-                    fontSize = 9.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    "Room ${room.roomNumber}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DreamlandOnDark,
+                    fontWeight = FontWeight.SemiBold,
                 )
+                if (!guestName.isNullOrBlank()) {
+                    Text(
+                        "  ·  $guestName",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            if (!guestName.isNullOrBlank()) {
-                Text(
-                    guestName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = DreamlandMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (categoryName.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(DreamlandGold.copy(alpha = 0.12f))
+                        .padding(horizontal = 5.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        categoryName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = DreamlandGold.copy(alpha = 0.8f),
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (showPill) {

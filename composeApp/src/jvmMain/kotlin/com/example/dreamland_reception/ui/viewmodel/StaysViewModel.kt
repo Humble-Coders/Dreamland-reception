@@ -35,6 +35,7 @@ import com.example.dreamland_reception.data.model.BookingSource
 import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRepository
 import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.DreamlandAppInitializer
+import com.example.dreamland_reception.util.localTodayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -305,6 +306,9 @@ class StaysViewModel(
     // Real-time stays listener (started/stopped by the screen via startListeningStays/stopListeningStays)
     private var staysListenerJob: Job? = null
 
+    // Real-time booking listener active while the walk-in dialog is open
+    private var walkInAvailabilityJob: Job? = null
+
     private val _walkInState = MutableStateFlow(WalkInState())
     val walkInState: StateFlow<WalkInState> = _walkInState.asStateFlow()
 
@@ -381,6 +385,7 @@ class StaysViewModel(
     override fun onCleared() {
         super.onCleared()
         staysListenerJob?.cancel()
+        walkInAvailabilityJob?.cancel()
     }
 
     fun loadAll() {
@@ -462,11 +467,14 @@ class StaysViewModel(
         val hotelId = AppContext.hotelId
         launchWithGlobalLoading {
             val categories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
-            _walkInState.value = WalkInState(isOpen = true, categories = categories)
+            _walkInState.value = WalkInState(isOpen = true, categories = categories, checkInTime = localTodayUtcMidnight())
         }
+        startWalkInAvailabilityListener()
     }
 
     fun closeWalkIn() {
+        walkInAvailabilityJob?.cancel()
+        walkInAvailabilityJob = null
         _walkInState.value = WalkInState()
     }
 
@@ -475,7 +483,18 @@ class StaysViewModel(
         launchWithGlobalLoading {
             val categories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val sources = runCatching { FirestoreBookingSourceRepository.getAll() }.getOrElse { emptyList() }
-            _walkInState.value = WalkInState(isOpen = true, isBookingMode = true, categories = categories, bookingSources = sources)
+            _walkInState.value = WalkInState(isOpen = true, isBookingMode = true, categories = categories, bookingSources = sources, checkInTime = localTodayUtcMidnight())
+        }
+        startWalkInAvailabilityListener()
+    }
+
+    private fun startWalkInAvailabilityListener() {
+        walkInAvailabilityJob?.cancel()
+        walkInAvailabilityJob = viewModelScope.launch {
+            bookingRepo.listenByHotel(AppContext.hotelId)
+                .collect { _ ->
+                    if (_walkInState.value.expectedCheckOut != null) computeAvailability()
+                }
         }
     }
 
@@ -520,6 +539,9 @@ class StaysViewModel(
         if (!ws.expectedCheckOut.after(ws.checkInTime)) {
             _walkInState.update { it.copy(error = "Check-out must be after check-in") }; return
         }
+        if (ws.source.isBlank()) {
+            _walkInState.update { it.copy(error = "Booking source is required") }; return
+        }
         _walkInState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
             runCatching {
@@ -529,7 +551,7 @@ class StaysViewModel(
                 val primaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
                 val advance = ws.advancePayment.toDoubleOrNull() ?: 0.0
                 val nights = java.time.temporal.ChronoUnit.DAYS.between(checkIn.toInstant(), checkOut.toInstant()).coerceAtLeast(1)
-                val sourceName = ws.source.trim().ifBlank { "APP" }
+                val sourceName = ws.source.trim()
                 val sourceId = ws.selectedSourceId
 
                 // Gather all category IDs that have either a count or specific instances
@@ -1222,7 +1244,7 @@ class StaysViewModel(
             val hotelId = AppContext.hotelId
             val categories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val primaryBooking = group[0]
-            val today = Date()
+            val today = localTodayUtcMidnight()
             val allCategoryIds = group.map { it.roomCategoryId }.distinct()
             val confirmed = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
             val activeStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
@@ -1318,7 +1340,7 @@ class StaysViewModel(
         val hotelId = AppContext.hotelId
         _fromBookingState.value = FromBookingState()
         launchWithGlobalLoading {
-            val today = Date()
+            val today = localTodayUtcMidnight()
             val categories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             // Include CLEANING rooms so they appear grayed-out (same as walk-in dialog)
             val allInstances = if (booking.roomCategoryId.isNotBlank()) {

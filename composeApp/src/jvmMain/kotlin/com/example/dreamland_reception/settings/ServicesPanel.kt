@@ -50,6 +50,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.dreamland_reception.DreamlandForestElevated
@@ -163,6 +168,26 @@ private fun ServicesTab(services: List<Service>, dialog: AddServiceDialog, vm: S
 @Composable
 private fun ServiceRow(service: Service, vm: SettingsViewModel) {
     var priceText by remember(service.id) { mutableStateOf(service.price.toBigDecimal().stripTrailingZeros().toPlainString()) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Service", color = DreamlandOnDark) },
+            text = { Text("Delete \"${service.name}\"?", color = DreamlandMuted) },
+            confirmButton = {
+                Button(
+                    onClick = { vm.deleteService(service.id); showDeleteConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+                ) { Text("Delete", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = DreamlandMuted) }
+            },
+            containerColor = DreamlandForestSurface,
+        )
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
@@ -185,12 +210,15 @@ private fun ServiceRow(service: Service, vm: SettingsViewModel) {
                 value = priceText,
                 onValueChange = { v ->
                     priceText = v.filter { it.isDigit() || it == '.' }
-                    v.toDoubleOrNull()?.let { vm.updateServicePrice(service.id, it) }
                 },
                 modifier = Modifier.width(100.dp),
                 prefix = { Text("₹", color = DreamlandMuted) },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    priceText.toDoubleOrNull()?.let { vm.updateServicePrice(service.id, it) }
+                    focusManager.clearFocus()
+                }),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
                 colors = fieldColors(),
             )
@@ -200,7 +228,7 @@ private fun ServiceRow(service: Service, vm: SettingsViewModel) {
                 onCheckedChange = { vm.toggleService(service.id, it) },
                 colors = SwitchDefaults.colors(checkedThumbColor = DreamlandGold, checkedTrackColor = DreamlandGold.copy(alpha = 0.4f)),
             )
-            IconButton(onClick = { vm.deleteService(service.id) }) {
+            IconButton(onClick = { showDeleteConfirm = true }) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = DreamlandMuted.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
         }
@@ -246,6 +274,26 @@ private fun FoodMenuTab(foodItems: List<FoodItem>, dialog: AddFoodDialog, vm: Se
 @Composable
 private fun FoodItemRow(item: FoodItem, vm: SettingsViewModel) {
     var priceText by remember(item.id) { mutableStateOf(item.price.toBigDecimal().stripTrailingZeros().toPlainString()) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Food Item", color = DreamlandOnDark) },
+            text = { Text("Delete \"${item.name}\"?", color = DreamlandMuted) },
+            confirmButton = {
+                Button(
+                    onClick = { vm.deleteFoodItem(item.id); showDeleteConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+                ) { Text("Delete", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = DreamlandMuted) }
+            },
+            containerColor = DreamlandForestSurface,
+        )
+    }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
@@ -266,12 +314,15 @@ private fun FoodItemRow(item: FoodItem, vm: SettingsViewModel) {
                 value = priceText,
                 onValueChange = { v ->
                     priceText = v.filter { it.isDigit() || it == '.' }
-                    v.toDoubleOrNull()?.let { vm.updateFoodPrice(item.id, it) }
                 },
                 modifier = Modifier.width(100.dp),
                 prefix = { Text("₹", color = DreamlandMuted) },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    priceText.toDoubleOrNull()?.let { vm.updateFoodPrice(item.id, it) }
+                    focusManager.clearFocus()
+                }),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
                 colors = fieldColors(),
             )
@@ -281,7 +332,7 @@ private fun FoodItemRow(item: FoodItem, vm: SettingsViewModel) {
                 onCheckedChange = { vm.toggleFoodItem(item.id, it) },
                 colors = SwitchDefaults.colors(checkedThumbColor = DreamlandGold, checkedTrackColor = DreamlandGold.copy(alpha = 0.4f)),
             )
-            IconButton(onClick = { vm.deleteFoodItem(item.id) }) {
+            IconButton(onClick = { showDeleteConfirm = true }) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = DreamlandMuted.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
         }
@@ -326,6 +377,26 @@ private fun IssueTypesTab(complaintTypes: List<ComplaintType>, dialog: AddCompla
 
 @Composable
 private fun ComplaintTypeRow(ct: ComplaintType, vm: SettingsViewModel) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Issue Type", color = DreamlandOnDark) },
+            text = { Text("Delete \"${ct.name}\"?", color = DreamlandMuted) },
+            confirmButton = {
+                Button(
+                    onClick = { vm.deleteComplaintType(ct.id); showDeleteConfirm = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+                ) { Text("Delete", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = DreamlandMuted) }
+            },
+            containerColor = DreamlandForestSurface,
+        )
+    }
+
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
         shape = RoundedCornerShape(10.dp),
@@ -346,7 +417,7 @@ private fun ComplaintTypeRow(ct: ComplaintType, vm: SettingsViewModel) {
                 onCheckedChange = { vm.toggleComplaintType(ct.id, it) },
                 colors = SwitchDefaults.colors(checkedThumbColor = DreamlandGold, checkedTrackColor = DreamlandGold.copy(alpha = 0.4f)),
             )
-            IconButton(onClick = { vm.deleteComplaintType(ct.id) }) {
+            IconButton(onClick = { showDeleteConfirm = true }) {
                 Icon(Icons.Default.Delete, contentDescription = "Delete", tint = DreamlandMuted.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
             }
         }
@@ -386,7 +457,7 @@ internal fun AddServiceDialogUI(state: AddServiceDialog, vm: SettingsViewModel) 
                 onClick = { vm.submitAddService() },
                 enabled = !state.isSaving && state.name.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = Color(0xFF081C15)),
-            ) { Text(if (state.isSaving) "Saving…" else "Add") }
+            ) { Text(if (state.isSaving) "Saving…" else "Add", color = Color(0xFF0D1F17)) }
         },
         dismissButton = {
             TextButton(onClick = { vm.closeAddService() }) { Text("Cancel", color = DreamlandMuted) }
@@ -495,7 +566,7 @@ internal fun AddFoodDialogUI(state: AddFoodDialog, vm: SettingsViewModel) {
                 onClick = { vm.submitAddFood() },
                 enabled = !state.isSaving && state.name.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = Color(0xFF081C15)),
-            ) { Text(if (state.isSaving) "Saving…" else "Add") }
+            ) { Text(if (state.isSaving) "Saving…" else "Add", color = Color(0xFF0D1F17)) }
         },
         dismissButton = {
             TextButton(onClick = { vm.closeAddFood() }) { Text("Cancel", color = DreamlandMuted) }
@@ -524,7 +595,7 @@ internal fun AddComplaintTypeDialogUI(state: AddComplaintTypeDialog, vm: Setting
                 onClick = { vm.submitAddComplaintType() },
                 enabled = !state.isSaving && state.name.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = Color(0xFF081C15)),
-            ) { Text(if (state.isSaving) "Saving…" else "Add") }
+            ) { Text(if (state.isSaving) "Saving…" else "Add", color = Color(0xFF0D1F17)) }
         },
         dismissButton = {
             TextButton(onClick = { vm.closeAddComplaintType() }) { Text("Cancel", color = DreamlandMuted) }

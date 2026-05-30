@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.awt.Toolkit
+import com.example.dreamland_reception.ui.notification.NotificationManager
 import java.util.Date
 
 // ── Backward-compat sealed state (used by DashboardViewModel, refreshAllViewModels) ─────────
@@ -158,7 +158,7 @@ class OrdersViewModel(
                     val firstEmit = previousOrderIds.isEmpty() && _screenState.value.orders.isEmpty()
                     val newArrivals = currentIds - previousOrderIds
                     if (!firstEmit && newArrivals.isNotEmpty()) {
-                        runCatching { Toolkit.getDefaultToolkit().beep() }
+                        runCatching { NotificationManager.playSound() }
                     }
                     previousOrderIds = currentIds
                     _screenState.update { it.copy(orders = orders, isLoading = false, error = null) }

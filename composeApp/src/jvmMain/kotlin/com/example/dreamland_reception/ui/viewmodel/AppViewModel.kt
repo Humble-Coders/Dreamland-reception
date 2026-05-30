@@ -75,13 +75,6 @@ class AppViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             NotificationManager.playSound()
         }
-        // System tray — background thread
-        viewModelScope.launch(Dispatchers.IO) {
-            NotificationManager.showTray(
-                title = "New Booking — ${booking.roomCategoryName}",
-                message = "${booking.guestName}  ·  ${booking.adults} guests",
-            )
-        }
         // In-app banner — emit to UI
         viewModelScope.launch {
             _notificationFlow.emit(

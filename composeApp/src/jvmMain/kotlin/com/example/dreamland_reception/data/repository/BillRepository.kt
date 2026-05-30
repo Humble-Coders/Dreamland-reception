@@ -17,6 +17,7 @@ interface BillRepository {
     suspend fun addTransaction(id: String, tx: PaymentTransaction, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTransactions(id: String, transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTaxDiscount(id: String, taxEnabled: Boolean, taxPercentage: Double, discountType: String, discountValue: Double, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
+    suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
 }
 
 object FirestoreBillRepository : BillRepository {
@@ -173,6 +174,14 @@ object FirestoreBillRepository : BillRepository {
         status = get("status") as? String ?: "PAID",
         createdAt = (get("createdAt") as? com.google.cloud.Timestamp)?.toDate() ?: (get("createdAt") as? Date) ?: Date(),
     )
+
+    override suspend fun updateDates(id: String, checkIn: Date, checkOut: Date) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "checkInDate" to checkIn,
+            "checkOutDate" to checkOut,
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
 
     private fun Bill.toMap() = mapOf(
         "hotelId" to hotelId,

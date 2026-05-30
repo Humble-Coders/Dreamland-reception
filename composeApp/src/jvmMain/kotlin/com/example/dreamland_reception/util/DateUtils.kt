@@ -33,3 +33,11 @@ fun dateFromPicker(year: Int, month: Int, day: Int): Date =
         set(year, month, day, 0, 0, 0)
         set(Calendar.MILLISECOND, 0)
     }.time
+
+// Returns midnight UTC for today's date in the local (system) timezone.
+// Use instead of Date() when you need a date-only value — Date() can map to the
+// previous calendar day in UTC when the local clock is before UTC midnight (e.g. IST before 05:30).
+fun localTodayUtcMidnight(): Date {
+    val cal = Calendar.getInstance()
+    return dateFromPicker(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+}

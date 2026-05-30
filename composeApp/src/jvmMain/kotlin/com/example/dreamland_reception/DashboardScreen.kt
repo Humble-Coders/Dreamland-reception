@@ -84,6 +84,7 @@ import com.example.dreamland_reception.ui.viewmodel.DashboardAlert
 import com.example.dreamland_reception.ui.viewmodel.DashboardState
 import com.example.dreamland_reception.ui.viewmodel.DashboardViewModel
 import com.example.dreamland_reception.ui.viewmodel.DayTrendPoint
+import com.example.dreamland_reception.stays.SimpleDatePickerDialog
 import com.example.dreamland_reception.util.dateFromPicker
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -678,7 +679,11 @@ private fun SidebarDateField(label: String, date: Date, onDateSelected: (Date) -
     }
 
     if (showPicker) {
-        SidebarDatePickerDialog(date, { onDateSelected(it); showPicker = false }, { showPicker = false })
+        SimpleDatePickerDialog(
+            initialDate = date,
+            onDateSelected = { onDateSelected(it); showPicker = false },
+            onDismiss = { showPicker = false },
+        )
     }
 }
 

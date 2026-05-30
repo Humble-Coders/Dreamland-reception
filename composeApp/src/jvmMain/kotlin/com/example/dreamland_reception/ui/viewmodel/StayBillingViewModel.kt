@@ -213,6 +213,15 @@ class StayBillingViewModel(
 
     // ── Add item ──────────────────────────────────────────────────────────────
 
+    fun updateDates(checkIn: java.util.Date, checkOut: java.util.Date) {
+        val bill = _state.value.bill ?: return
+        _state.update { it.copy(bill = bill.copy(checkInDate = checkIn, checkOutDate = checkOut)) }
+        if (bill.id.isBlank()) return
+        launchWithGlobalLoading {
+            runCatching { billRepo.updateDates(bill.id, checkIn, checkOut) }
+        }
+    }
+
     fun openAddItem() = _state.update { it.copy(addItemDialog = AddBillItemDialog(show = true)) }
     fun closeAddItem() = _state.update { it.copy(addItemDialog = AddBillItemDialog()) }
     fun onAddItemType(type: String) = _state.update { it.copy(addItemDialog = it.addItemDialog.copy(type = type, step = 1, name = defaultNameForType(type))) }

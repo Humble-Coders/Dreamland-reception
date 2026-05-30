@@ -16,6 +16,7 @@ import com.example.dreamland_reception.data.repository.FirestoreRoomRepository
 import com.example.dreamland_reception.data.repository.FirestoreServiceRepository
 import com.example.dreamland_reception.data.repository.FirestoreStaffRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.data.repository.FirestoreUserRepository
 import com.example.dreamland_reception.ui.viewmodel.AppViewModel
 import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
 import com.example.dreamland_reception.ui.viewmodel.BillingViewModel
@@ -26,6 +27,7 @@ import com.example.dreamland_reception.ui.viewmodel.DashboardViewModel
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
 import com.example.dreamland_reception.ui.viewmodel.ReportsViewModel
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
+import com.example.dreamland_reception.ui.viewmodel.UsersViewModel
 import com.example.dreamland_reception.ui.viewmodel.SettingsViewModel
 import com.example.dreamland_reception.ui.viewmodel.StaffViewModel
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
@@ -76,6 +78,9 @@ object DreamlandAppInitializer {
     private var settingsVm: SettingsViewModel? = null
 
     @Volatile
+    private var usersVm: UsersViewModel? = null
+
+    @Volatile
     private var availabilityVm: AvailabilityViewModel? = null
 
     /** @param serviceAccountJsonPath Optional path to service account JSON (see `claude.md`). */
@@ -100,6 +105,7 @@ object DreamlandAppInitializer {
                 FirestoreFoodItemRepository.initialize(fs)
                 FirestoreComplaintTypeRepository.initialize(fs)
                 FirestoreBookingSourceRepository.initialize(fs)
+                FirestoreUserRepository.initialize(fs)
             }.onSuccess {
                 reposWired = true
                 // Start global booking notification listener immediately after Firebase is ready
@@ -124,7 +130,7 @@ object DreamlandAppInitializer {
         getOrdersViewModel().loadPending()
         getComplaintsViewModel().loadOpen()
         getStaffViewModel().loadActive()
-        getReportsViewModel().load()
+        getUsersViewModel().loadAll()
         getSettingsViewModel().refresh()
     }
 
@@ -181,6 +187,11 @@ object DreamlandAppInitializer {
     fun getSettingsViewModel(): SettingsViewModel =
         settingsVm ?: synchronized(this) {
             settingsVm ?: SettingsViewModel().also { settingsVm = it }
+        }
+
+    fun getUsersViewModel(): UsersViewModel =
+        usersVm ?: synchronized(this) {
+            usersVm ?: UsersViewModel().also { usersVm = it }
         }
 
     fun getAvailabilityViewModel(): AvailabilityViewModel =

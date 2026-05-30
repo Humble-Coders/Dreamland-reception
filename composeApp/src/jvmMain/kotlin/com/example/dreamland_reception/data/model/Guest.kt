@@ -4,6 +4,7 @@ import java.util.Date
 
 data class Guest(
     val id: String = "",
+    val hotelId: String = "",
     val name: String = "",
     val email: String = "",
     val phone: String = "",

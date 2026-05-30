@@ -138,7 +138,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(16.dp))
-                WizardStepIndicator(currentStep)
+                WizardStepIndicator(currentStep, onStepClick = { currentStep = it })
                 Spacer(Modifier.height(16.dp))
             }
 
@@ -273,7 +273,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 // ── Step indicator ────────────────────────────────────────────────────────────
 
 @Composable
-private fun WizardStepIndicator(currentStep: Int) {
+private fun WizardStepIndicator(currentStep: Int, onStepClick: (Int) -> Unit) {
     val steps = listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm")
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -296,7 +296,8 @@ private fun WizardStepIndicator(currentStep: Int) {
                                 isDone -> DreamlandForestElevated
                                 else -> DreamlandForestElevated.copy(alpha = 0.5f)
                             }
-                        ),
+                        )
+                        .then(if (isDone) Modifier.clickable { onStepClick(num) } else Modifier),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -1630,7 +1631,7 @@ internal fun DateSelectorField(
 }
 
 @Composable
-private fun SimpleDatePickerDialog(
+fun SimpleDatePickerDialog(
     initialDate: Date, onDateSelected: (Date) -> Unit, onDismiss: () -> Unit, minDate: Date? = null,
 ) {
     val minCal = minDate?.let {

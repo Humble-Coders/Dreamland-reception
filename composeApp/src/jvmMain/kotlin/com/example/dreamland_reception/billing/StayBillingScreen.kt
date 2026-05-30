@@ -81,10 +81,13 @@ import com.example.dreamland_reception.ui.viewmodel.EditBillItemDialog
 import com.example.dreamland_reception.ui.viewmodel.EditPaymentDialog
 import com.example.dreamland_reception.ui.viewmodel.StayBillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.TaxDiscountDialog
+import com.example.dreamland_reception.stays.SimpleDatePickerDialog
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+private fun Double.fmtAmt(): String = if (this % 1.0 == 0.0) "%.0f".format(this) else "%.2f".format(this)
 
 private val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 private val timeFmt = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
@@ -178,7 +181,7 @@ fun StayBillingScreen(
                         }
 
                         // Stay info card
-                        StayInfoCard(bill)
+                        StayInfoCard(bill, onCheckInChanged = if (!isPreview) { { vm.updateDates(it, bill.checkOutDate ?: it) } } else null, onCheckOutChanged = if (!isPreview) { { vm.updateDates(bill.checkInDate ?: it, it) } } else null)
 
                         // Items section
                         Row(
@@ -190,7 +193,7 @@ fun StayBillingScreen(
                             if (!isPreview) {
                                 Button(
                                     onClick = { vm.openAddItem() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = Color(0xFF0D1F17)),
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.height(36.dp),
                                 ) {
@@ -251,7 +254,7 @@ fun StayBillingScreen(
                             if (!isPreview && bill.pendingAmount > 0) {
                                 Button(
                                     onClick = { vm.openAddPayment() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50), contentColor = Color(0xFF0D1F17)),
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.height(34.dp),
                                 ) {
@@ -426,21 +429,59 @@ fun StayBillingScreen(
 // ── Sub-composables ───────────────────────────────────────────────────────────
 
 @Composable
-internal fun StayInfoCard(bill: Bill) {
+internal fun StayInfoCard(
+    bill: Bill,
+    onCheckInChanged: ((Date) -> Unit)? = null,
+    onCheckOutChanged: ((Date) -> Unit)? = null,
+) {
+    var showCheckInPicker by remember { mutableStateOf(false) }
+    var showCheckOutPicker by remember { mutableStateOf(false) }
+
+    val nights = if (bill.checkInDate != null && bill.checkOutDate != null) {
+        (TimeUnit.MILLISECONDS.toDays(bill.checkOutDate.time - bill.checkInDate.time)).coerceAtLeast(1)
+    } else null
+
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
         shape = RoundedCornerShape(12.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            val nights = if (bill.checkInDate != null && bill.checkOutDate != null) {
-                val diff = bill.checkOutDate.time - bill.checkInDate.time
-                (TimeUnit.MILLISECONDS.toDays(diff)).coerceAtLeast(1)
-            } else null
-
-            InfoCell("Check-in", bill.checkInDate?.let { dateFmt.format(it) } ?: "-")
-            InfoCell("Check-out", bill.checkOutDate?.let { dateFmt.format(it) } ?: "-")
+            EditableInfoCell(
+                label = "Check-in",
+                value = bill.checkInDate?.let { dateFmt.format(it) } ?: "-",
+                editable = onCheckInChanged != null,
+                onClick = { showCheckInPicker = true },
+            )
+            EditableInfoCell(
+                label = "Check-out",
+                value = bill.checkOutDate?.let { dateFmt.format(it) } ?: "-",
+                editable = onCheckOutChanged != null,
+                onClick = { showCheckOutPicker = true },
+            )
             if (nights != null) InfoCell("Duration", "$nights night${if (nights != 1L) "s" else ""}")
         }
+    }
+
+    if (showCheckInPicker) {
+        SimpleDatePickerDialog(
+            initialDate = bill.checkInDate ?: Date(),
+            onDateSelected = { date ->
+                onCheckInChanged?.invoke(date)
+                showCheckInPicker = false
+            },
+            onDismiss = { showCheckInPicker = false },
+        )
+    }
+    if (showCheckOutPicker) {
+        SimpleDatePickerDialog(
+            initialDate = bill.checkOutDate ?: Date(),
+            onDateSelected = { date ->
+                onCheckOutChanged?.invoke(date)
+                showCheckOutPicker = false
+            },
+            onDismiss = { showCheckOutPicker = false },
+            minDate = bill.checkInDate,
+        )
     }
 }
 
@@ -449,6 +490,20 @@ private fun InfoCell(label: String, value: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
         Text(value, style = MaterialTheme.typography.bodyMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun EditableInfoCell(label: String, value: String, editable: Boolean, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = if (editable) Modifier.clickable(onClick = onClick) else Modifier,
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = if (editable) DreamlandGold else DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+            if (editable) Icon(Icons.Filled.Edit, contentDescription = "Edit", tint = DreamlandGold.copy(alpha = 0.6f), modifier = Modifier.size(12.dp))
+        }
     }
 }
 
@@ -467,9 +522,9 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onDelete: () 
             Column(Modifier.weight(1f)) {
                 Text(item.name, color = DreamlandOnDark, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
                 if (item.notes.isNotBlank()) Text(item.notes, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                Text("${item.quantity} × ₹${item.unitPrice.toLong()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                Text("${item.quantity} × ₹${item.unitPrice.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
             }
-            Text("₹${item.total.toLong()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+            Text("₹${item.total.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
             if (!readOnly) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "Edit item", tint = DreamlandGold.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
@@ -552,7 +607,7 @@ internal fun BillSummaryCard(bill: Bill) {
             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.25f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text("₹${bill.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text("₹${bill.totalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             }
             if (bill.advancePayment > 0) SummaryRow("Advance paid", bill.advancePayment)
             val totalReceived = bill.totalPaid + bill.advancePayment
@@ -569,7 +624,7 @@ internal fun BillSummaryCard(bill: Bill) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "⚠ Payments exceed total by ₹${(totalReceived - bill.totalAmount).toLong()}",
+                        "⚠ Payments exceed total by ₹${(totalReceived - bill.totalAmount).fmtAmt()}",
                         color = Color(0xFFEF5350),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
@@ -579,7 +634,7 @@ internal fun BillSummaryCard(bill: Bill) {
             if (bill.pendingAmount > 0) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Balance Due", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
-                    Text("₹${bill.pendingAmount.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("₹${bill.pendingAmount.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             } else if (bill.totalAmount > 0) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -596,7 +651,7 @@ private fun SummaryRow(label: String, amount: Double) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
         Text(
-            text = if (amount < 0) "-₹${(-amount).toLong()}" else "₹${amount.toLong()}",
+            text = if (amount < 0) "-₹${(-amount).fmtAmt()}" else "₹${amount.fmtAmt()}",
             color = if (amount < 0) Color(0xFF4CAF50) else DreamlandOnDark,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = FontWeight.Medium,
@@ -625,7 +680,7 @@ internal fun PaymentRow(
                 if (date != null) Text(timeFmt.format(date), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
                 else if (isAdvance) Text("At check-in", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
             }
-            Text("₹${amount.toLong()}", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("₹${amount.fmtAmt()}", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold, fontSize = 15.sp)
             if (onEdit != null) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "Edit payment", tint = DreamlandMuted, modifier = Modifier.size(16.dp))
@@ -1055,25 +1110,25 @@ private fun ConfirmPaymentDialogUI(
                                 .padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            ConfirmRow("Subtotal", "₹${bill.subtotal.toLong()}", DreamlandOnDark)
+                            ConfirmRow("Subtotal", "₹${bill.subtotal.fmtAmt()}", DreamlandOnDark)
                             if (bill.taxEnabled && bill.taxAmount > 0)
-                                ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${bill.taxAmount.toLong()}", DreamlandOnDark)
+                                ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${bill.taxAmount.fmtAmt()}", DreamlandOnDark)
                             if (bill.discountAmount > 0)
-                                ConfirmRow("Discount", "-₹${bill.discountAmount.toLong()}", Color(0xFF4CAF50))
+                                ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Text("₹${bill.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                Text("₹${bill.totalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
                             if (bill.advancePayment > 0)
-                                ConfirmRow("Advance paid", "₹${bill.advancePayment.toLong()}", Color(0xFF4CAF50))
+                                ConfirmRow("Advance paid", "₹${bill.advancePayment.fmtAmt()}", Color(0xFF4CAF50))
                             if (bill.totalPaid > 0)
-                                ConfirmRow("Payments received", "₹${bill.totalPaid.toLong()}", Color(0xFF4CAF50))
+                                ConfirmRow("Payments received", "₹${bill.totalPaid.fmtAmt()}", Color(0xFF4CAF50))
                             if (bill.pendingAmount > 0) {
                                 HorizontalDivider(color = Color(0xFFEF5350).copy(alpha = 0.3f))
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("Balance Due", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                                    Text("₹${bill.pendingAmount.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text("₹${bill.pendingAmount.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 }
                             }
                         }
