@@ -1,0 +1,48 @@
+name: Bug Report
+description: Report a bug found during testing
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Please fill out the fields below. The more precise the description and the recording, the faster this gets fixed.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How badly does this affect usage?
+      options:
+        - Critical (crash, data loss, core flow blocked)
+        - Major (feature broken, but there's a workaround)
+        - Minor (works but behaves wrong)
+        - Polish (cosmetic / visual only)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What's the bug?
+      placeholder: Describe what's wrong.
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device & OS
+      description: Phone model and OS version
+      placeholder: "Pixel 7, Android 14  /  iPhone 14, iOS 17"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Recording / screenshot
+      description: Drag and drop your screen recording or screenshot here.
+      placeholder: Drop files here, or paste an image.
+    validations:
+      required: false
