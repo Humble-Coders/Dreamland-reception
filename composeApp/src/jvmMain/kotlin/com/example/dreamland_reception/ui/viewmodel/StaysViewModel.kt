@@ -36,6 +36,7 @@ import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRep
 import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.util.localTodayUtcMidnight
+import com.example.dreamland_reception.util.toLocalDayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.temporal.ChronoUnit
@@ -98,6 +101,8 @@ data class GroupChangeConfirmDialogState(
     val deviatingCategoryId: String = "",
     val availabilityMap: Map<String, Int> = emptyMap(),
     val categoryNames: Map<String, String> = emptyMap(), // categoryId → display name
+    // When set, overrides state.categoryRequirements for the "Original booking:" line
+    val originalRequirements: List<CategoryRequirement> = emptyList(),
 )
 
 data class CheckInMismatchLine(val categoryName: String, val count: Int)
@@ -163,6 +168,9 @@ data class WalkInState(
     val instanceToBookingId: Map<String, String> = emptyMap(),
     val groupChangeConfirmDialog: GroupChangeConfirmDialogState? = null,
     val checkInMismatchConfirm: CheckInMismatchConfirmState? = null,
+    // Cached from last computeAvailability() run — used by pre-flight check at submit time (no extra reads)
+    val cachedConfirmedBookings: List<Booking> = emptyList(),
+    val cachedActiveStays: List<com.example.dreamland_reception.data.model.Stay> = emptyList(),
 )
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
@@ -268,6 +276,7 @@ data class ChangeRoomState(
     val selectableRooms: List<RoomInstance> = emptyList(),
     val cleaningRooms: List<RoomInstance> = emptyList(),
     val selectedInstance: RoomInstance? = null,
+    val categoryNames: Map<String, String> = emptyMap(),
     val isLoading: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
@@ -490,11 +499,14 @@ class StaysViewModel(
 
     private fun startWalkInAvailabilityListener() {
         walkInAvailabilityJob?.cancel()
+        val hotelId = AppContext.hotelId
         walkInAvailabilityJob = viewModelScope.launch {
-            bookingRepo.listenByHotel(AppContext.hotelId)
-                .collect { _ ->
-                    if (_walkInState.value.expectedCheckOut != null) computeAvailability()
-                }
+            merge(
+                bookingRepo.listenByHotel(hotelId).map { },
+                stayRepo.listenActive(hotelId).map { },
+            ).collect {
+                if (_walkInState.value.expectedCheckOut != null) computeAvailability()
+            }
         }
     }
 
@@ -745,8 +757,9 @@ class StaysViewModel(
                 categoryAvailability = availabilityMap,
                 categoryPrices = pricesMap,
                 isLoadingAvailability = false,
-                // Update cap for current category but never clear the selection
                 availableCount = availabilityMap[s.selectedCategoryId] ?: s.availableCount,
+                cachedConfirmedBookings = confirmedBookings,
+                cachedActiveStays = activeStays,
             ) }
 
             if (ws.selectedCategoryId.isNotBlank()) {
@@ -835,15 +848,27 @@ class StaysViewModel(
                 val prunedDetails = s.selectedInstanceDetails.filter { (id, _) -> id in prunedIds }
                 val prunedRoomGuestMap = s.roomGuestMap.filter { (id, _) -> id in prunedIds }
 
+                // Prune selections that exceed the available cap due to new unassigned bookings.
+                // These reduce category capacity without blocking any specific room instance,
+                // so prunedIds alone won't remove them.
+                val selectedInThisCat = prunedIds.filter { id -> id in categoryInstanceIds }
+                val overflow = selectedInThisCat.size - cap
+                val finalPrunedIds = if (overflow > 0) {
+                    val toRemove = selectedInThisCat.takeLast(overflow).toSet()
+                    prunedIds - toRemove
+                } else prunedIds
+                val finalPrunedDetails = prunedDetails.filter { (id, _) -> id in finalPrunedIds }
+                val finalPrunedRoomGuestMap = prunedRoomGuestMap.filter { (id, _) -> id in finalPrunedIds }
+
                 s.copy(
                     selectableInstances = selectable,
                     cleaningInstances = cleaning,
                     dueOutInstances = dueOut,
                     availableInstances = selectable,
                     availableCount = cap,
-                    selectedInstanceIds = prunedIds,
-                    selectedInstanceDetails = prunedDetails,
-                    roomGuestMap = prunedRoomGuestMap,
+                    selectedInstanceIds = finalPrunedIds,
+                    selectedInstanceDetails = finalPrunedDetails,
+                    roomGuestMap = finalPrunedRoomGuestMap,
                 )
             }
         }
@@ -853,6 +878,38 @@ class StaysViewModel(
         val ws = _walkInState.value
         val ids = ws.selectedInstanceIds
         val isRemoving = instanceId in ids
+
+        // In single-booking check-in, detect deviation (extra rooms or different category)
+        if (!ws.isGroupCheckIn && ws.sourceBooking != null && !isRemoving) {
+            val inst = (ws.selectableInstances + ws.cleaningInstances + ws.selectedInstanceDetails.values).find { it.id == instanceId }
+            val instCatId = inst?.categoryId ?: ws.selectedCategoryId
+            val bookedCatId = ws.sourceBooking.roomCategoryId
+            val categoryMismatch = instCatId != bookedCatId
+            val extraRoom = ids.isNotEmpty()  // already have at least 1 room; adding another
+            if (categoryMismatch || extraRoom) {
+                val catIds = listOfNotNull(bookedCatId, instCatId).distinct()
+                val availabilityMap = catIds.associateWith { catId ->
+                    ws.categoryAvailability[catId] ?: if (catId == ws.selectedCategoryId) ws.availableCount else 0
+                }
+                val categoryNames = catIds.associateWith { catId ->
+                    ws.categories.find { it.id == catId }?.type ?: catId
+                }
+                val bookedCatName = ws.sourceBooking.roomCategoryName.ifBlank {
+                    ws.categories.find { it.id == bookedCatId }?.type ?: bookedCatId
+                }
+                _walkInState.update { it.copy(
+                    groupChangeConfirmDialog = GroupChangeConfirmDialogState(
+                        pendingInstanceId = instanceId,
+                        pendingAction = "ADD",
+                        deviatingCategoryId = instCatId,
+                        availabilityMap = availabilityMap,
+                        categoryNames = categoryNames,
+                        originalRequirements = listOf(CategoryRequirement(bookedCatId, bookedCatName, 1)),
+                    ),
+                ) }
+                return
+            }
+        }
 
         // In group check-in mode, detect deviation before applying the toggle
         if (ws.isGroupCheckIn) {
@@ -1074,8 +1131,82 @@ class StaysViewModel(
         _walkInState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
             runCatching {
+                // ── Pre-flight availability re-check ──────────────────────────────
+                // Use data already cached by the last computeAvailability() run (triggered
+                // by the real-time listener) — zero extra Firestore reads.
+                val hotelId = AppContext.hotelId
+                val checkInNorm  = ws.checkInTime.toMidnightUtc()
+                val checkOutNorm = ws.expectedCheckOut!!.toMidnightUtc()
+                val nowPreflight = Date()
+                val freshBookings = ws.cachedConfirmedBookings
+                val freshStays    = ws.cachedActiveStays
+                val sourceIds = buildSet<String> {
+                    ws.sourceBooking?.id?.let { add(it) }
+                    ws.groupBookings.forEach { add(it.id) }
+                }
+                val freshBookedRoomIds = freshBookings
+                    .filter { it.id !in sourceIds && it.roomInstanceId.isNotBlank()
+                        && it.checkIn.before(checkOutNorm) && it.checkOut.after(checkInNorm) }
+                    .map { it.roomInstanceId }.toSet()
+                val freshOccupiedRoomIds = freshStays
+                    .filter { it.checkInActual.before(checkOutNorm)
+                        && maxOf(it.expectedCheckOut, nowPreflight).after(checkInNorm) }
+                    .map { it.roomInstanceId }.toSet()
+                val conflicted = ws.selectedInstanceIds.filter { id ->
+                    id in freshBookedRoomIds || id in freshOccupiedRoomIds
+                }
+                if (conflicted.isNotEmpty()) {
+                    val nums = conflicted.mapNotNull { ws.selectedInstanceDetails[it]?.roomNumber }.joinToString(", ")
+                    // Refresh availability so the UI reflects the new state
+                    computeAvailability()
+                    throw Exception("Room${if (conflicted.size > 1) "s" else ""} $nums ${if (conflicted.size > 1) "are" else "is"} no longer available — a new booking arrived while you were checking in. Go back to Step 1 and reselect.")
+                }
+
+                // ── Category-level pre-flight ─────────────────────────────────────
+                // Instance-level check above only catches bookings with an explicit roomInstanceId.
+                // Unassigned bookings still consume category capacity — check that here with fresh reads.
+                val selectedByCat = ws.selectedInstanceDetails.values.groupBy { it.categoryId }
+                if (selectedByCat.isNotEmpty()) {
+                    val freshCatBookings = runCatching {
+                        bookingRepo.getConfirmedByHotel(hotelId)
+                    }.getOrElse { freshBookings }
+                    val freshCatStays = runCatching {
+                        stayRepo.getActive(hotelId)
+                    }.getOrElse { freshStays }
+                    val freshAllInstances = runCatching {
+                        instanceRepo.getAll()
+                    }.getOrElse { emptyList() }
+                    val checkedInBkIds = freshCatStays.map { it.bookingId }.filter { it.isNotBlank() }.toSet()
+                    for ((catId, selectedInsts) in selectedByCat) {
+                        val usable = freshAllInstances.count {
+                            it.hotelId == hotelId && it.categoryId == catId &&
+                            it.status !in setOf("MAINTENANCE", "CLEANING")
+                        }
+                        val committedBookings = freshCatBookings.count { b ->
+                            b.id !in sourceIds && b.id !in checkedInBkIds &&
+                            b.roomCategoryId == catId &&
+                            b.checkIn.before(checkOutNorm) && b.checkOut.after(checkInNorm)
+                        }
+                        val committedStays = freshCatStays.count { s ->
+                            s.roomCategoryId == catId &&
+                            s.checkInActual.before(checkOutNorm) &&
+                            maxOf(s.expectedCheckOut, nowPreflight).after(checkInNorm)
+                        }
+                        val available = usable - committedBookings - committedStays
+                        if (selectedInsts.size > available) {
+                            computeAvailability()
+                            val catName = selectedInsts.first().categoryName.ifBlank { catId }
+                            throw Exception(
+                                "Not enough $catName rooms available — availability changed while " +
+                                "you were checking in. Go back to Step 1 and reselect."
+                            )
+                        }
+                    }
+                }
+                // ── End pre-flight ────────────────────────────────────────────────
+
                 // Normalize dates to midnight UTC — stored as date-only, not wall-clock time
-                val now = ws.checkInTime.toMidnightUtc()
+                val now = checkInNorm
                 val primary = ws.guestEntries.firstOrNull() ?: GuestEntry()
                 val primaryName = primary.name.trim().ifBlank { ws.guestName.trim() }
                 val primaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
@@ -1101,7 +1232,7 @@ class StaysViewModel(
                     val roomInstance = instanceRepo.getById(instanceId)
                         ?: throw Exception("Room instance $instanceId not found")
                     val cat = ws.categories.find { it.id == roomInstance.categoryId }
-                    val checkOutNormalized = ws.expectedCheckOut.toMidnightUtc()
+                    val checkOutNormalized = checkOutNorm
                     val nights = ChronoUnit.DAYS.between(now.toInstant(), checkOutNormalized.toInstant()).coerceAtLeast(1)
                     // Use effective (seasonal) price if available
                     val pricePerNight = ws.categoryPrices[roomInstance.categoryId]
@@ -1174,25 +1305,10 @@ class StaysViewModel(
                     } else if (roomIndex == 0) {
                         val srcBooking = ws.sourceBooking
                         if (srcBooking != null) {
-                            bookingRepo.update(srcBooking.copy(roomInstanceId = instanceId, roomNumber = roomInstance.roomNumber))
-                        } else {
-                            bookingRepo.add(Booking(
-                                hotelId = AppContext.hotelId,
-                                guestName = primaryName,
-                                guestPhone = primaryPhone,
-                                roomCategoryId = roomInstance.categoryId,
-                                roomCategoryName = roomInstance.categoryName,
+                            bookingRepo.update(srcBooking.copy(
                                 roomInstanceId = instanceId,
                                 roomNumber = roomInstance.roomNumber,
-                                checkIn = now,
-                                checkOut = checkOutNormalized,
-                                adults = ws.adults,
-                                children = ws.children,
                                 status = "COMPLETED",
-                                source = "WALK_IN",
-                                totalAmount = total * roomCount,
-                                advancePaidAmount = advance,
-                                createdAt = now,
                             ))
                         }
                     }
@@ -1261,7 +1377,7 @@ class StaysViewModel(
                 val all = runCatching {
                     instanceRepo.getByCategory(catId, hotelId, includeAssigned = true, includeCleaning = true)
                 }.getOrElse { emptyList() }
-                val noConflict = dateConflictFilter(all, confirmedExSiblings, today, primaryBooking.checkOut)
+                val noConflict = dateConflictFilter(all, confirmedExSiblings, today, primaryBooking.checkOut.toLocalDayUtcMidnight())
                 val candidates = noConflict.filter { inst ->
                     activeStays.none { s ->
                         s.roomInstanceId == inst.id &&
@@ -1320,7 +1436,7 @@ class StaysViewModel(
                 selectedCategoryId = primaryCatId,
                 selectedCategoryName = primaryBooking.roomCategoryName,
                 selectedCategoryBreakfastPrice = categories.find { it.id == primaryCatId }?.breakfastPrice ?: 0.0,
-                expectedCheckOut = primaryBooking.checkOut,
+                expectedCheckOut = primaryBooking.checkOut.toLocalDayUtcMidnight(),
                 checkInTime = today,
                 adults = primaryBooking.adults.coerceAtLeast(1),
                 children = primaryBooking.children,
@@ -1352,7 +1468,7 @@ class StaysViewModel(
                 }.getOrElse { emptyList() }
             } else emptyList()
             val confirmed = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
-            val noConflict = dateConflictFilter(allInstances, confirmed, today, booking.checkOut, excludeBookingId = booking.id)
+            val noConflict = dateConflictFilter(allInstances, confirmed, today, booking.checkOut.toLocalDayUtcMidnight(), excludeBookingId = booking.id)
             // Exclude rooms occupied by active stays overlapping today → checkout window
             val activeStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
             val candidates = noConflict.filter { inst ->
@@ -1387,7 +1503,7 @@ class StaysViewModel(
                 selectedInstanceDetails = if (preAssignedInstance != null) mapOf(preAssignedInstance.id to preAssignedInstance) else emptyMap(),
                 roomGuestMap = if (preAssignedInstance != null) mapOf(preAssignedInstance.id to primaryGuest) else emptyMap(),
                 checkInTime = today,
-                expectedCheckOut = booking.checkOut,
+                expectedCheckOut = booking.checkOut.toLocalDayUtcMidnight(),
                 adults = booking.adults,
                 children = booking.children,
                 categories = categories,
@@ -2021,6 +2137,9 @@ class StaysViewModel(
         val now = Date()
         val checkOut = stay.expectedCheckOut
         launchWithGlobalLoading {
+            val categoryNames = runCatching { roomRepo.getByHotel(hotelId) }
+                .getOrElse { emptyList() }.associate { it.id to it.type }
+
             val allInstances = runCatching { instanceRepo.listenByHotel(hotelId).first() }
                 .getOrElse { emptyList() }
                 .filter { it.status != "MAINTENANCE" && it.id != stay.roomInstanceId }
@@ -2049,7 +2168,7 @@ class StaysViewModel(
             selectable.sortWith(roomSort)
             cleaning.sortWith(roomSort)
 
-            _changeRoomState.update { it.copy(selectableRooms = selectable, cleaningRooms = cleaning, isLoading = false) }
+            _changeRoomState.update { it.copy(selectableRooms = selectable, cleaningRooms = cleaning, categoryNames = categoryNames, isLoading = false) }
         }
     }
 

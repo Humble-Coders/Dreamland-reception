@@ -41,3 +41,11 @@ fun localTodayUtcMidnight(): Date {
     val cal = Calendar.getInstance()
     return dateFromPicker(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
 }
+
+// Returns midnight UTC for the given instant's calendar date in the local (system) timezone.
+// Fixes dates stored as midnight local-time (e.g. May 30 18:30 UTC = midnight IST May 31) so
+// that the logical date (May 31) is preserved regardless of how the timestamp was written.
+fun Date.toLocalDayUtcMidnight(): Date {
+    val cal = Calendar.getInstance().apply { time = this@toLocalDayUtcMidnight }
+    return dateFromPicker(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH))
+}

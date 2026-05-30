@@ -29,7 +29,7 @@ data class Booking(
     val earlyCheckInCharge: Double = 0.0,
     val lateCheckOutEnabled: Boolean = false,
     val lateCheckOutCharge: Double = 0.0,
-    val status: String = "CONFIRMED",       // CONFIRMED | COMPLETED | CANCELLED | NO_SHOW
+    val status: String = "CONFIRMED",       // CONFIRMED | PENDING_PAYMENT | COMPLETED | CANCELLED | NO_SHOW
     val source: String = "APP",             // APP | WALK_IN | from bookingSources.name
     val sourceId: String = "",              // bookingSources document id (empty for legacy records)
     val totalAmount: Double = 0.0,

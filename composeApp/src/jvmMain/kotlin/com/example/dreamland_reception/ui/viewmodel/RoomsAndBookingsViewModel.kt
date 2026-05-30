@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.example.dreamland_reception.util.atHotelTime
+import com.example.dreamland_reception.util.localTodayUtcMidnight
+import com.example.dreamland_reception.util.toLocalDayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
 import java.util.Calendar
 import java.util.Date
@@ -95,6 +97,8 @@ data class RoomsAndBookingsUiState(
     // Group no-show (mark all bookings in a group at once)
     val groupNoShowBookings: List<Booking>? = null,
     val groupNoShowSelectedIds: Set<String> = emptySet(),
+    // Group cancel (cancel all bookings in a group at once)
+    val groupCancelBookings: List<Booking>? = null,
     // Add booking dialog
     val showAddBookingDialog: Boolean = false,
     val bookingSources: List<BookingSource> = emptyList(),
@@ -126,7 +130,7 @@ data class RoomsAndBookingsUiState(
 
     val selectedRoomUpcomingBookings: List<Booking>
         get() = selectedRoomId?.let { id ->
-            bookings.filter { it.roomInstanceId == id && it.status == "CONFIRMED" }
+            bookings.filter { it.roomInstanceId == id && (it.status == "CONFIRMED" || it.status == "PENDING_PAYMENT") }
                 .sortedBy { it.checkIn }
         } ?: emptyList()
 
@@ -140,15 +144,8 @@ data class RoomsAndBookingsUiState(
     val filteredBookings: List<Booking>
         get() {
             val q = searchQuery.trim().lowercase()
-            val todayStart = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-            }.time
-            val tomorrowStart = Calendar.getInstance().apply {
-                add(Calendar.DAY_OF_YEAR, 1)
-                set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-            }.time
+            val todayStart   = localTodayUtcMidnight()
+            val tomorrowStart = Date(todayStart.time + 86_400_000L)
 
             return bookings.filter { booking ->
                 if (booking.source == "WALK_IN") return@filter false
@@ -156,7 +153,9 @@ data class RoomsAndBookingsUiState(
                 val matchesStatus = bookingStatusFilter == null || booking.status == bookingStatusFilter
                 val matchesDate = when (bookingDateFilter) {
                     BookingDateFilter.TODAY -> booking.checkIn >= todayStart && booking.checkIn < tomorrowStart
-                    BookingDateFilter.UPCOMING -> booking.checkIn >= todayStart
+                    // Keep future bookings AND any CONFIRMED booking whose check-in has already passed
+                    // (overdue bookings must not disappear from the list until actioned)
+                    BookingDateFilter.UPCOMING -> booking.checkIn >= todayStart || booking.status == "CONFIRMED" || booking.status == "PENDING_PAYMENT"
                     BookingDateFilter.ALL -> true
                 }
                 matchesSearch && matchesStatus && matchesDate
@@ -185,25 +184,14 @@ data class RoomsAndBookingsUiState(
         }
 
     fun isCheckInToday(booking: Booking): Boolean {
-        val todayStart = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.time
-        val tomorrowStart = Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.time
-        return booking.checkIn >= todayStart && booking.checkIn < tomorrowStart
+        val today    = localTodayUtcMidnight()
+        val tomorrow = Date(today.time + 86_400_000L)
+        return !booking.checkIn.before(today) && booking.checkIn.before(tomorrow)
     }
 
     fun isCheckInTodayOrPassed(booking: Booking): Boolean {
-        val tomorrowStart = Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.time
-        return booking.checkIn.before(tomorrowStart)
+        val tomorrow = Date(localTodayUtcMidnight().time + 86_400_000L)
+        return booking.checkIn.before(tomorrow)
     }
 }
 
@@ -331,12 +319,13 @@ class RoomsAndBookingsViewModel(
                 // never updates status — use currentStayId to detect current occupancy
                 val candidates = roomInstanceRepo.getAll()
                     .filter { it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING") }
-                val confirmedBookings = _uiState.value.bookings.filter { it.status == "CONFIRMED" }
-                val noConflict = dateConflictFilter(candidates, confirmedBookings, booking.checkIn, booking.checkOut, excludeBookingId = booking.id)
-                // Also exclude rooms occupied by active stays overlapping the booking period
+                val confirmedBookings = _uiState.value.bookings.filter { it.status == "CONFIRMED" || it.status == "PENDING_PAYMENT" }
+                val noConflict = dateConflictFilter(candidates, confirmedBookings, booking.checkIn.toLocalDayUtcMidnight(), booking.checkOut.toLocalDayUtcMidnight(), excludeBookingId = booking.id)
+                // Also exclude rooms occupied by active stays overlapping the booking period.
+                // Use fresh Firestore data — cached activeStaysByRoom may be stale.
                 val ciTime = _uiState.value.hotelCheckInTime
                 val coTime = _uiState.value.hotelCheckOutTime
-                val activeStays = _uiState.value.activeStaysByRoom.values.toList()
+                val activeStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
                 val now = Date()
                 noConflict.filter { room ->
                     activeStays.none { stay ->
@@ -393,13 +382,49 @@ class RoomsAndBookingsViewModel(
         launchWithGlobalLoading {
             runCatching {
                 val active = stayRepo.getActive(AppContext.hotelId)
-                if (active.any { it.roomInstanceId == booking.roomInstanceId && it.status == "ACTIVE" }) {
-                    throw Exception("Guest is currently checked in — check out the guest first")
+                // Only block if this specific booking's guest is checked in (matched by bookingId).
+                // A different guest occupying the same room should not prevent cancelling this booking.
+                if (booking.id.isNotBlank() && active.any { it.bookingId == booking.id && it.status == "ACTIVE" }) {
+                    throw Exception("Guest is already checked in — check out the guest first")
                 }
                 bookingRepo.cancelWithTransaction(booking.id)
             }
             .onSuccess { _uiState.update { it.copy(cancelConfirmBooking = null, operationMessage = "Booking for ${booking.guestName} cancelled") } }
             .onFailure { e -> _uiState.update { it.copy(cancelConfirmBooking = null, error = e.message) } }
+        }
+    }
+
+    fun promptCancelGroupBooking(group: List<Booking>) {
+        val cancellable = group.filter { it.status == "CONFIRMED" }
+        if (cancellable.isEmpty()) return
+        _uiState.update { it.copy(groupCancelBookings = cancellable) }
+    }
+
+    fun dismissGroupCancelBooking() = _uiState.update { it.copy(groupCancelBookings = null) }
+
+    fun confirmCancelGroupBooking() {
+        val group = _uiState.value.groupCancelBookings ?: return
+        _uiState.update { it.copy(groupCancelBookings = null) }
+        launchWithGlobalLoading {
+            val active = runCatching { stayRepo.getActive(AppContext.hotelId) }.getOrElse { emptyList() }
+            val checkedInRoomIds = active.map { it.roomInstanceId }.toSet()
+            var cancelledCount = 0
+            var errorMsg: String? = null
+            for (booking in group) {
+                if (booking.roomInstanceId.isNotBlank() && booking.roomInstanceId in checkedInRoomIds) {
+                    errorMsg = "Some rooms are currently checked in — check out guests first"
+                    continue
+                }
+                runCatching { bookingRepo.cancelWithTransaction(booking.id) }
+                    .onSuccess { cancelledCount++ }
+                    .onFailure { e -> errorMsg = e.message }
+            }
+            _uiState.update {
+                it.copy(
+                    operationMessage = if (cancelledCount > 0) "$cancelledCount booking${if (cancelledCount != 1) "s" else ""} cancelled" else null,
+                    error = errorMsg,
+                )
+            }
         }
     }
 
@@ -411,11 +436,7 @@ class RoomsAndBookingsViewModel(
     fun promptMarkGroupNoShow(group: List<Booking>) {
         val checkedInIds = _uiState.value.activeStaysByRoom.values
             .map { it.bookingId }.filter { it.isNotBlank() }.toSet()
-        val tomorrowStart = Calendar.getInstance().apply {
-            add(Calendar.DAY_OF_YEAR, 1)
-            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-        }.time
+        val tomorrowStart = Date(localTodayUtcMidnight().time + 86_400_000L)
         val toMark = group.filter { b ->
             b.status == "CONFIRMED" && b.id !in checkedInIds && b.checkIn.before(tomorrowStart)
         }
@@ -527,7 +548,7 @@ class RoomsAndBookingsViewModel(
         val coTime = _uiState.value.hotelCheckOutTime
         val allRooms = _uiState.value.rooms.filter { it.status != "MAINTENANCE" }
         val bookedIds = _uiState.value.bookings
-            .filter { it.status == "CONFIRMED" && it.roomInstanceId.isNotBlank() }
+            .filter { (it.status == "CONFIRMED" || it.status == "PENDING_PAYMENT") && it.roomInstanceId.isNotBlank() }
             .filter { it.checkIn.atHotelTime(ciTime) < checkOut.atHotelTime(coTime) &&
                       it.checkOut.atHotelTime(coTime) > checkIn.atHotelTime(ciTime) }
             .map { it.roomInstanceId }.toSet()

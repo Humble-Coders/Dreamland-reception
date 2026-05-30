@@ -66,14 +66,30 @@ class BillingViewModel(
             runCatching { billRepo.getByHotel(AppContext.hotelId) }
                 .onSuccess { bills ->
                     val normalized = bills.map { bill ->
-                        val roundedPending = Math.round(bill.pendingAmount).toDouble()
+                        // Recompute all derived totals so taxAmount/totalAmount are always
+                        // consistent with the stored taxEnabled/taxPercentage/items.
+                        val subtotal = bill.items.sumOf { it.total }
+                        val taxAmount = if (bill.taxEnabled) subtotal * bill.taxPercentage / 100.0 else 0.0
+                        val discountAmount = when (bill.discountType) {
+                            "PERCENT" -> subtotal * bill.discountValue / 100.0
+                            else -> bill.discountValue
+                        }
+                        val totalAmount = (subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
+                        val pendingAmount = (totalAmount - bill.totalPaid - bill.advancePayment).coerceAtLeast(0.0)
+                        val roundedPending = Math.round(pendingAmount).toDouble()
                         val correctedStatus = when {
-                            roundedPending <= 0 && bill.totalAmount > 0 -> "PAID"
+                            roundedPending <= 0 && totalAmount > 0 -> "PAID"
                             bill.totalPaid + bill.advancePayment > 0 -> "PARTIAL"
                             else -> "PENDING"
                         }
-                        if (correctedStatus != bill.status) bill.copy(pendingAmount = roundedPending, status = correctedStatus)
-                        else bill
+                        bill.copy(
+                            subtotal = subtotal,
+                            taxAmount = taxAmount,
+                            discountAmount = discountAmount,
+                            totalAmount = totalAmount,
+                            pendingAmount = roundedPending,
+                            status = correctedStatus,
+                        )
                     }
                     _state.update { it.copy(bills = normalized, isLoading = false) }
                 }
@@ -95,7 +111,7 @@ class BillingViewModel(
 
     fun onCreateBillGuestName(v: String) = _state.update { it.copy(createBillDialog = it.createBillDialog.copy(guestName = v, error = null)) }
 
-    fun onCreateBillGuestPhone(v: String) = _state.update { it.copy(createBillDialog = it.createBillDialog.copy(guestPhone = v)) }
+    fun onCreateBillGuestPhone(v: String) = _state.update { it.copy(createBillDialog = it.createBillDialog.copy(guestPhone = v.filter(Char::isDigit).take(10))) }
 
     fun onCreateBillRoomNumber(v: String) = _state.update { it.copy(createBillDialog = it.createBillDialog.copy(roomNumber = v)) }
 

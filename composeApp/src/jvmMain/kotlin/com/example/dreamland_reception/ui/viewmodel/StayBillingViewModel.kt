@@ -54,6 +54,8 @@ data class AddPaymentDialog(
     val show: Boolean = false,
     val amount: String = "",
     val method: String = "CASH",   // CASH | UPI | CARD
+    val cashAmount: String = "",
+    val bankAmount: String = "",
     val isSaving: Boolean = false,
 )
 
@@ -136,8 +138,9 @@ class StayBillingViewModel(
         if (billId.isBlank()) return
         launchWithGlobalLoading {
             _state.update { it.copy(isLoading = true, error = null) }
-            val bill = runCatching { billRepo.getById(billId) }.getOrNull()
-            _state.update { it.copy(isLoading = false, stay = null, bill = bill, error = if (bill == null) "Bill not found" else null) }
+            val bill = runCatching { billRepo.getById(billId) }.getOrNull()?.let { recalculate(it) }
+            val pd = initPaymentAmountsFrom(bill)
+            _state.update { it.copy(isLoading = false, stay = null, bill = bill, addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle, error = if (bill == null) "Bill not found" else null) }
         }
     }
 
@@ -146,7 +149,7 @@ class StayBillingViewModel(
         launchWithGlobalLoading {
             _state.update { it.copy(isLoading = true, error = null) }
             val stay = runCatching { stayRepo.getById(stayId) }.getOrNull()
-            var bill = runCatching { billRepo.getByStay(stayId) }.getOrNull()
+            var bill = runCatching { billRepo.getByStay(stayId) }.getOrNull()?.let { recalculate(it) }
 
             // For ACTIVE stays: build an in-memory preview only — no Firestore write.
             // The real bill document is created in "bills" at checkout by StaysViewModel.
@@ -181,7 +184,7 @@ class StayBillingViewModel(
                 val advance = stay.advanceAmount
                 val subtotal = items.sumOf { it.total }
                 val taxEnabled = taxPercentage > 0
-                val taxAmount = if (taxEnabled) Math.round(subtotal * taxPercentage / 100.0).toDouble() else 0.0
+                val taxAmount = if (taxEnabled) subtotal * taxPercentage / 100.0 else 0.0
                 val total = subtotal + taxAmount
                 val pending = (total - advance).coerceAtLeast(0.0)
                 val status = when {
@@ -207,8 +210,19 @@ class StayBillingViewModel(
                 }
             }
 
-            _state.update { it.copy(isLoading = false, stay = stay, bill = bill) }
+            val pd = initPaymentAmountsFrom(bill)
+            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle) }
         }
+    }
+
+    private fun initPaymentAmountsFrom(bill: Bill?): AddPaymentDialog {
+        val txs = bill?.transactions ?: return AddPaymentDialog()
+        val cash = txs.filter { it.method == "CASH" }.sumOf { it.amount }
+        val bank = txs.filter { it.method == "BANK" }.sumOf { it.amount }
+        return AddPaymentDialog(
+            cashAmount = if (cash > 0) "%.2f".format(cash) else "",
+            bankAmount = if (bank > 0) "%.2f".format(bank) else "",
+        )
     }
 
     // ── Add item ──────────────────────────────────────────────────────────────
@@ -290,8 +304,26 @@ class StayBillingViewModel(
     }
     fun closeEditItem() = _state.update { it.copy(editBillItemDialog = EditBillItemDialog()) }
     fun onEditItemName(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(name = v)) }
-    fun onEditItemQty(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(quantity = v.filter(Char::isDigit))) }
-    fun onEditItemPrice(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(unitPrice = v.filter { c -> c.isDigit() || c == '.' })) }
+    fun onEditItemQty(v: String) = _state.update { s ->
+        val qty = v.filter(Char::isDigit)
+        val d = s.editBillItemDialog.copy(quantity = qty)
+        val updated = if (d.type == "ROOM") {
+            val nights = qty.toIntOrNull() ?: 1
+            val price = d.unitPrice.toDoubleOrNull() ?: 0.0
+            d.copy(name = "Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${price.toLong()})")
+        } else d
+        s.copy(editBillItemDialog = updated)
+    }
+    fun onEditItemPrice(v: String) = _state.update { s ->
+        val price = v.filter { c -> c.isDigit() || c == '.' }
+        val d = s.editBillItemDialog.copy(unitPrice = price)
+        val updated = if (d.type == "ROOM") {
+            val nights = d.quantity.toIntOrNull() ?: 1
+            val priceVal = price.toDoubleOrNull() ?: 0.0
+            d.copy(name = "Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${priceVal.toLong()})")
+        } else d
+        s.copy(editBillItemDialog = updated)
+    }
     fun onEditItemNotes(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(notes = v)) }
 
     fun submitEditItem() {
@@ -323,6 +355,87 @@ class StayBillingViewModel(
     fun closeAddPayment() = _state.update { it.copy(addPaymentDialog = AddPaymentDialog()) }
     fun onPaymentAmount(v: String) = _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(amount = v.filter { c -> c.isDigit() || c == '.' })) }
     fun onPaymentMethod(v: String) = _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(method = v)) }
+    fun onCashAmount(v: String) = _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(cashAmount = v.filter { c -> c.isDigit() || c == '.' })) }
+    fun onBankAmount(v: String) = _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(bankAmount = v.filter { c -> c.isDigit() || c == '.' })) }
+
+    fun updateMethodTotal(method: String) {
+        val d = _state.value.addPaymentDialog
+        val bill = _state.value.bill ?: return
+        if (bill.id.isBlank()) return
+        val raw = if (method == "CASH") d.cashAmount else d.bankAmount
+        val newTotal = raw.toDoubleOrNull() ?: 0.0
+        // Drop existing transactions for this method and replace with one at newTotal
+        val kept = bill.transactions.filter { it.method != method }
+        val updated = if (newTotal > 0)
+            kept + PaymentTransaction(id = UUID.randomUUID().toString(), amount = newTotal, method = method)
+        else kept
+        val newTotalPaid = updated.sumOf { it.amount }
+        val newPending = (bill.totalAmount - newTotalPaid - bill.advancePayment).coerceAtLeast(0.0)
+        val newStatus = when {
+            newPending <= 0 && bill.totalAmount > 0 -> "PAID"
+            newTotalPaid + bill.advancePayment > 0 -> "PARTIAL"
+            else -> "PENDING"
+        }
+        _state.update { it.copy(addPaymentDialog = d.copy(isSaving = true)) }
+        launchWithGlobalLoading {
+            runCatching {
+                billRepo.updateTransactions(bill.id, updated, newTotalPaid, newPending, newStatus)
+            }.onSuccess {
+                _state.update { s ->
+                    s.copy(
+                        bill = s.bill?.copy(
+                            transactions = updated,
+                            totalPaid = newTotalPaid,
+                            pendingAmount = newPending,
+                            status = newStatus,
+                        ),
+                        addPaymentDialog = d.copy(isSaving = false),
+                    )
+                }
+            }.onFailure {
+                _state.update { it.copy(addPaymentDialog = d.copy(isSaving = false)) }
+            }
+        }
+    }
+
+    fun submitPaymentForMethod(method: String) {
+        val d = _state.value.addPaymentDialog
+        val bill = _state.value.bill ?: return
+        if (bill.id.isBlank()) return
+        val raw = if (method == "CASH") d.cashAmount else d.bankAmount
+        val amount = raw.toDoubleOrNull() ?: return
+        if (amount <= 0) return
+        _state.update { it.copy(addPaymentDialog = d.copy(isSaving = true)) }
+        launchWithGlobalLoading {
+            val tx = PaymentTransaction(id = UUID.randomUUID().toString(), amount = amount, method = method)
+            val newTotalPaid = bill.totalPaid + amount
+            val newPending = (bill.totalAmount - newTotalPaid - bill.advancePayment).coerceAtLeast(0.0)
+            val newStatus = when {
+                newPending <= 0 -> "PAID"
+                newTotalPaid + bill.advancePayment > 0 -> "PARTIAL"
+                else -> "PENDING"
+            }
+            runCatching {
+                billRepo.addTransaction(bill.id, tx, newTotalPaid, newPending, newStatus)
+            }.onSuccess {
+                _state.update { s ->
+                    val cleared = if (method == "CASH") s.addPaymentDialog.copy(cashAmount = "")
+                                  else s.addPaymentDialog.copy(bankAmount = "")
+                    s.copy(
+                        bill = s.bill?.copy(
+                            transactions = s.bill.transactions + tx,
+                            totalPaid = newTotalPaid,
+                            pendingAmount = newPending,
+                            status = newStatus,
+                        ),
+                        addPaymentDialog = cleared.copy(isSaving = false),
+                    )
+                }
+            }.onFailure {
+                _state.update { it.copy(addPaymentDialog = d.copy(isSaving = false)) }
+            }
+        }
+    }
 
     fun submitPayment() {
         val d = _state.value.addPaymentDialog
@@ -499,7 +612,7 @@ class StayBillingViewModel(
 
     private fun recalculate(bill: Bill): Bill {
         val subtotal = bill.items.sumOf { it.total }
-        val taxAmount = if (bill.taxEnabled) Math.round(subtotal * bill.taxPercentage / 100.0).toDouble() else 0.0
+        val taxAmount = if (bill.taxEnabled) subtotal * bill.taxPercentage / 100.0 else 0.0
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0
             else -> bill.discountValue
@@ -507,7 +620,7 @@ class StayBillingViewModel(
         val total = (subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
         val pending = (total - bill.totalPaid - bill.advancePayment).coerceAtLeast(0.0)
         val status = when {
-            pending <= 0 -> "PAID"
+            pending <= 0 && total > 0 -> "PAID"
             bill.totalPaid + bill.advancePayment > 0 -> "PARTIAL"
             else -> "PENDING"
         }

@@ -194,7 +194,7 @@ fun AddBookingDialog(
                 Spacer(Modifier.height(10.dp))
                 DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = guestName, onValueChange = { guestName = it }, label = "Guest Name *")
                 Spacer(Modifier.height(8.dp))
-                DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = guestPhone, onValueChange = { guestPhone = it }, label = "Phone", keyboardType = KeyboardType.Phone)
+                DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = guestPhone, onValueChange = { guestPhone = it.filter(Char::isDigit).take(10) }, label = "Phone", keyboardType = KeyboardType.Phone)
 
                 Spacer(Modifier.height(20.dp))
 

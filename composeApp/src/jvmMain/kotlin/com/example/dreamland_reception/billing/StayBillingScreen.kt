@@ -20,10 +20,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
@@ -57,6 +63,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -87,7 +94,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-private fun Double.fmtAmt(): String = if (this % 1.0 == 0.0) "%.0f".format(this) else "%.2f".format(this)
+private fun Double.fmtAmt(): String = "%.2f".format(this)
 
 private val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 private val timeFmt = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
@@ -100,6 +107,7 @@ fun StayBillingScreen(
     vm: StayBillingViewModel = DreamlandAppInitializer.getStayBillingViewModel(),
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val pd = state.addPaymentDialog
     var showBackConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(stayId, billId) {
@@ -197,9 +205,9 @@ fun StayBillingScreen(
                                     shape = RoundedCornerShape(8.dp),
                                     modifier = Modifier.height(36.dp),
                                 ) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Filled.Add, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Add Item", fontSize = 13.sp)
+                                    Text("Add Item", fontSize = 13.sp, color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
@@ -244,28 +252,12 @@ fun StayBillingScreen(
                         // Bill summary
                         BillSummaryCard(bill)
 
-                        // Payment history
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Payments", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-                            if (!isPreview && bill.pendingAmount > 0) {
-                                Button(
-                                    onClick = { vm.openAddPayment() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50), contentColor = Color(0xFF0D1F17)),
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier.height(34.dp),
-                                ) {
-                                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Add Payment", fontSize = 12.sp, maxLines = 1)
-                                }
-                            }
-                        }
+                        // Payment fields — always visible, no individual transaction cards
+                        Text("Payments", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
 
-                        if (bill.advancePayment > 0) {
+                        if (!isPreview) {
+                            InlineAddPayment(pd = pd, vm = vm)
+                        } else if (bill.advancePayment > 0) {
                             PaymentRow(
                                 label = "Advance paid at check-in",
                                 amount = bill.advancePayment,
@@ -273,29 +265,6 @@ fun StayBillingScreen(
                                 date = null,
                                 isAdvance = true,
                                 onEdit = null,
-                            )
-                        }
-
-                        if (bill.transactions.isEmpty() && bill.advancePayment <= 0) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(56.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(DreamlandForestElevated),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("No payments recorded yet.", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-
-                        bill.transactions.forEach { tx ->
-                            PaymentRow(
-                                label = tx.method,
-                                amount = tx.amount,
-                                method = tx.method,
-                                date = tx.createdAt,
-                                onEdit = if (isPreview) null else { { vm.openEditPayment(tx) } },
                             )
                         }
 
@@ -404,9 +373,6 @@ fun StayBillingScreen(
     val ed = state.editBillItemDialog
     if (ed.show) EditBillItemDialogUI(ed, vm)
 
-    val pd = state.addPaymentDialog
-    if (pd.show) AddPaymentDialogUI(pd, vm)
-
     val epd = state.editPaymentDialog
     if (epd.show) EditPaymentDialogUI(epd, vm)
 
@@ -417,6 +383,7 @@ fun StayBillingScreen(
     if (cpd.show) ConfirmPaymentDialogUI(cpd, state.bill, vm)
 
     if (showBackConfirm) BackConfirmDialog(
+        billStatus = state.bill?.status ?: "PENDING",
         onConfirm = {
             showBackConfirm = false
             DreamlandAppInitializer.getBillingViewModel().load()
@@ -602,7 +569,7 @@ internal fun BillSummaryCard(bill: Bill) {
             Text("Summary", style = MaterialTheme.typography.titleMedium, color = DreamlandGold, fontWeight = FontWeight.SemiBold)
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
             SummaryRow("Subtotal", bill.subtotal)
-            if (bill.taxEnabled && bill.taxAmount > 0) SummaryRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
+            if (bill.taxEnabled) SummaryRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
             if (bill.discountAmount > 0) SummaryRow("Discount", -bill.discountAmount)
             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.25f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -806,60 +773,74 @@ private fun TypeSelectRow(type: String, label: String, onClick: () -> Unit) {
     }
 }
 
-// ── Edit Payment Dialog ───────────────────────────────────────────────────────
+@Composable
+private fun InlineAddPayment(pd: AddPaymentDialog, vm: StayBillingViewModel) {
+    Column(Modifier.fillMaxWidth()) {
+        SimplePaymentField(
+            label = "CASH",
+            amount = pd.cashAmount,
+            onAmountChange = vm::onCashAmount,
+            onSave = { vm.updateMethodTotal("CASH") },
+        )
+        HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
+        SimplePaymentField(
+            label = "BANK",
+            amount = pd.bankAmount,
+            onAmountChange = vm::onBankAmount,
+            onSave = { vm.updateMethodTotal("BANK") },
+        )
+    }
+}
 
 @Composable
-private fun AddPaymentDialogUI(pd: AddPaymentDialog, vm: StayBillingViewModel) {
-    Dialog(
-        onDismissRequest = { if (!pd.isSaving) vm.closeAddPayment() },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+private fun SimplePaymentField(
+    label: String,
+    amount: String,
+    onAmountChange: (String) -> Unit,
+    onSave: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
+        Text(
+            label,
+            color = DreamlandMuted,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp,
+            modifier = Modifier.weight(1f),
+        )
+        Text("₹", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.width(4.dp))
+        BasicTextField(
+            value = amount,
+            onValueChange = onAmountChange,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(
+                color = DreamlandOnDark,
+                textAlign = TextAlign.End,
+            ),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = {
+                if ((amount.toDoubleOrNull() ?: 0.0) > 0) onSave()
+            }),
             modifier = Modifier
-                .widthIn(min = 360.dp, max = 440.dp)
-                .fillMaxWidth(0.42f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(DreamlandForestSurface)
-                .padding(24.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("ADD PAYMENT", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
-                Text("Payment Method", color = DreamlandMuted, style = MaterialTheme.typography.labelMedium)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("CASH", "BANK").forEach { method ->
-                        val selected = pd.method == method
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(44.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else DreamlandForestElevated)
-                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                                .clickable { vm.onPaymentMethod(method) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
-                        }
+                .width(80.dp)
+                .onFocusChanged { focusState ->
+                    if (!focusState.isFocused && (amount.toDoubleOrNull() ?: 0.0) > 0) onSave()
+                },
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterEnd) {
+                    if (amount.isEmpty()) {
+                        Text("0.00", color = DreamlandMuted.copy(alpha = 0.4f), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.End)
                     }
+                    inner()
                 }
-                BillingTextField("Amount (₹)", pd.amount, onValueChange = vm::onPaymentAmount, keyboard = KeyboardType.Decimal)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { vm.closeAddPayment() }, modifier = Modifier.weight(1f).height(48.dp)) {
-                        Text("Cancel", color = DreamlandMuted, maxLines = 1)
-                    }
-                    Button(
-                        onClick = { vm.submitPayment() },
-                        enabled = (pd.amount.toDoubleOrNull() ?: 0.0) > 0 && !pd.isSaving,
-                        modifier = Modifier.weight(2f).height(48.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                        shape = RoundedCornerShape(10.dp),
-                    ) {
-                        if (pd.isSaving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                        else Text("Record Payment", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    }
-                }
-            }
-        }
+            },
+        )
     }
 }
 
@@ -943,7 +924,12 @@ private fun EditBillItemDialogUI(ed: EditBillItemDialog, vm: StayBillingViewMode
                     Spacer(Modifier.width(8.dp))
                     Text("Edit Item", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
                 }
-                BillingTextField("Name", ed.name, onValueChange = vm::onEditItemName)
+                BillingTextField(
+                    label = "Name",
+                    value = ed.name,
+                    onValueChange = vm::onEditItemName,
+                    readOnly = ed.type == "ROOM",
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     BillingTextField("Quantity", ed.quantity, onValueChange = vm::onEditItemQty, keyboard = KeyboardType.Number, modifier = Modifier.weight(1f))
                     BillingTextField("Unit Price (₹)", ed.unitPrice, onValueChange = vm::onEditItemPrice, keyboard = KeyboardType.Decimal, modifier = Modifier.weight(1f))
@@ -1111,7 +1097,7 @@ private fun ConfirmPaymentDialogUI(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             ConfirmRow("Subtotal", "₹${bill.subtotal.fmtAmt()}", DreamlandOnDark)
-                            if (bill.taxEnabled && bill.taxAmount > 0)
+                            if (bill.taxEnabled)
                                 ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${bill.taxAmount.fmtAmt()}", DreamlandOnDark)
                             if (bill.discountAmount > 0)
                                 ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
@@ -1215,7 +1201,22 @@ private fun ConfirmRow(label: String, value: String, valueColor: Color) {
 // ── Back Confirmation Dialog ───────────────────────────────────────────────────
 
 @Composable
-private fun BackConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+private fun BackConfirmDialog(billStatus: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val statusColor = when (billStatus) {
+        "PAID"    -> Color(0xFF2ECC71)
+        "PARTIAL" -> Color(0xFFF39C12)
+        else      -> Color(0xFFFF9800)
+    }
+    val statusLabel = when (billStatus) {
+        "PAID"    -> "PAID"
+        "PARTIAL" -> "PARTIAL"
+        else      -> "PENDING"
+    }
+    val description = when (billStatus) {
+        "PAID"    -> "The bill is fully paid. Your changes are saved."
+        "PARTIAL" -> "The bill has been partially paid. You can return to record the remaining payment."
+        else      -> "The bill has been drafted and saved as PENDING. You can return to finalize and create the billing record later."
+    }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1234,21 +1235,21 @@ private fun BackConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                         Modifier
                             .size(36.dp)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFFF9800).copy(alpha = 0.15f)),
+                            .background(statusColor.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFFF9800), modifier = Modifier.size(20.dp))
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = statusColor, modifier = Modifier.size(20.dp))
                     }
                     Column {
                         Text("Leave Billing?", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-                        Text("UNSAVED BILLING", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.5.sp)
+                        Text("BILLING SUMMARY", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.5.sp)
                     }
                 }
 
                 HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
 
                 Text(
-                    "The bill has been drafted and saved as PENDING. You can return to finalize and create the billing record later.",
+                    description,
                     color = DreamlandMuted,
                     style = MaterialTheme.typography.bodySmall,
                     lineHeight = 18.sp,
@@ -1258,10 +1259,10 @@ private fun BackConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                     Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFFFF9800).copy(alpha = 0.1f))
+                        .background(statusColor.copy(alpha = 0.1f))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
-                    Text("Status will be set to PENDING", color = Color(0xFFFF9800), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    Text("Status will be set to $statusLabel", color = statusColor, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1277,7 +1278,7 @@ private fun BackConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                         onClick = onConfirm,
                         modifier = Modifier.weight(1f).height(44.dp),
                         shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                        colors = ButtonDefaults.buttonColors(containerColor = statusColor),
                     ) {
                         Text("Go Back", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     }
@@ -1296,12 +1297,14 @@ private fun BillingTextField(
     onValueChange: (String) -> Unit,
     keyboard: KeyboardType = KeyboardType.Text,
     modifier: Modifier = Modifier.fillMaxWidth(),
+    readOnly: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
         singleLine = true,
+        readOnly = readOnly,
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
         modifier = modifier,
         colors = OutlinedTextFieldDefaults.colors(
@@ -1309,8 +1312,8 @@ private fun BillingTextField(
             unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
             focusedLabelColor = DreamlandGold,
             unfocusedLabelColor = DreamlandMuted,
-            focusedTextColor = DreamlandOnDark,
-            unfocusedTextColor = DreamlandOnDark,
+            focusedTextColor = if (readOnly) DreamlandMuted else DreamlandOnDark,
+            unfocusedTextColor = if (readOnly) DreamlandMuted else DreamlandOnDark,
         ),
     )
 }

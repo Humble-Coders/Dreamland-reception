@@ -285,7 +285,10 @@ private fun WizardStepIndicator(currentStep: Int, onStepClick: (Int) -> Unit) {
             val isDone = num < currentStep
 
             // Circle + label
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = if (!isActive) Modifier.clickable { onStepClick(num) } else Modifier,
+            ) {
                 Box(
                     modifier = Modifier
                         .size(32.dp)
@@ -296,8 +299,7 @@ private fun WizardStepIndicator(currentStep: Int, onStepClick: (Int) -> Unit) {
                                 isDone -> DreamlandForestElevated
                                 else -> DreamlandForestElevated.copy(alpha = 0.5f)
                             }
-                        )
-                        .then(if (isDone) Modifier.clickable { onStepClick(num) } else Modifier),
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
@@ -1089,7 +1091,7 @@ private fun GuestWizardCard(
             // Name + phone (all guests get both fields)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = "Full Name *")
-                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = onPhoneChange, label = "Phone Number", keyboardType = KeyboardType.Phone)
+                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone Number", keyboardType = KeyboardType.Phone)
             }
 
             // ID proof toggle
@@ -1191,9 +1193,12 @@ private fun GroupChangeConfirmDialog(
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("DEVIATION FROM ORIGINAL BOOKING", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFF9800), letterSpacing = 1.sp)
                 Text("You're changing the room selection beyond what was originally booked.", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
-                Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(DreamlandForestElevated).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Original booking:", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
-                    Text(requirements.joinToString(" · ") { r -> if (r.count > 1) "${r.count}× ${r.categoryName}" else r.categoryName }, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                val displayRequirements = dialogState.originalRequirements.ifEmpty { requirements }
+                if (displayRequirements.isNotEmpty()) {
+                    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(DreamlandForestElevated).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Original booking:", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
+                        Text(displayRequirements.joinToString(" · ") { r -> if (r.count > 1) "${r.count}× ${r.categoryName}" else r.categoryName }, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                    }
                 }
                 if (dialogState.availabilityMap.isNotEmpty()) {
                     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(DreamlandForestElevated).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1381,7 +1386,7 @@ internal fun GuestEntryRow(
             if (isPrimary) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = "Full Name *")
-                    DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = onPhoneChange, label = "Phone Number", keyboardType = KeyboardType.Phone)
+                    DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone Number", keyboardType = KeyboardType.Phone)
                 }
             } else {
                 DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = entry.name, onValueChange = onNameChange, label = "Full Name")

@@ -47,10 +47,10 @@ object FirestoreBookingRepository : BookingRepository {
     override suspend fun getConfirmedByHotel(hotelId: String): List<Booking> = withContext(Dispatchers.IO) {
         col.whereEqualTo("hotelId", hotelId).get().get()
             .documents.mapNotNull { it.toBooking() }
-            .filter { it.status == "CONFIRMED" }
+            .filter { it.status == "CONFIRMED" || it.status == "PENDING_PAYMENT" }
     }
 
-    /** Returns CONFIRMED bookings for [hotelId] with checkIn within ±2 days of today. */
+    /** Returns CONFIRMED/PENDING_PAYMENT bookings for [hotelId] with checkIn within ±2 days of today. */
     override suspend fun getUpcoming(hotelId: String): List<Booking> = withContext(Dispatchers.IO) {
         val cal = java.util.Calendar.getInstance()
         cal.add(java.util.Calendar.DAY_OF_YEAR, -1)

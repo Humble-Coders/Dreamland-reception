@@ -49,7 +49,7 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
     if (!state.isOpen || state.stay == null) return
 
     val stay = state.stay
-    val categoryName = stay.roomCategoryName.ifBlank { stay.roomCategoryId }
+    val categoryName = stay.roomCategoryName.ifBlank { state.categoryNames[stay.roomCategoryId] ?: stay.roomCategoryId }
 
     Dialog(
         onDismissRequest = { vm.closeChangeRoom() },
@@ -99,7 +99,8 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             items(state.selectableRooms) { room ->
-                                RoomRow(room, selected = state.selectedInstance?.id == room.id, cleaning = false) {
+                                val catName = room.categoryName.ifBlank { state.categoryNames[room.categoryId] ?: "" }
+                                RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = false) {
                                     vm.onChangeRoomSelected(room)
                                 }
                             }
@@ -115,7 +116,8 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
                                     Spacer(Modifier.height(4.dp))
                                 }
                                 items(state.cleaningRooms) { room ->
-                                    RoomRow(room, selected = state.selectedInstance?.id == room.id, cleaning = true) {
+                                    val catName = room.categoryName.ifBlank { state.categoryNames[room.categoryId] ?: "" }
+                                    RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = true) {
                                         vm.onChangeRoomSelected(room)
                                     }
                                 }
@@ -159,7 +161,7 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
 }
 
 @Composable
-private fun RoomRow(room: RoomInstance, selected: Boolean, cleaning: Boolean, onClick: () -> Unit) {
+private fun RoomRow(room: RoomInstance, catName: String, selected: Boolean, cleaning: Boolean, onClick: () -> Unit) {
     val borderColor = if (selected) DreamlandGold else DreamlandGold.copy(alpha = 0.2f)
     val bgColor = if (selected) DreamlandGold.copy(alpha = 0.08f) else Color.Transparent
     val textColor = if (cleaning) DreamlandMuted else DreamlandOnDark
@@ -175,15 +177,20 @@ private fun RoomRow(room: RoomInstance, selected: Boolean, cleaning: Boolean, on
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 "Room ${room.roomNumber}",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 color = if (selected) DreamlandGold else textColor,
             )
-            if (room.categoryName.isNotBlank()) {
-                Text(room.categoryName, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
+            if (catName.isNotBlank()) {
+                Text("·", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    catName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) DreamlandGold.copy(alpha = 0.8f) else DreamlandMuted,
+                )
             }
         }
         if (cleaning) {

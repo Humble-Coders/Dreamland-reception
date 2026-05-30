@@ -56,6 +56,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
@@ -123,11 +124,12 @@ private fun roomStatusColor(status: String): Color = when (status) {
 }
 
 private fun bookingStatusColor(status: String): Color = when (status) {
-    "CONFIRMED" -> Color(0xFFF39C12)
-    "COMPLETED" -> Color(0xFF2ECC71)
-    "CANCELLED" -> Color(0xFFE74C3C)
-    "NO_SHOW" -> Color(0xFF95A5A6)
-    else -> Color(0xFF8FA69E)
+    "CONFIRMED"       -> Color(0xFFF39C12)
+    "PENDING_PAYMENT" -> Color(0xFFE67E22)
+    "COMPLETED"       -> Color(0xFF2ECC71)
+    "CANCELLED"       -> Color(0xFFE74C3C)
+    "NO_SHOW"         -> Color(0xFF95A5A6)
+    else              -> Color(0xFF8FA69E)
 }
 
 private fun formatRupees(amount: Double): String =
@@ -192,7 +194,14 @@ fun RoomsAndBookingsScreen(
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
-        )
+        ) { data ->
+            Snackbar(
+                snackbarData = data,
+                containerColor = Color(0xFF1A0A0A),
+                contentColor = Color(0xFFEF9A9A),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+            )
+        }
     }
 
     if (state.assignRoomDialogBooking != null) {
@@ -203,6 +212,14 @@ fun RoomsAndBookingsScreen(
             guestName = state.cancelConfirmBooking!!.guestName,
             onConfirm = vm::confirmCancelBooking,
             onDismiss = vm::dismissCancelBooking,
+        )
+    }
+    state.groupCancelBookings?.let { group ->
+        val guestName = group.firstOrNull()?.guestName ?: "Guest"
+        CancelConfirmDialog(
+            guestName = "$guestName (${group.size} bookings)",
+            onConfirm = vm::confirmCancelGroupBooking,
+            onDismiss = vm::dismissGroupCancelBooking,
         )
     }
     if (state.noShowConfirmBooking != null) {
@@ -1119,6 +1136,7 @@ private fun BookingsTabContent(
                                 onCancel = { vm.promptCancelBooking(it) },
                                 onNoShow = { vm.promptMarkNoShow(it) },
                                 onNoShowAll = { vm.promptMarkGroupNoShow(group) },
+                                onCancelAll = { vm.promptCancelGroupBooking(group) },
                             )
                         }
                     }
@@ -1194,7 +1212,7 @@ private fun BookingFilterBar(state: RoomsAndBookingsUiState, vm: RoomsAndBooking
 
         Spacer(Modifier.weight(1f))
 
-        val statusOptions = listOf(null to "All", "CONFIRMED" to "Confirmed", "CANCELLED" to "Cancelled", "NO_SHOW" to "No Show", "COMPLETED" to "Completed")
+        val statusOptions = listOf(null to "All", "CONFIRMED" to "Confirmed", "PENDING_PAYMENT" to "Pending Payment", "CANCELLED" to "Cancelled", "NO_SHOW" to "No Show", "COMPLETED" to "Completed")
         statusOptions.forEach { (status, label) ->
             FilterChip(
                 selected = state.bookingStatusFilter == status,
@@ -1265,15 +1283,17 @@ private fun GroupBookingCard(
     onCancel: (Booking) -> Unit,
     onNoShow: (Booking) -> Unit,
     onNoShowAll: () -> Unit = {},
+    onCancelAll: () -> Unit = {},
 ) {
     val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
     val primary = group[0]
     val allStatuses = group.map { it.status }.distinct()
     val overallStatus = when {
-        allStatuses.all { it == "CONFIRMED" } -> "CONFIRMED"
-        allStatuses.all { it == "COMPLETED" } -> "COMPLETED"
-        allStatuses.all { it == "CANCELLED" } -> "CANCELLED"
-        else -> "CONFIRMED"
+        allStatuses.all { it == "CONFIRMED" }       -> "CONFIRMED"
+        allStatuses.any { it == "PENDING_PAYMENT" } -> "PENDING_PAYMENT"
+        allStatuses.all { it == "COMPLETED" }       -> "COMPLETED"
+        allStatuses.all { it == "CANCELLED" }       -> "CANCELLED"
+        else                                        -> "CONFIRMED"
     }
     val statusColor = bookingStatusColor(overallStatus)
     val totalAmount = group.sumOf { it.totalAmount }
@@ -1288,7 +1308,7 @@ private fun GroupBookingCard(
             time = primary.checkIn
             set(Calendar.HOUR_OF_DAY, ciHour); set(Calendar.MINUTE, ciMin)
             set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
-            add(Calendar.HOUR_OF_DAY, 12)
+            add(Calendar.HOUR_OF_DAY, 2)
         }.time
     }
     val isOverdue = overallStatus == "CONFIRMED" && now.after(graceDeadline)
@@ -1521,10 +1541,13 @@ private fun GroupBookingCard(
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                         ) { Text("No-Show All", color = Color(0xFFE74C3C), fontSize = 12.sp) }
                     }
-                    TextButton(
-                        onClick = { group.forEach { onCancel(it) } },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    ) { Text("Cancel All", color = Color(0xFFE74C3C).copy(alpha = 0.8f), fontSize = 12.sp) }
+                    val anyCancellable = group.any { it.status == "CONFIRMED" }
+                    if (anyCancellable) {
+                        TextButton(
+                            onClick = onCancelAll,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        ) { Text("Cancel All", color = Color(0xFFE74C3C).copy(alpha = 0.8f), fontSize = 12.sp) }
+                    }
                 }
             }
         }
@@ -1559,7 +1582,7 @@ private fun BookingCard(
             set(Calendar.MINUTE, ciMin)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            add(Calendar.HOUR_OF_DAY, 12)
+            add(Calendar.HOUR_OF_DAY, 2)
         }.time
     }
     val isOverdue = isConfirmed && now.after(graceDeadline)
@@ -1625,6 +1648,13 @@ private fun BookingCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = DreamlandMuted,
                     )
+                    if (booking.guestPhone.isNotBlank()) {
+                        Text(
+                            booking.guestPhone,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = DreamlandMuted.copy(alpha = 0.7f),
+                        )
+                    }
                 }
                 Spacer(Modifier.width(12.dp))
                 Box(
@@ -1834,7 +1864,7 @@ private fun NoShowConfirmDialog(
             set(Calendar.MINUTE, ciMin)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            add(Calendar.HOUR_OF_DAY, 12)
+            add(Calendar.HOUR_OF_DAY, 2)
         }.time
     }
 
