@@ -132,8 +132,13 @@ private fun bookingStatusColor(status: String): Color = when (status) {
     else              -> Color(0xFF8FA69E)
 }
 
-private fun formatRupees(amount: Double): String =
-    "₹${NumberFormat.getNumberInstance(Locale("en", "IN")).format(amount.toLong())}"
+private fun formatRupees(amount: Double): String {
+    val nf = NumberFormat.getNumberInstance(Locale("en", "IN")).apply {
+        minimumFractionDigits = 2
+        maximumFractionDigits = 2
+    }
+    return "₹${nf.format(amount)}"
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Root screen
@@ -459,6 +464,7 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
     fun roomDisplayStatus(room: RoomInstance): String = when {
         room.status == "MAINTENANCE" -> "MAINTENANCE"
         room.status == "CLEANING"    -> "CLEANING"
+        room.needsCleaning           -> "CLEANING"   // checked out but needs cleaning — show as cleaning
         hotelTimesReady && state.activeStaysByRoom[room.roomNumber]?.let { s ->
             s.expectedCheckOut.after(rangeStart!!)
         } == true -> "OCCUPIED"
@@ -742,7 +748,7 @@ private fun RoomDetailPanel(
                 ) {
                     Text(room.status, style = MaterialTheme.typography.labelMedium, color = statusColor, letterSpacing = 1.sp)
                 }
-                if (room.status == "CLEANING") {
+                if (room.status == "CLEANING" || room.needsCleaning) {
                     Button(
                         onClick = { vm.markCleaningComplete(room) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2ECC71)),
@@ -752,6 +758,23 @@ private fun RoomDetailPanel(
                         Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(14.dp), tint = Color.White)
                         Spacer(Modifier.width(6.dp))
                         Text("Mark Available", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                if (room.status != "OCCUPIED") {
+                    val isMaintenance = room.status == "MAINTENANCE"
+                    OutlinedButton(
+                        onClick = { vm.toggleMaintenance(room) },
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, if (isMaintenance) Color(0xFF95A5A6) else DreamlandMuted.copy(alpha = 0.4f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp),
+                    ) {
+                        Text(
+                            if (isMaintenance) "Remove Maintenance" else "Maintenance",
+                            color = if (isMaintenance) Color(0xFF95A5A6) else DreamlandMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }
@@ -877,15 +900,6 @@ private fun StayInfoCard(stay: Stay, fmt: SimpleDateFormat) {
                 if (stay.earlyCheckIn) ExtraChip("Early CI")
                 if (stay.lateCheckOut) ExtraChip("Late CO")
             }
-        }
-        if (stay.specialRequests.isNotBlank()) {
-            Text(
-                "Requests: ${stay.specialRequests}",
-                style = MaterialTheme.typography.bodySmall,
-                color = DreamlandMuted,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }

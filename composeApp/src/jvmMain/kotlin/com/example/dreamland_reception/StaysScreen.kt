@@ -262,7 +262,7 @@ private fun StayCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .border(1.dp, borderColor, RoundedCornerShape(10.dp))
-            .background(if (isSelected) DreamlandForestElevated else DreamlandForestSurface)
+            .background(if (isSelected) DreamlandGold.copy(alpha = 0.08f) else DreamlandForestSurface)
             .clickable(onClick = onClick),
     ) {
         // Left accent bar

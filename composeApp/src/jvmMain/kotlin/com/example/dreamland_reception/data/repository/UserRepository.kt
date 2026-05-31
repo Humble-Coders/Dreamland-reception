@@ -10,6 +10,7 @@ import java.util.Date
 interface UserRepository {
     suspend fun getAllByHotel(hotelId: String): List<Guest>
     suspend fun getByIds(ids: Set<String>): List<Guest>
+    suspend fun markCheckedIn(userId: String, checkedIn: Boolean)
 }
 
 object FirestoreUserRepository : UserRepository {
@@ -25,6 +26,12 @@ object FirestoreUserRepository : UserRepository {
             .get().get().documents
             .mapNotNull { it.toGuest() }
             .sortedBy { it.name }
+    }
+
+    override suspend fun markCheckedIn(userId: String, checkedIn: Boolean) = withContext(Dispatchers.IO) {
+        if (userId.isBlank()) return@withContext
+        col.document(userId).update("checkedIn", checkedIn).get()
+        Unit
     }
 
     override suspend fun getByIds(ids: Set<String>): List<Guest> = withContext(Dispatchers.IO) {

@@ -10,6 +10,7 @@ data class BillItem(
     val quantity: Int = 1,
     val unitPrice: Double = 0.0,
     val total: Double = unitPrice * quantity,
+    val taxPercentage: Double = 0.0,
     val refId: String = "",
     val notes: String = "",
 )

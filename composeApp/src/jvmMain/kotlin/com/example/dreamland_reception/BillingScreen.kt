@@ -211,9 +211,9 @@ private fun BillingSummaryBar(state: BillingScreenState) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        SummaryStatCard("Total Revenue", "₹${state.totalRevenue.toLong()}", DreamlandGold, Modifier.weight(1f))
-        SummaryStatCard("Collected", "₹${state.totalCollected.toLong()}", Color(0xFF4CAF50), Modifier.weight(1f))
-        SummaryStatCard("Outstanding", "₹${state.totalOutstanding.toLong()}", Color(0xFFEF5350), Modifier.weight(1f))
+        SummaryStatCard("Total Revenue", "₹${"%.2f".format(state.totalRevenue)}", DreamlandGold, Modifier.weight(1f))
+        SummaryStatCard("Collected", "₹${"%.2f".format(state.totalCollected)}", Color(0xFF4CAF50), Modifier.weight(1f))
+        SummaryStatCard("Outstanding", "₹${"%.2f".format(state.totalOutstanding)}", Color(0xFFEF5350), Modifier.weight(1f))
         SummaryStatCard("Paid", "${state.paidCount}", Color(0xFF4CAF50), Modifier.weight(1f))
         SummaryStatCard("Partial", "${state.partialCount}", Color(0xFFFF9800), Modifier.weight(1f))
         SummaryStatCard("Pending", "${state.pendingCount}", Color(0xFFEF5350), Modifier.weight(1f))
@@ -329,7 +329,7 @@ private fun BillListCard(bill: Bill, selected: Boolean, onClick: () -> Unit) {
             Text(dateFmt.format(bill.createdAt), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text("₹${bill.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text("₹${"%.2f".format(bill.totalAmount)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Box(
                 Modifier
                     .clip(RoundedCornerShape(4.dp))
@@ -399,9 +399,9 @@ private fun BillDetailPanel(
                         Column(Modifier.weight(1f)) {
                             Text(item.name, color = DreamlandOnDark, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
                             if (item.notes.isNotBlank()) Text(item.notes, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                            Text("${item.quantity} × ₹${item.unitPrice.toLong()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                            Text("${item.quantity} × ₹${"%.2f".format(item.unitPrice)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
                         }
-                        Text("₹${item.total.toLong()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                        Text("₹${"%.2f".format(item.total)}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }

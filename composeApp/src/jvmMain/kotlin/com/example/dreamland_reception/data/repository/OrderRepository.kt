@@ -19,6 +19,7 @@ interface OrderRepository {
     suspend fun updateStatus(id: String, status: String)
     suspend fun updateAssignment(id: String, staffId: String, staffName: String)
     fun listenByHotel(hotelId: String): Flow<List<Order>>
+    fun listenByStay(stayId: String): Flow<List<Order>>
 }
 
 object FirestoreOrderRepository : OrderRepository {
@@ -73,6 +74,17 @@ object FirestoreOrderRepository : OrderRepository {
                 if (error != null) { close(error); return@addSnapshotListener }
                 val orders = snapshot?.documents?.mapNotNull { it.toOrder() }
                     ?.sortedByDescending { it.orderedAt } ?: emptyList()
+                trySend(orders)
+            }
+        awaitClose { registration.remove() }
+    }
+
+    override fun listenByStay(stayId: String): Flow<List<Order>> = callbackFlow {
+        val registration = col.whereEqualTo("stayId", stayId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) { close(error); return@addSnapshotListener }
+                val orders = snapshot?.documents?.mapNotNull { it.toOrder() }
+                    ?.sortedBy { it.orderedAt } ?: emptyList()
                 trySend(orders)
             }
         awaitClose { registration.remove() }

@@ -300,10 +300,24 @@ class RoomsAndBookingsViewModel(
 
     // ── Room actions ──────────────────────────────────────────────────────────
 
+    fun toggleMaintenance(room: RoomInstance) {
+        launchWithGlobalLoading {
+            val newStatus = if (room.status == "MAINTENANCE") "AVAILABLE" else "MAINTENANCE"
+            runCatching { roomInstanceRepo.updateStatus(room.id, newStatus, null) }
+                .onSuccess { _uiState.update { it.copy(operationMessage = "Room ${room.roomNumber} set to ${newStatus.lowercase().replaceFirstChar { it.uppercaseChar() }}") } }
+                .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
+        }
+    }
+
     fun markCleaningComplete(room: RoomInstance) {
         launchWithGlobalLoading {
-            runCatching { roomInstanceRepo.updateStatus(room.id, "AVAILABLE", null) }
-                .onSuccess { _uiState.update { it.copy(operationMessage = "Room ${room.roomNumber} marked as Available") } }
+            runCatching {
+                // Clear needsCleaning flag AND ensure status is AVAILABLE
+                // (handles both new-flow rooms and legacy CLEANING-status rooms)
+                roomInstanceRepo.updateStatus(room.id, "AVAILABLE", null)
+                roomInstanceRepo.markNeedsCleaning(room.id, false)
+            }
+                .onSuccess { _uiState.update { it.copy(operationMessage = "Room ${room.roomNumber} marked as available") } }
                 .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
         }
     }

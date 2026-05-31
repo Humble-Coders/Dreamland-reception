@@ -339,13 +339,13 @@ private fun BillingTab(bill: Bill?) {
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.3f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text("₹${bill.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("₹${"%.2f".format(bill.totalAmount)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     }
                     BillRow("Amount Paid", amountPaid)
                     if (bill.pendingAmount > 0) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Pending", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold)
-                            Text("₹${bill.pendingAmount.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
+                            Text("₹${"%.2f".format(bill.pendingAmount)}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -369,7 +369,7 @@ private fun BillRow(label: String, amount: Double) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
         Text(
-            text = if (amount < 0) "-₹${(-amount).toLong()}" else "₹${amount.toLong()}",
+            text = if (amount < 0) "-₹${"%.2f".format(-amount)}" else "₹${"%.2f".format(amount)}",
             color = DreamlandOnDark,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -425,7 +425,7 @@ private fun OrdersTab(orders: List<Order>, vm: StaysViewModel, canAdd: Boolean) 
                     }
                     Spacer(Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("₹${order.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                        Text("₹${"%.2f".format(order.totalAmount)}", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
                         StatusChip(
                             text = order.status,
                             color = when (order.status) {

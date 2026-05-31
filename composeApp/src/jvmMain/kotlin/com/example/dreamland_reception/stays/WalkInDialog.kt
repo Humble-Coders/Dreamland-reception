@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -75,6 +76,7 @@ import com.example.dreamland_reception.DreamlandGold
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
 import com.example.dreamland_reception.ui.viewmodel.GuestEntry
+import com.example.dreamland_reception.ui.viewmodel.RoomGuestAssignment
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import com.example.dreamland_reception.ui.viewmodel.WalkInState
 import com.example.dreamland_reception.util.dateFromPicker
@@ -92,8 +94,6 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
     if (!state.isOpen) return
 
     var currentStep by remember { mutableStateOf(1) }
-    // Per-room guest index: instanceId → index in guestEntries (null = unassigned)
-    var roomGuestIndex by remember(state.selectedInstanceIds) { mutableStateOf(mapOf<String, Int?>()) }
 
     Dialog(
         onDismissRequest = vm::closeWalkIn,
@@ -155,26 +155,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 when (currentStep) {
                     1 -> Step1StayDetails(state, vm)
                     2 -> Step2GuestInfo(state, vm)
-                    3 -> Step3AssignRooms(
-                        state = state,
-                        vm = vm,
-                        roomGuestIndex = roomGuestIndex,
-                        onAssign = { instanceId, guestIdx ->
-                            roomGuestIndex = roomGuestIndex + (instanceId to guestIdx)
-                            val g = guestIdx?.let { state.guestEntries.getOrNull(it) }
-                            vm.onRoomGuestName(instanceId, g?.name ?: "")
-                            vm.onRoomGuestPhone(instanceId, g?.phone ?: "")
-                            vm.onRoomGuestIdProof(instanceId, g?.idProofVerified ?: false)
-                        },
-                        onSameForAll = {
-                            roomGuestIndex = state.selectedInstanceIds.associateWith { 0 }
-                            vm.onToggleSameGuestForAll(true)
-                        },
-                        onPerRoom = {
-                            roomGuestIndex = mapOf()
-                            vm.onToggleSameGuestForAll(false)
-                        },
-                    )
+                    3 -> Step3AssignRooms(state = state, vm = vm)
                     4 -> Step4Confirm(state, vm)
                 }
             }
@@ -214,15 +195,11 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                         Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(18.dp))
                     }
                 } else {
-                    // Step 4: submit
-                    val primaryIdVerified = if (!state.sameGuestForAllRooms && state.selectedInstanceIds.size > 1) {
-                        state.guestEntries.all { it.idProofVerified }
-                    } else {
-                        state.guestEntries.firstOrNull()?.idProofVerified == true
-                    }
+                    // Step 4: submit — require ALL guests to have ID verified
+                    val allIdVerified = state.guestEntries.all { it.idProofVerified }
                     Button(
                         onClick = { if (state.isBookingMode) vm.submitAsBooking() else vm.requestSubmitWalkIn() },
-                        enabled = !state.isSaving && (state.isBookingMode || primaryIdVerified),
+                        enabled = !state.isSaving && (state.isBookingMode || allIdVerified),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DreamlandGold,
                             disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),
@@ -432,43 +409,6 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                 }
             }
 
-            // Optional: specific room chip selection
-            if (state.selectableInstances.isNotEmpty() || state.cleaningInstances.isNotEmpty() || state.dueOutInstances.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "Optional: pick specific rooms",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = DreamlandMuted,
-                    letterSpacing = 0.5.sp,
-                )
-                Spacer(Modifier.height(6.dp))
-                val specificInCat = state.selectedInstanceIds.count { id ->
-                    state.selectedInstanceDetails[id]?.categoryId == catId
-                }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.selectableInstances.forEach { inst ->
-                        val isSelected = inst.id in state.selectedInstanceIds
-                        RoomChip(
-                            number = inst.roomNumber,
-                            isSelected = isSelected,
-                            isCleaning = false,
-                            isDisabled = false,
-                            onClick = {
-                                vm.onInstanceToggled(inst.id)
-                                // Keep counter at least as high as chip count
-                                val newSpecific = if (isSelected) specificInCat - 1 else specificInCat + 1
-                                if (newSpecific > currentCount) vm.onBookingRoomCountForCategory(catId, newSpecific)
-                            },
-                        )
-                    }
-                    state.cleaningInstances.forEach { inst ->
-                        RoomChip(number = inst.roomNumber, isSelected = false, isCleaning = true, isDisabled = true, onClick = {})
-                    }
-                    state.dueOutInstances.forEach { inst ->
-                        RoomChip(number = inst.roomNumber, isSelected = false, isCleaning = false, isDueOut = true, isDisabled = true, onClick = {})
-                    }
-                }
-            }
 
             // Booking summary: all categories with room counts
             val summaryEntries = buildList {
@@ -490,7 +430,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                     }
                 }
             }
-            if (summaryEntries.size > 1 || (summaryEntries.size == 1 && summaryEntries.first().third.isNotEmpty())) {
+            if (summaryEntries.isNotEmpty()) {
                 Spacer(Modifier.height(14.dp))
                 WizardSectionLabel("BOOKING SUMMARY")
                 Spacer(Modifier.height(6.dp))
@@ -621,7 +561,17 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
                 onNameChange = { vm.onGuestName(index, it) },
                 onPhoneChange = { vm.onGuestPhone(index, it) },
                 onIdProofChange = { vm.onGuestIdProof(index, it) },
+                onRemove = if (index > 0) { { vm.removeGuest(index) } } else null,
             )
+        }
+
+        OutlinedButton(
+            onClick = vm::addGuest,
+            shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("+ Add Guest", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -629,38 +579,10 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
 // ── Step 3: Assign Guests to Rooms ────────────────────────────────────────────
 
 @Composable
-private fun Step3AssignRooms(
-    state: WalkInState,
-    vm: StaysViewModel,
-    roomGuestIndex: Map<String, Int?>,
-    onAssign: (instanceId: String, guestIdx: Int?) -> Unit,
-    onSameForAll: () -> Unit,
-    onPerRoom: () -> Unit,
-) {
+private fun Step3AssignRooms(state: WalkInState, vm: StaysViewModel) {
     val orderedIds = state.selectedInstanceDetails.keys.toList()
 
-    Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("ASSIGN GUESTS TO ROOMS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 1.sp)
-        if (orderedIds.size > 1) {
-            OutlinedButton(
-                onClick = if (state.sameGuestForAllRooms) onPerRoom else onSameForAll,
-                shape = RoundedCornerShape(8.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text(
-                    if (state.sameGuestForAllRooms) "Per room" else "Same guest for all",
-                    color = DreamlandGold,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-    }
+    Text("ASSIGN GUESTS TO ROOMS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 1.sp)
 
     Spacer(Modifier.height(12.dp))
 
@@ -669,7 +591,6 @@ private fun Step3AssignRooms(
         return
     }
 
-    // Info box showing selected room numbers
     val roomNumbers = orderedIds.mapNotNull { state.selectedInstanceDetails[it]?.roomNumber }
     Box(
         Modifier
@@ -687,122 +608,112 @@ private fun Step3AssignRooms(
 
     Spacer(Modifier.height(12.dp))
 
-    if (state.sameGuestForAllRooms) {
-        // Shared mode — show all rooms with the primary guest
-        val primaryName = state.guestEntries.firstOrNull()?.name?.ifBlank { "Primary Guest" } ?: "Primary Guest"
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            orderedIds.forEach { instanceId ->
-                val inst = state.selectedInstanceDetails[instanceId]
-                RoomGuestRow(
-                    roomNumber = inst?.roomNumber ?: "?",
-                    categoryName = inst?.categoryName ?: "",
-                    guestLabel = "Primary: $primaryName",
-                    isShared = true,
-                    expanded = false,
-                    onDropdownClick = {},
-                    guestOptions = emptyList(),
-                    onGuestSelected = {},
-                )
-            }
-        }
-    } else {
-        // Per-room assignment
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            orderedIds.forEach { instanceId ->
-                val inst = state.selectedInstanceDetails[instanceId]
-                val selectedIdx = roomGuestIndex[instanceId]
-                val label = when (selectedIdx) {
-                    null -> "No guest assigned"
-                    0 -> "Primary: ${state.guestEntries[0].name.ifBlank { "Primary Guest" }}"
-                    else -> "Guest ${selectedIdx + 1}: ${state.guestEntries.getOrNull(selectedIdx)?.name?.ifBlank { "Guest ${selectedIdx + 1}" } ?: "Guest ${selectedIdx + 1}"}"
-                }
-                val options = buildList {
-                    add(null to "No guest assigned")
-                    state.guestEntries.forEachIndexed { i, g ->
-                        val name = g.name.ifBlank { if (i == 0) "Primary Guest" else "Guest ${i + 1}" }
-                        add(i to if (i == 0) "Primary: $name" else "Guest ${i + 1}: $name")
-                    }
-                }
-
-                var dropdownExpanded by remember { mutableStateOf(false) }
-                RoomGuestRow(
-                    roomNumber = inst?.roomNumber ?: "?",
-                    categoryName = inst?.categoryName ?: "",
-                    guestLabel = label,
-                    isShared = false,
-                    expanded = dropdownExpanded,
-                    onDropdownClick = { dropdownExpanded = !dropdownExpanded },
-                    guestOptions = options,
-                    onGuestSelected = { idx ->
-                        onAssign(instanceId, idx)
-                        dropdownExpanded = false
-                    },
-                )
-            }
-        }
+    if (state.guestEntries.isEmpty()) {
+        Text("Add guest info in Step 2 first.", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+        return
     }
-}
 
-@Composable
-private fun RoomGuestRow(
-    roomNumber: String,
-    categoryName: String,
-    guestLabel: String,
-    isShared: Boolean,
-    expanded: Boolean,
-    onDropdownClick: () -> Unit,
-    guestOptions: List<Pair<Int?, String>>,
-    onGuestSelected: (Int?) -> Unit,
-) {
-    var triggerSize by remember { mutableStateOf(IntSize.Zero) }
-    val density = LocalDensity.current
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        orderedIds.forEach { instanceId ->
+            val inst = state.selectedInstanceDetails[instanceId]
+            val assignment = state.roomGuestAssignment[instanceId] ?: RoomGuestAssignment()
+            val effectivePrimary = assignment.primaryIndex ?: assignment.guestIndices.minOrNull()
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(DreamlandForestElevated)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Icon(Icons.Filled.Hotel, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(18.dp))
-        Text(
-            "Room $roomNumber${if (categoryName.isNotBlank()) " · $categoryName" else ""}",
-            color = DreamlandOnDark,
-            fontWeight = FontWeight.SemiBold,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(140.dp),
-        )
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .onSizeChanged { triggerSize = it }
-                .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, if (isShared) DreamlandGold.copy(alpha = 0.2f) else DreamlandMuted.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
-                .background(DreamlandForestSurface)
-                .then(if (!isShared) Modifier.clickable { onDropdownClick() } else Modifier)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(guestLabel, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                if (!isShared) {
-                    Text("▾", color = DreamlandMuted, fontSize = 12.sp)
-                }
-            }
-            if (!isShared) {
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = onDropdownClick,
-                    modifier = Modifier.width(with(density) { triggerSize.width.toDp() }),
-                ) {
-                    guestOptions.forEach { (idx, label) ->
-                        DropdownMenuItem(
-                            modifier = Modifier.fillMaxWidth(),
-                            text = { Text(label, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium) },
-                            onClick = { onGuestSelected(idx) },
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Room header
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Filled.Hotel, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
+                        Text(
+                            "Room ${inst?.roomNumber ?: "?"}${if (!inst?.categoryName.isNullOrBlank()) " · ${inst?.categoryName}" else ""}",
+                            color = DreamlandOnDark,
+                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodyMedium,
                         )
-                        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.08f))
+                    }
+                    HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
+                    // Guest rows
+                    state.guestEntries.forEachIndexed { idx, guest ->
+                        val isChecked = idx in assignment.guestIndices
+                        val isPrimary = idx == effectivePrimary && isChecked
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isChecked) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            // Checkbox
+                            androidx.compose.material3.Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    val newIndices = if (checked) assignment.guestIndices + idx else assignment.guestIndices - idx
+                                    val newPrimary = if (!checked && isPrimary) null else assignment.primaryIndex
+                                    vm.onRoomGuestAssignment(instanceId, assignment.copy(guestIndices = newIndices, primaryIndex = newPrimary))
+                                },
+                                colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                    checkedColor = DreamlandGold,
+                                    uncheckedColor = DreamlandMuted.copy(alpha = 0.4f),
+                                    checkmarkColor = Color(0xFF0D1F17),
+                                ),
+                                modifier = Modifier.size(20.dp),
+                            )
+                            // Guest name + phone
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    guest.name.ifBlank { "Guest ${idx + 1}" },
+                                    color = if (isChecked) DreamlandOnDark else DreamlandMuted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = if (isPrimary) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                                if (guest.phone.isNotBlank()) {
+                                    Text(guest.phone, color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            // ID status chip
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (guest.idProofVerified) Color(0xFF4CAF50).copy(alpha = 0.12f) else Color(0xFFF39C12).copy(alpha = 0.12f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            ) {
+                                Text(
+                                    if (guest.idProofVerified) "✓ ID" else "⚠ ID",
+                                    color = if (guest.idProofVerified) Color(0xFF4CAF50) else Color(0xFFF39C12),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                            // Primary selector — star icon; only one per room at a time
+                            // Filled gold star = current primary; dim outline star = click to set as primary
+                            if (isChecked) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    modifier = Modifier.clickable(enabled = !isPrimary) {
+                                        vm.onRoomGuestAssignment(instanceId, assignment.copy(primaryIndex = idx))
+                                    }.padding(horizontal = 4.dp),
+                                ) {
+                                    Text(
+                                        if (isPrimary) "★" else "☆",
+                                        color = if (isPrimary) DreamlandGold else DreamlandMuted.copy(alpha = 0.35f),
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                    Text(
+                                        "Primary",
+                                        color = if (isPrimary) DreamlandGold else DreamlandMuted.copy(alpha = 0.35f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.sp,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -854,7 +765,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             val breakfastPriceLabel = if (state.selectedCategoryBreakfastPrice > 0)
-                "₹${state.selectedCategoryBreakfastPrice.toLong()} per person per night"
+                "₹${"%.2f".format(state.selectedCategoryBreakfastPrice)} per person per night"
             else "Price set per room category"
             OptionToggle("Breakfast Included", breakfastPriceLabel, state.breakfast, vm::onWalkInBreakfast)
         }
@@ -869,40 +780,63 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
 
     Spacer(Modifier.height(20.dp))
 
-    // Advance payment (walk-in only)
-    if (!state.isBookingMode) {
-        WizardSectionLabel("ADVANCE PAYMENT")
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = state.advancePayment,
-            onValueChange = vm::onWalkInAdvancePayment,
-            label = { Text("Advance Amount (₹)", color = DreamlandMuted, fontSize = 13.sp) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
-                focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                cursorColor = DreamlandGold,
-            ),
-        )
-        val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
-        if (advance > 0 || state.selectedInstanceIds.isNotEmpty()) {
-            val roomTotal = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
-                val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
-                price * nights * insts.size
-            }.let { if (it == 0.0) (state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight ?: 0.0) * nights * state.selectedInstanceIds.size.coerceAtLeast(1) else it }
-            val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
-            val total = roomTotal + bfCharge
-            val pending = (total - advance).coerceAtLeast(0.0)
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                Text("₹${pending.toLong()}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        Spacer(Modifier.height(20.dp))
+    // Advance payment — show booking's existing advance if checking in from booking
+    val bookingAdvance = when {
+        state.sourceBooking != null -> state.sourceBooking.advancePaidAmount
+        state.groupBookings.isNotEmpty() -> state.groupBookings.sumOf { it.advancePaidAmount }
+        else -> 0.0
     }
+    WizardSectionLabel("ADVANCE PAYMENT")
+    Spacer(Modifier.height(8.dp))
+    if (bookingAdvance > 0) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF4CAF50).copy(alpha = 0.08f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Paid from booking:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+            Text("₹${"%.2f".format(bookingAdvance)}", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    OutlinedTextField(
+        value = state.advancePayment,
+        onValueChange = vm::onWalkInAdvancePayment,
+        label = { Text("Advance Amount (₹)", color = DreamlandMuted, fontSize = 13.sp) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+            cursorColor = DreamlandGold,
+        ),
+    )
+    val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
+    if (advance > 0 || bookingAdvance > 0) {
+        val roomTotal = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
+            val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
+            price * nights * insts.size
+        }.let { if (it == 0.0) (state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight ?: 0.0) * nights * state.selectedInstanceIds.size.coerceAtLeast(1) else it }
+        val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
+        val taxAmount = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
+            val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
+            val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
+            price * nights * insts.size * taxRate / 100.0
+        }
+        val total = roomTotal + bfCharge + taxAmount
+        val pending = (total - bookingAdvance - advance).coerceAtLeast(0.0)
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+            Text("₹${"%.2f".format(pending)}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    Spacer(Modifier.height(20.dp))
 
     // Source (booking mode only) — dropdown from bookingSources collection
     if (state.isBookingMode) {
@@ -923,13 +857,9 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
         Spacer(Modifier.height(8.dp))
     }
 
-    // ID proof warning
-    val primaryIdVerified = if (!state.sameGuestForAllRooms && state.selectedInstanceIds.size > 1) {
-        state.guestEntries.all { it.idProofVerified }
-    } else {
-        state.guestEntries.firstOrNull()?.idProofVerified == true
-    }
-    if (!state.isBookingMode && !primaryIdVerified) {
+    // ID proof warning — require all guests
+    val allVerified = state.guestEntries.all { it.idProofVerified }
+    if (!state.isBookingMode && !allVerified) {
         Row(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFFF39C12).copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -937,7 +867,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("⚠", color = Color(0xFFF39C12), fontSize = 14.sp)
-            Text("Verify primary guest ID proof to enable check-in", color = Color(0xFFF39C12), style = MaterialTheme.typography.bodySmall)
+            Text("Verify ID proof for all guests to enable check-in", color = Color(0xFFF39C12), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -1056,6 +986,7 @@ private fun GuestWizardCard(
     onNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
     onIdProofChange: (Boolean) -> Unit,
+    onRemove: (() -> Unit)? = null,
 ) {
     val isPrimary = index == 0
     Card(
@@ -1063,8 +994,12 @@ private fun GuestWizardCard(
         shape = RoundedCornerShape(12.dp),
     ) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Number circle + label
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Number circle + label + optional remove
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Box(
                     modifier = Modifier
                         .size(28.dp)
@@ -1081,16 +1016,25 @@ private fun GuestWizardCard(
                     )
                 }
                 Text(
-                    if (isPrimary) "Primary Guest" else "Guest ${index + 1}",
+                    "Guest ${index + 1}",
                     color = DreamlandGold,
                     fontWeight = FontWeight.SemiBold,
                     style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
                 )
+                if (onRemove != null) {
+                    TextButton(
+                        onClick = onRemove,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    ) {
+                        Text("Remove", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelSmall)
+                    }
+                }
             }
 
-            // Name + phone (all guests get both fields)
+            // Name + phone (all guests get both fields; only primary name is mandatory)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = "Full Name *")
+                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = if (isPrimary) "Full Name *" else "Full Name")
                 DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone Number", keyboardType = KeyboardType.Phone)
             }
 
@@ -1444,27 +1388,62 @@ private fun PricingPreviewCard(state: WalkInState) {
     }
 
     val breakfastCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
-    val total = roomTotal + breakfastCharge
+    val subtotal = roomTotal + breakfastCharge
+
+    // Tax — per category using Room.taxPercentage
+    data class TaxLine(val label: String, val rate: Double, val amount: Double)
+    val taxLines = buildList {
+        val catIds = if (grouped.isNotEmpty()) grouped.keys
+            else state.bookingRoomCountsByCategory.keys.ifEmpty { listOfNotNull(state.selectedCategoryId.takeIf { it.isNotBlank() }) }.toSet()
+        for (catId in catIds) {
+            val cat = state.categories.find { it.id == catId } ?: continue
+            if (cat.taxPercentage <= 0.0) continue
+            val charge = when {
+                grouped.isNotEmpty() -> {
+                    val insts = grouped[catId] ?: continue
+                    val price = state.categoryPrices[catId] ?: cat.pricePerNight
+                    price * nights * insts.size
+                }
+                else -> {
+                    val count = state.bookingRoomCountsByCategory[catId] ?: 1
+                    val price = state.categoryPrices[catId] ?: cat.pricePerNight
+                    price * nights * count
+                }
+            }
+            add(TaxLine("Tax (${cat.taxPercentage.toInt()}%)", cat.taxPercentage, charge * cat.taxPercentage / 100.0))
+        }
+    }
+    val taxTotal = taxLines.sumOf { it.amount }
+    val total = subtotal + taxTotal
 
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             roomRows.forEach { (label, charge) ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text("₹${"%,.0f".format(charge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    Text("₹${"%,.2f".format(charge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                 }
             }
             if (state.breakfast) {
                 HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Breakfast — ${state.adults} pax × $nights nights", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text("₹${"%,.0f".format(breakfastCharge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    Text("₹${"%,.2f".format(breakfastCharge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            if (taxLines.isNotEmpty()) {
+                HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
+                taxLines.forEach { tx ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(tx.label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        Text("₹${"%,.2f".format(tx.amount)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text("₹${"%,.0f".format(total)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("₹${"%,.2f".format(total)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
         }
     }

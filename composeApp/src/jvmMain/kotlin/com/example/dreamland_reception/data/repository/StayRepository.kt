@@ -82,12 +82,13 @@ object FirestoreStayRepository : StayRepository {
                 "status" to "COMPLETED",
                 "checkOutActual" to checkOutTime,
                 "lateCheckOutCharge" to lateCheckOutCharge,
+                "updatedAt" to Date(),
             ),
         ).get(); Unit
     }
 
     override suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date) = withContext(Dispatchers.IO) {
-        col.document(id).update("expectedCheckOut", newCheckOut).get(); Unit
+        col.document(id).update(mapOf("expectedCheckOut" to newCheckOut, "updatedAt" to Date())).get(); Unit
     }
 
     override suspend fun changeRoom(
@@ -102,6 +103,7 @@ object FirestoreStayRepository : StayRepository {
             "roomNumber" to newRoomNumber,
             "roomCategoryId" to newCategoryId,
             "roomCategoryName" to newCategoryName,
+            "updatedAt" to Date(),
         ))
         batch.update(fs.collection("roomInstances").document(oldInstanceId), mapOf("currentStayId" to null))
         batch.update(fs.collection("roomInstances").document(newInstanceId), mapOf("currentStayId" to stayId))
@@ -125,6 +127,8 @@ object FirestoreStayRepository : StayRepository {
             id = id,
             hotelId = getString("hotelId") ?: "",
             bookingId = getString("bookingId") ?: "",
+            userId = getString("userId") ?: "",
+            userName = getString("userName") ?: "",
             guestName = getString("guestName") ?: "",
             guestPhone = getString("guestPhone") ?: "",
             roomInstanceId = getString("roomInstanceId") ?: "",
@@ -143,10 +147,10 @@ object FirestoreStayRepository : StayRepository {
             lateCheckOut = getBoolean("lateCheckOut") ?: false,
             earlyCheckInCharge = getDouble("earlyCheckInCharge") ?: 0.0,
             lateCheckOutCharge = getDouble("lateCheckOutCharge") ?: 0.0,
-            advanceAmount = getDouble("advanceAmount") ?: 0.0,
+            advancePaidAmount = getDouble("advancePaidAmount") ?: getDouble("advanceAmount") ?: 0.0,
             totalBilled = getDouble("totalBilled") ?: 0.0,
-            specialRequests = getString("specialRequests") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
+            updatedAt = getTimestamp("updatedAt")?.toDate() ?: Date(),
             guests = (get("guests") as? List<*>)?.mapNotNull { entry ->
                 (entry as? Map<*, *>)?.let {
                     GuestRecord(
@@ -163,6 +167,8 @@ object FirestoreStayRepository : StayRepository {
     private fun Stay.toMap() = mapOf(
         "hotelId" to hotelId,
         "bookingId" to bookingId,
+        "userId" to userId,
+        "userName" to userName,
         "guestName" to guestName,
         "guestPhone" to guestPhone,
         "roomInstanceId" to roomInstanceId,
@@ -181,10 +187,10 @@ object FirestoreStayRepository : StayRepository {
         "lateCheckOut" to lateCheckOut,
         "earlyCheckInCharge" to earlyCheckInCharge,
         "lateCheckOutCharge" to lateCheckOutCharge,
-        "advanceAmount" to advanceAmount,
+        "advancePaidAmount" to advancePaidAmount,
         "totalBilled" to totalBilled,
-        "specialRequests" to specialRequests,
         "createdAt" to createdAt,
+        "updatedAt" to updatedAt,
         "guests" to guests.map { g ->
             mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified)
         },

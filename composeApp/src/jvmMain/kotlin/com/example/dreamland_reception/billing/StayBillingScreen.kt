@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,7 +32,10 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Receipt
@@ -39,6 +43,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +70,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -130,7 +136,6 @@ fun StayBillingScreen(
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Text("BILLING", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
-                val guest = state.bill?.guestName ?: state.stay?.guestName ?: ""
                 val bill = state.bill
                 val roomLabel = when {
                     bill != null && bill.roomNumbers.size > 1 -> "${bill.roomNumbers.size} Rooms: ${bill.roomNumbers.joinToString(", ")}"
@@ -138,10 +143,34 @@ fun StayBillingScreen(
                     state.stay?.roomNumber?.isNotBlank() == true -> "Room ${state.stay!!.roomNumber}"
                     else -> ""
                 }
-                if (guest.isNotBlank()) {
-                    Text(guest, style = MaterialTheme.typography.titleLarge, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
-                    if (roomLabel.isNotBlank()) Text(roomLabel, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
+                // Editable guest name + picker icon — icon sits immediately next to name
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    BasicTextField(
+                        value = state.billGuestName,
+                        onValueChange = vm::onBillGuestName,
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.titleLarge.copy(
+                            color = DreamlandOnDark, fontWeight = FontWeight.Bold,
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { vm.saveBillGuestName() }),
+                        modifier = Modifier
+                            .widthIn(min = 60.dp)
+                            .onFocusChanged { if (!it.isFocused) vm.saveBillGuestName() },
+                        decorationBox = { inner ->
+                            Box {
+                                if (state.billGuestName.isEmpty()) {
+                                    Text("Guest name", color = DreamlandMuted, style = MaterialTheme.typography.titleLarge)
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                    IconButton(onClick = { vm.openGuestPicker() }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Filled.Person, contentDescription = "Choose guest", tint = DreamlandGold.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                    }
                 }
+                if (roomLabel.isNotBlank()) Text(roomLabel, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
             }
             state.bill?.let { bill ->
                 StatusBadge(bill.status)
@@ -162,7 +191,7 @@ fun StayBillingScreen(
                     // ── LEFT: Bill items ───────────────────────────────────────
                     Column(
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(0.7f)
                             .fillMaxHeight()
                             .verticalScroll(rememberScrollState())
                             .padding(16.dp),
@@ -190,6 +219,43 @@ fun StayBillingScreen(
 
                         // Stay info card
                         StayInfoCard(bill, onCheckInChanged = if (!isPreview) { { vm.updateDates(it, bill.checkOutDate ?: it) } } else null, onCheckOutChanged = if (!isPreview) { { vm.updateDates(bill.checkInDate ?: it, it) } } else null)
+
+                        // Nights mismatch warning banner
+                        state.nightsMismatchCount?.let { nights ->
+                            val dateNights = if (bill.checkInDate != null && bill.checkOutDate != null)
+                                java.util.concurrent.TimeUnit.MILLISECONDS.toDays(bill.checkOutDate.time - bill.checkInDate.time).toInt() else null
+                            val roomQtys = bill.items.filter { it.type == "ROOM" }.map { it.quantity }.distinct()
+                            val hasCrossRoomMismatch = roomQtys.size > 1
+                            val hasDateMismatch = dateNights != null && nights != dateNights
+                            Column(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFF39C12).copy(alpha = 0.10f))
+                                    .border(1.dp, Color(0xFFF39C12).copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                            ) {
+                                Text("⚠ Room nights changed to $nights", color = Color(0xFFF39C12), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                                if (hasCrossRoomMismatch)
+                                    Text("Some rooms still have different nights. Sync all rooms to $nights nights.", color = Color(0xFFF39C12).copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
+                                if (hasDateMismatch)
+                                    Text("Stay dates show $dateNights nights. Update check-out date to match.", color = Color(0xFFF39C12).copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (hasCrossRoomMismatch)
+                                        TextButton(onClick = { vm.syncAllRoomsToNights() }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                                            Text("Sync all rooms", color = Color(0xFFF39C12), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    if (hasDateMismatch)
+                                        TextButton(onClick = { vm.fixCheckoutDateForNights() }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                                            Text("Fix dates", color = Color(0xFFF39C12), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    Spacer(Modifier.weight(1f))
+                                    IconButton(onClick = { vm.dismissNightsMismatch() }, modifier = Modifier.size(24.dp)) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = Color(0xFFF39C12).copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
 
                         // Items section
                         Row(
@@ -234,61 +300,98 @@ fun StayBillingScreen(
                             }
                         }
 
-                        // Tax / Discount card
-                        TaxDiscountSummaryCard(bill, onEdit = { vm.openTaxDiscount() }, readOnly = isPreview)
                     }
 
                     // ── RIGHT: Summary + Payments ──────────────────────────────
                     Column(
                         modifier = Modifier
-                            .width(380.dp)
+                            .weight(0.3f)
                             .fillMaxHeight()
                             .background(DreamlandForestSurface)
                             .border(1.dp, DreamlandGold.copy(alpha = 0.2f))
                             .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                            .padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        // Bill summary
-                        BillSummaryCard(bill)
+                        // Bill summary — editable tax%, advance, and live payment preview
+                        BillSummaryCard(
+                            bill = bill,
+                            previewCash = pd.cashAmount.toDoubleOrNull() ?: 0.0,
+                            previewBank = pd.bankAmount.toDoubleOrNull() ?: 0.0,
+                            editableTaxPct = state.editableTaxPct,
+                            editableAdvancePaid = state.editableAdvancePaid,
+                            editableDiscountType = state.editableDiscountType,
+                            editableDiscountValue = state.editableDiscountValue,
+                            onTaxPctChange = vm::onTaxPctInline,
+                            onTaxPctSave = vm::saveTaxPctInline,
+                            onAdvancePaidChange = vm::onAdvancePaidInline,
+                            onAdvancePaidSave = vm::saveAdvancePaidInline,
+                            onDiscountTypeChange = vm::onDiscountTypeInline,
+                            onDiscountValueChange = vm::onDiscountValueInline,
+                            onDiscountSave = vm::saveDiscountInline,
+                        )
 
-                        // Payment fields — always visible, no individual transaction cards
-                        Text("Payments", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-
-                        if (!isPreview) {
-                            InlineAddPayment(pd = pd, vm = vm)
-                        } else if (bill.advancePayment > 0) {
-                            PaymentRow(
-                                label = "Advance paid at check-in",
-                                amount = bill.advancePayment,
-                                method = "",
-                                date = null,
-                                isAdvance = true,
-                                onEdit = null,
-                            )
+                        // Payments card
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                                Text("Payments", style = MaterialTheme.typography.titleSmall, color = DreamlandGold, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+                                Spacer(Modifier.height(8.dp))
+                                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+                                if (!isPreview) {
+                                    InlineAddPayment(pd = pd, vm = vm)
+                                } else if (bill.advancePayment > 0) {
+                                    PaymentRow(
+                                        label = "Advance paid at check-in",
+                                        amount = bill.advancePayment,
+                                        method = "",
+                                        date = null,
+                                        isAdvance = true,
+                                        onEdit = null,
+                                    )
+                                }
+                            }
                         }
 
-                        Spacer(Modifier.height(4.dp))
-                        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
-                        Spacer(Modifier.height(4.dp))
-
-                        // Confirm Payment — disabled in preview mode
+                        // Confirm Payment — disabled in preview mode or when no value typed in cash/bank
+                        val confirmEnabled = !isPreview && (pd.cashAmount.isNotBlank() || pd.bankAmount.isNotBlank())
                         Button(
-                            onClick = { if (!isPreview) vm.openConfirmPayment() },
-                            enabled = !isPreview,
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            shape = RoundedCornerShape(10.dp),
+                            onClick = { if (confirmEnabled) vm.openConfirmPayment() },
+                            enabled = confirmEnabled,
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF4CAF50),
-                                disabledContainerColor = DreamlandMuted.copy(alpha = 0.2f),
+                                disabledContainerColor = DreamlandForestElevated,
                             ),
                         ) {
                             Text(
-                                if (isPreview) "Confirm Payment (available after checkout)" else "Confirm Payment",
-                                color = if (isPreview) DreamlandMuted else Color.White,
+                                when {
+                                    isPreview -> "Available after checkout"
+                                    !confirmEnabled -> "Enter payment to confirm"
+                                    else -> "Confirm Payment"
+                                },
+                                color = if (confirmEnabled) Color.White else DreamlandMuted,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                             )
+                        }
+
+                        // "Paid via QR" — fills BANK with the full balance due
+                        if (!isPreview) {
+                            OutlinedButton(
+                                onClick = { vm.payViaQr() },
+                                modifier = Modifier.fillMaxWidth().height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+                            ) {
+                                Icon(Icons.Filled.CropFree, contentDescription = null, modifier = Modifier.size(16.dp), tint = DreamlandGold)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Paid via QR", fontWeight = FontWeight.SemiBold, color = DreamlandGold)
+                            }
                         }
 
                         // Accounting sync status indicator
@@ -381,6 +484,15 @@ fun StayBillingScreen(
 
     val cpd = state.confirmPaymentDialog
     if (cpd.show) ConfirmPaymentDialogUI(cpd, state.bill, vm)
+
+    if (state.guestPickerOpen) {
+        GuestPickerDialog(
+            guests = state.billGuests,
+            currentName = state.billGuestName,
+            onSelect = vm::selectBillGuest,
+            onDismiss = vm::closeGuestPicker,
+        )
+    }
 
     if (showBackConfirm) BackConfirmDialog(
         billStatus = state.bill?.status ?: "PENDING",
@@ -560,27 +672,212 @@ private fun TaxDiscountSummaryCard(bill: Bill, onEdit: () -> Unit, readOnly: Boo
 }
 
 @Composable
-internal fun BillSummaryCard(bill: Bill) {
+internal fun BillSummaryCard(
+    bill: Bill,
+    previewCash: Double = 0.0,
+    previewBank: Double = 0.0,
+    editableTaxPct: String = "",
+    editableAdvancePaid: String = "",
+    editableDiscountType: String = "FLAT",
+    editableDiscountValue: String = "",
+    onTaxPctChange: (String) -> Unit = {},
+    onTaxPctSave: () -> Unit = {},
+    onAdvancePaidChange: (String) -> Unit = {},
+    onAdvancePaidSave: () -> Unit = {},
+    onDiscountTypeChange: (String) -> Unit = {},
+    onDiscountValueChange: (String) -> Unit = {},
+    onDiscountSave: () -> Unit = {},
+) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Summary", style = MaterialTheme.typography.titleMedium, color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Summary", style = MaterialTheme.typography.titleMedium, color = DreamlandGold, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
             SummaryRow("Subtotal", bill.subtotal)
-            if (bill.taxEnabled) SummaryRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
-            if (bill.discountAmount > 0) SummaryRow("Discount", -bill.discountAmount)
-            HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.25f))
+
+            // ── Editable tax percentage row ───────────────────────────────────
+            val liveRate = editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
+            val liveTaxAmount = if (liveRate > 0) bill.subtotal * liveRate / 100.0 else 0.0
+            var taxFocused by remember { mutableStateOf(false) }
+            if (bill.taxEnabled || liveRate > 0 || onTaxPctChange != {}) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Tax", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Editable percentage pill
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .border(
+                                    1.dp,
+                                    if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f),
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .background(if (taxFocused) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
+                                .padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            BasicTextField(
+                                value = editableTaxPct,
+                                onValueChange = onTaxPctChange,
+                                singleLine = true,
+                                cursorBrush = SolidColor(DreamlandOnDark),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(
+                                    color = if (taxFocused) DreamlandOnDark else DreamlandMuted,
+                                    textAlign = TextAlign.End,
+                                    fontWeight = if (taxFocused) FontWeight.SemiBold else FontWeight.Normal,
+                                ),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { onTaxPctSave() }),
+                                modifier = Modifier
+                                    .width(30.dp)
+                                    .onFocusChanged { fs ->
+                                        taxFocused = fs.isFocused
+                                        if (!fs.isFocused) onTaxPctSave()
+                                    },
+                                decorationBox = { inner ->
+                                    Box(contentAlignment = Alignment.CenterEnd) {
+                                        if (editableTaxPct.isEmpty()) Text("0", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
+                                        inner()
+                                    }
+                                },
+                            )
+                            Text("%", color = if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                        }
+                        Text("₹${liveTaxAmount.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            // ── Compact discount row: label | [Flat][%] pills | value field ────
+            val liveDiscountValue = editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+            val liveDiscountAmount = when (editableDiscountType) {
+                "PERCENT" -> bill.subtotal * liveDiscountValue / 100.0
+                else -> liveDiscountValue
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                // Compact FLAT | % pills
+                listOf("FLAT" to "₹", "PERCENT" to "%").forEach { (key, label) ->
+                    val selected = editableDiscountType == key
+                    Box(
+                        modifier = Modifier
+                            .height(24.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                            .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                            .clickable { onDiscountTypeChange(key) }
+                            .padding(horizontal = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 11.sp)
+                    }
+                }
+                // Discount value field
+                BasicTextField(
+                    value = editableDiscountValue,
+                    onValueChange = onDiscountValueChange,
+                    singleLine = true,
+                    cursorBrush = SolidColor(DreamlandOnDark),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandOnDark, textAlign = TextAlign.End),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { onDiscountSave() }),
+                    modifier = Modifier.width(56.dp).onFocusChanged { if (!it.isFocused) onDiscountSave() },
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterEnd) {
+                            if (editableDiscountValue.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+                            inner()
+                        }
+                    },
+                )
+            }
+            if (liveDiscountAmount > 0) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Discount applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
+                    Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            // Compute live totals before rendering rows that depend on them
+            var advanceFocused by remember { mutableStateOf(false) }
+            val liveAdvance = editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+            val liveTotal = (bill.subtotal + liveTaxAmount - liveDiscountAmount).coerceAtLeast(0.0)
+
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.3f))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text("₹${bill.totalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text("₹${liveTotal.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             }
-            if (bill.advancePayment > 0) SummaryRow("Advance paid", bill.advancePayment)
-            val totalReceived = bill.totalPaid + bill.advancePayment
-            if (bill.totalPaid > 0) SummaryRow("Payments received", bill.totalPaid)
+
+            // ── Editable advance paid row ─────────────────────────────────────
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (advanceFocused) DreamlandGold.copy(alpha = 0.05f) else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (advanceFocused) DreamlandGold.copy(alpha = 0.5f) else Color.Transparent,
+                        RoundedCornerShape(6.dp),
+                    )
+                    .padding(horizontal = if (advanceFocused) 8.dp else 0.dp, vertical = if (advanceFocused) 4.dp else 0.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    if (!advanceFocused) {
+                        Text("✎", color = DreamlandMuted.copy(alpha = 0.35f), fontSize = 9.sp)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "₹",
+                        color = if (advanceFocused) DreamlandGold else DreamlandMuted,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (advanceFocused) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    BasicTextField(
+                        value = editableAdvancePaid,
+                        onValueChange = onAdvancePaidChange,
+                        singleLine = true,
+                        cursorBrush = SolidColor(DreamlandOnDark),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(
+                            color = if (advanceFocused) DreamlandOnDark else DreamlandMuted,
+                            textAlign = TextAlign.End,
+                            fontWeight = if (advanceFocused) FontWeight.SemiBold else FontWeight.Normal,
+                        ),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onAdvancePaidSave() }),
+                        modifier = Modifier
+                            .width(70.dp)
+                            .onFocusChanged { fs ->
+                                advanceFocused = fs.isFocused
+                                if (!fs.isFocused) onAdvancePaidSave()
+                            },
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterEnd) {
+                                if (editableAdvancePaid.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
+                                inner()
+                            }
+                        },
+                    )
+                }
+            }
+            // Always use field values (previewCash/Bank are pre-filled from saved transactions
+            // so they equal bill.totalPaid initially; clearing a field correctly shows 0)
+            val effectiveReceived = liveAdvance + previewCash + previewBank
+            if (previewCash > 0) SummaryRow("Cash", previewCash)
+            if (previewBank > 0) SummaryRow("Bank", previewBank)
+            val effectivePending = (liveTotal - effectiveReceived).coerceAtLeast(0.0)
             // Overpayment warning
-            if (totalReceived > bill.totalAmount && bill.totalAmount > 0) {
+            if (effectiveReceived > bill.totalAmount && bill.totalAmount > 0) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -591,21 +888,35 @@ internal fun BillSummaryCard(bill: Bill) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "⚠ Payments exceed total by ₹${(totalReceived - bill.totalAmount).fmtAmt()}",
+                        "⚠ Payments exceed total by ₹${(effectiveReceived - bill.totalAmount).fmtAmt()}",
                         color = Color(0xFFEF5350),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
-            if (bill.pendingAmount > 0) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (effectivePending > 0) {
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFEF5350).copy(alpha = 0.08f))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text("Balance Due", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
-                    Text("₹${bill.pendingAmount.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("₹${effectivePending.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             } else if (bill.totalAmount > 0) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Balance Due", color = if (totalReceived > bill.totalAmount) Color(0xFFEF5350) else Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF4CAF50).copy(alpha = 0.08f))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Balance Due", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
                     Text("PAID", color = Color(0xFF4CAF50), fontWeight = FontWeight.Bold)
                 }
             }
@@ -799,29 +1110,34 @@ private fun SimplePaymentField(
     onAmountChange: (String) -> Unit,
     onSave: () -> Unit,
 ) {
+    var focused by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 10.dp),
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (focused) DreamlandGold.copy(alpha = 0.04f) else Color.Transparent)
+            .padding(vertical = 12.dp, horizontal = if (focused) 6.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             label,
-            color = DreamlandMuted,
+            color = if (focused) DreamlandOnDark else DreamlandMuted,
             style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
+            fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal,
             letterSpacing = 1.sp,
             modifier = Modifier.weight(1f),
         )
-        Text("₹", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+        Text("₹", color = if (focused) DreamlandGold else DreamlandMuted, style = MaterialTheme.typography.bodyMedium, fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal)
         Spacer(Modifier.width(4.dp))
         BasicTextField(
             value = amount,
             onValueChange = onAmountChange,
             singleLine = true,
+            cursorBrush = SolidColor(DreamlandOnDark),
             textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = DreamlandOnDark,
+                color = if (amount.isNotEmpty()) DreamlandOnDark else DreamlandMuted,
                 textAlign = TextAlign.End,
+                fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal,
             ),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = {
@@ -830,6 +1146,7 @@ private fun SimplePaymentField(
             modifier = Modifier
                 .width(80.dp)
                 .onFocusChanged { focusState ->
+                    focused = focusState.isFocused
                     if (!focusState.isFocused && (amount.toDoubleOrNull() ?: 0.0) > 0) onSave()
                 },
             decorationBox = { inner ->
@@ -1184,6 +1501,63 @@ private fun ConfirmPaymentDialogUI(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// ── Guest Picker Dialog ───────────────────────────────────────────────────────
+
+@Composable
+private fun GuestPickerDialog(
+    guests: List<com.example.dreamland_reception.ui.viewmodel.GuestNameOption>,
+    currentName: String,
+    onSelect: (com.example.dreamland_reception.ui.viewmodel.GuestNameOption) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            modifier = Modifier
+                .widthIn(min = 320.dp, max = 440.dp)
+                .fillMaxWidth(0.38f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .padding(24.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("SELECT BILL NAME", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                Text("Choose who to generate the bill for", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+                if (guests.isEmpty()) {
+                    Text("No guests found", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        guests.forEach { guest ->
+                            val isSelected = guest.name == currentName
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSelected) DreamlandGold.copy(alpha = 0.1f) else DreamlandForestElevated)
+                                    .border(1.dp, if (isSelected) DreamlandGold else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .clickable { onSelect(guest) }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(guest.name, color = DreamlandOnDark, fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal, style = MaterialTheme.typography.bodyMedium)
+                                    if (guest.phone.isNotBlank()) Text(guest.phone, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                                    Text("Room ${guest.roomNumber}", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                                }
+                                if (isSelected) Text("✓", color = DreamlandGold, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Cancel", color = DreamlandMuted)
                 }
             }
         }

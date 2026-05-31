@@ -177,7 +177,13 @@ class DashboardViewModel(
             }
         }
         roomsJob = viewModelScope.launch {
+            var prevNeedsCleaningCount = -1
             roomInstanceRepo.listenByHotel(hotelId).collect { rooms ->
+                val newCount = rooms.count { it.needsCleaning }
+                if (prevNeedsCleaningCount >= 0 && newCount > prevNeedsCleaningCount) {
+                    runCatching { com.example.dreamland_reception.ui.notification.NotificationManager.playSound() }
+                }
+                prevNeedsCleaningCount = newCount
                 _rooms.value = rooms
                 recompute(date, isToday = true)
             }
@@ -254,7 +260,7 @@ class DashboardViewModel(
             total = rooms.size,
             available = rooms.count { it.status == "AVAILABLE" && it.id !in activeRoomIds },
             occupied = activeRoomIds.size,
-            cleaning = rooms.count { it.status == "CLEANING" },
+            cleaning = rooms.count { it.needsCleaning },
             maintenance = rooms.count { it.status == "MAINTENANCE" },
         )
 
@@ -331,13 +337,14 @@ class DashboardViewModel(
             ))
         }
 
-        val cleaningCount = rooms.count { it.status == "CLEANING" }
+        val cleaningCount = rooms.count { it.needsCleaning }
         if (cleaningCount > 0) {
+            val roomNums = rooms.filter { it.needsCleaning }.joinToString(", ") { it.roomNumber }
             alerts.add(DashboardAlert(
                 id = "cleaning_rooms", type = AlertType.CLEANING_ROOM,
-                title = "$cleaningCount Room${if (cleaningCount > 1) "s" else ""} Awaiting Cleaning",
-                subtitle = "Mark as available once housekeeping is done",
-                priority = "LOW",
+                title = "$cleaningCount Room${if (cleaningCount > 1) "s need" else " needs"} cleaning",
+                subtitle = "Room${if (cleaningCount > 1) "s" else ""} $roomNums — mark clean when done",
+                priority = "HIGH",
             ))
         }
 

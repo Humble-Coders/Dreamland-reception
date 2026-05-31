@@ -18,6 +18,8 @@ interface BillRepository {
     suspend fun updateTransactions(id: String, transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTaxDiscount(id: String, taxEnabled: Boolean, taxPercentage: Double, discountType: String, discountValue: Double, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
     suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
+    suspend fun updateGuestName(id: String, name: String)
+    suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String)
 }
 
 object FirestoreBillRepository : BillRepository {
@@ -163,6 +165,7 @@ object FirestoreBillRepository : BillRepository {
         quantity = (get("quantity") as? Long)?.toInt() ?: 1,
         unitPrice = (get("unitPrice") as? Double) ?: 0.0,
         total = (get("total") as? Double) ?: 0.0,
+        taxPercentage = (get("taxPercentage") as? Double) ?: 0.0,
         refId = get("refId") as? String ?: "",
         notes = get("notes") as? String ?: "",
     )
@@ -179,6 +182,19 @@ object FirestoreBillRepository : BillRepository {
         col.document(id).update(mapOf(
             "checkInDate" to checkIn,
             "checkOutDate" to checkOut,
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
+    override suspend fun updateGuestName(id: String, name: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("guestName" to name, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "advancePayment" to advancePayment,
+            "pendingAmount" to pendingAmount,
+            "status" to status,
             "updatedAt" to Date(),
         )).get(); Unit
     }
@@ -217,6 +233,7 @@ object FirestoreBillRepository : BillRepository {
         "quantity" to quantity,
         "unitPrice" to unitPrice,
         "total" to total,
+        "taxPercentage" to taxPercentage,
         "refId" to refId,
         "notes" to notes,
     )

@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -66,9 +68,23 @@ fun CheckOutDialog(
     // Navigate to Billing after successful checkout
     LaunchedEffect(state.navigateToBilling) {
         if (state.navigateToBilling) {
+            if (state.selectedBillGuestName.isNotBlank()) {
+                com.example.dreamland_reception.DreamlandAppInitializer
+                    .getStayBillingViewModel()
+                    .setPendingGuestName(state.selectedBillGuestName)
+            }
             onNavigateToBilling(state.checkedOutStayId)
             vm.onNavigateToBillingHandled()
         }
+    }
+
+    // Bill name picker — shown after checkout completes
+    if (state.billNamePickerOpen) {
+        BillNamePickerDialog(
+            options = state.billNameOptions,
+            onSelect = { name -> vm.selectBillGuestName(name) },
+            onDismiss = { vm.dismissBillNamePicker() },
+        )
     }
 
     if (!state.isOpen) return
@@ -136,8 +152,8 @@ fun CheckOutDialog(
                             Text(
                                 when {
                                     state.lateCheckoutCharge <= 0 -> "Guest is checking out past the scheduled checkout time."
-                                    state.lateChargeType == "ROOM_RATE" -> "Room charges of ₹${state.lateCheckoutCharge.toLong()} will be added for the extra stay."
-                                    else -> "Guest is checking out past the scheduled time. Late checkout charge of ₹${state.lateCheckoutCharge.toLong()} will be added."
+                                    state.lateChargeType == "ROOM_RATE" -> "Room charges of ₹${"%.2f".format(state.lateCheckoutCharge)} will be added for the extra stay."
+                                    else -> "Guest is checking out past the scheduled time. Late checkout charge of ₹${"%.2f".format(state.lateCheckoutCharge)} will be added."
                                 },
                                 color = Color(0xFFEF5350).copy(alpha = 0.85f),
                                 style = MaterialTheme.typography.bodySmall,
@@ -164,7 +180,7 @@ fun CheckOutDialog(
                                             ),
                                         )
                                         Text(
-                                            "Late check-out fee  ₹${state.flatLateCheckoutFee.toLong()}",
+                                            "Late check-out fee  ₹${"%.2f".format(state.flatLateCheckoutFee)}",
                                             color = Color(0xFFEF5350).copy(alpha = 0.85f),
                                             style = MaterialTheme.typography.bodySmall,
                                         )
@@ -184,7 +200,7 @@ fun CheckOutDialog(
                                             ),
                                         )
                                         Text(
-                                            "Room charges (1 night)  ₹${state.roomPricePerNight.toLong()}",
+                                            "Room charges (1 night)  ₹${"%.2f".format(state.roomPricePerNight)}",
                                             color = Color(0xFFEF5350).copy(alpha = 0.85f),
                                             style = MaterialTheme.typography.bodySmall,
                                         )
@@ -205,10 +221,99 @@ fun CheckOutDialog(
 
                 Spacer(Modifier.height(20.dp))
 
-                // ── Group rooms selection (shown only for group bookings) ───
-                if (state.groupStays.size > 1) {
-                    GroupRoomsSection(state = state, vm = vm)
+                // ── Step 1: Room selection (group only) ────────────────────
+                if (state.groupStays.size > 1 && state.checkoutStep == 1) {
+                    Text(
+                        "SELECT ROOMS TO CHECK OUT",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = DreamlandGold,
+                        letterSpacing = 1.5.sp,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    state.stay?.let { stay ->
+                        Text(
+                            "Room ${stay.roomNumber} is selected by default. Check additional rooms to include.",
+                            color = DreamlandMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    // Full-width checkbox list
+                    state.groupStays.forEach { gs ->
+                        val checked = gs.id in state.checkedGroupStayIds
+                        val bill = state.groupBills[gs.id]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (checked) DreamlandGold.copy(alpha = 0.06f) else DreamlandForestElevated)
+                                .clickable { vm.toggleGroupStayCheck(gs.id) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                onCheckedChange = { vm.toggleGroupStayCheck(gs.id) },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = DreamlandGold,
+                                    uncheckedColor = DreamlandMuted.copy(alpha = 0.4f),
+                                    checkmarkColor = Color(0xFF0D1F17),
+                                ),
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text("Room ${gs.roomNumber}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                Text(gs.guestName, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (bill != null) {
+                                Text("₹${"%.2f".format(bill.totalAmount)}", color = if (checked) DreamlandGold else DreamlandMuted, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "${state.checkedGroupStayIds.size} of ${state.groupStays.size} rooms selected",
+                        color = DreamlandMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
                     Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = { vm.closeCheckOut() }, modifier = Modifier.weight(1f)) {
+                            Text("Cancel", color = DreamlandMuted)
+                        }
+                        Button(
+                            onClick = { vm.setCheckoutStep(2) },
+                            enabled = state.checkedGroupStayIds.isNotEmpty(),
+                            modifier = Modifier.weight(2f).height(52.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                            shape = RoundedCornerShape(10.dp),
+                        ) {
+                            Text("Continue →", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        }
+                    }
+                    return@Column  // skip step 2 content
+                }
+
+                // ── Step 2: Bill summary + confirm ─────────────────────────
+                if (state.groupStays.size > 1) {
+                    // Back + selected rooms summary
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = { vm.setCheckoutStep(1) },
+                            contentPadding = PaddingValues(horizontal = 0.dp),
+                        ) {
+                            Text("← Back", color = DreamlandGold, style = MaterialTheme.typography.labelMedium)
+                        }
+                        Spacer(Modifier.weight(1f))
+                        val selected = state.groupStays.filter { it.id in state.checkedGroupStayIds }
+                        Text(
+                            "Rooms: ${selected.joinToString(", ") { it.roomNumber }}",
+                            color = DreamlandMuted,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
 
                 // ── Bill Summary ───────────────────────────────────────────
@@ -248,6 +353,8 @@ fun CheckOutDialog(
                             if (state.ordersTotal > 0) CheckOutBillRow("Orders", state.ordersTotal)
                             val lateCharge = if (state.lateCheckoutCharge > 0) state.lateCheckoutCharge else checkedBills.sumOf { it.lateCheckOutCharge }
                             if (lateCharge > 0) CheckOutBillRow("Late Check-out", lateCharge)
+                            val totalTax = checkedBills.sumOf { it.tax }
+                            if (totalTax > 0) CheckOutBillRow("Tax", totalTax)
                             val firstBill = checkedBills.first()
                             if (firstBill.discount > 0) CheckOutBillRow("Discount", -firstBill.discount)
 
@@ -256,14 +363,14 @@ fun CheckOutDialog(
                             val displayTotal = checkedBills.sumOf { it.totalAmount } + extraLate + state.ordersTotal
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Text("₹${displayTotal.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                                Text("₹${"%.2f".format(displayTotal)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                             }
                             if (totalAmountPaid > 0) CheckOutBillRow("Already Paid", totalAmountPaid)
                             val pending = displayTotal - totalAmountPaid
                             if (pending > 0) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("Amount Due", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                                    Text("₹${pending.toLong()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text("₹${"%.2f".format(pending)}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 }
                             }
                         } else {
@@ -429,7 +536,7 @@ private fun GroupRoomsSection(state: CheckOutState, vm: StaysViewModel) {
                     }
                     if (bill != null) {
                         Text(
-                            "₹${bill.totalAmount.toLong()}",
+                            "₹${"%.2f".format(bill.totalAmount)}",
                             color = if (checked) DreamlandOnDark else DreamlandMuted,
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold,
@@ -446,7 +553,7 @@ private fun CheckOutBillRow(label: String, amount: Double) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
         Text(
-            text = if (amount < 0) "-₹${(-amount).toLong()}" else "₹${amount.toLong()}",
+            text = if (amount < 0) "-₹${"%.2f".format(-amount)}" else "₹${"%.2f".format(amount)}",
             color = DreamlandOnDark,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -499,10 +606,63 @@ private fun PendingOrderRow(order: Order, checked: Boolean, onToggle: () -> Unit
             }
         }
         Text(
-            "₹${order.totalAmount.toLong()}",
+            "₹${"%.2f".format(order.totalAmount)}",
             style = MaterialTheme.typography.bodySmall,
             color = if (checked) DreamlandMuted else DreamlandOnDark,
             fontWeight = FontWeight.SemiBold,
         )
+    }
+}
+
+// ── Bill Name Picker Dialog ───────────────────────────────────────────────────
+
+@Composable
+private fun BillNamePickerDialog(
+    options: List<Triple<String, String, String>>,  // name, phone, room
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            modifier = Modifier
+                .widthIn(min = 340.dp, max = 460.dp)
+                .fillMaxWidth(0.42f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .padding(24.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("SELECT BILL NAME", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                Text("Choose who to generate the bill for", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    options.forEach { (name, phone, room) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .border(1.dp, DreamlandGold.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                                .background(DreamlandForestElevated)
+                                .clickable { onSelect(name) }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column {
+                                Text(name, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                if (phone.isNotBlank()) Text(phone, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                                Text("Room $room", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                            }
+                            Text("✓", color = DreamlandGold, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = DreamlandMuted)
+                    }
+                }
+            }
+        }
     }
 }

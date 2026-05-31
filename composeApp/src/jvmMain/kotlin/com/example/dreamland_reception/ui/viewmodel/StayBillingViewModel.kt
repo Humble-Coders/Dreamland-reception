@@ -59,6 +59,12 @@ data class AddPaymentDialog(
     val isSaving: Boolean = false,
 )
 
+data class GuestNameOption(
+    val name: String,
+    val phone: String,
+    val roomNumber: String,
+)
+
 // ── Tax/discount dialog ───────────────────────────────────────────────────────
 
 data class TaxDiscountDialog(
@@ -110,6 +116,15 @@ data class StayBillingState(
     val error: String? = null,
     val stay: Stay? = null,
     val bill: Bill? = null,
+    val billGuestName: String = "",  // editable guest name for the bill header
+    val pendingGuestNameOverride: String = "",  // set before load(); applied on bill load then cleared
+    val editableTaxPct: String = "",         // inline-editable tax percentage in summary
+    val editableAdvancePaid: String = "",    // inline-editable advance paid in summary
+    val editableDiscountType: String = "FLAT",  // FLAT | PERCENT
+    val editableDiscountValue: String = "",      // inline-editable discount value
+    val nightsMismatchCount: Int? = null,  // non-null when ROOM nights ≠ other rooms or bill dates
+    val guestPickerOpen: Boolean = false,
+    val billGuests: List<GuestNameOption> = emptyList(),
 
     // dialogs
     val addItemDialog: AddBillItemDialog = AddBillItemDialog(),
@@ -140,7 +155,14 @@ class StayBillingViewModel(
             _state.update { it.copy(isLoading = true, error = null) }
             val bill = runCatching { billRepo.getById(billId) }.getOrNull()?.let { recalculate(it) }
             val pd = initPaymentAmountsFrom(bill)
-            _state.update { it.copy(isLoading = false, stay = null, bill = bill, addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle, error = if (bill == null) "Bill not found" else null) }
+            val override = _state.value.pendingGuestNameOverride
+            val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: ""
+            _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
+                editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
+                editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                editableDiscountType = bill?.discountType ?: "FLAT",
+                editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle, error = if (bill == null) "Bill not found" else null) }
         }
     }
 
@@ -168,8 +190,12 @@ class StayBillingViewModel(
 
                 val items = buildList {
                     if (roomCharges > 0) add(BillItem(
-                        name = "Room Charges ($nights night${if (nights > 1) "s" else ""} × ₹${roomPricePerNight.toLong()})",
+                        name = run {
+                            val catName = (room?.type ?: stay.roomCategoryName).ifBlank { null }
+                            "Room ${stay.roomNumber}${if (catName != null) " · $catName" else ""} — Room Charges ($nights night${if (nights > 1) "s" else ""} × ₹${roomPricePerNight.toLong()})"
+                        },
                         type = "ROOM", quantity = nights.toInt(), unitPrice = roomPricePerNight, total = roomCharges,
+                        taxPercentage = taxPercentage,
                     ))
                     if (breakfastCharge > 0) add(BillItem(name = "Breakfast", type = "SERVICE", quantity = 1, unitPrice = breakfastCharge, total = breakfastCharge))
                     if (stay.earlyCheckInCharge > 0) add(BillItem(name = "Early Check-in", type = "SERVICE", quantity = 1, unitPrice = stay.earlyCheckInCharge, total = stay.earlyCheckInCharge))
@@ -181,7 +207,7 @@ class StayBillingViewModel(
                         ))
                     }
                 }
-                val advance = stay.advanceAmount
+                val advance = stay.advancePaidAmount
                 val subtotal = items.sumOf { it.total }
                 val taxEnabled = taxPercentage > 0
                 val taxAmount = if (taxEnabled) subtotal * taxPercentage / 100.0 else 0.0
@@ -211,7 +237,14 @@ class StayBillingViewModel(
             }
 
             val pd = initPaymentAmountsFrom(bill)
-            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle) }
+            val override = _state.value.pendingGuestNameOverride
+            val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: stay?.guestName ?: ""
+            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
+                editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
+                editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                editableDiscountType = bill?.discountType ?: "FLAT",
+                editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle) }
         }
     }
 
@@ -228,11 +261,27 @@ class StayBillingViewModel(
     // ── Add item ──────────────────────────────────────────────────────────────
 
     fun updateDates(checkIn: java.util.Date, checkOut: java.util.Date) {
+        _state.update { it.copy(nightsMismatchCount = null) }
         val bill = _state.value.bill ?: return
-        _state.update { it.copy(bill = bill.copy(checkInDate = checkIn, checkOutDate = checkOut)) }
+        // Recalculate ROOM items based on the new number of nights
+        val nights = ChronoUnit.DAYS.between(checkIn.toInstant(), checkOut.toInstant()).coerceAtLeast(1)
+        val updatedItems = bill.items.map { item ->
+            if (item.type != "ROOM") item
+            else {
+                val newTotal = item.unitPrice * nights
+                val roomPrefix = if (item.name.contains(" — Room Charges")) item.name.substringBefore(" — Room Charges") + " — " else ""
+                val newName = "${roomPrefix}Room Charges ($nights night${if (nights != 1L) "s" else ""} × ₹${item.unitPrice.toLong()})"
+                item.copy(name = newName, quantity = nights.toInt(), total = newTotal)
+            }
+        }
+        val updatedBill = recalculate(bill.copy(checkInDate = checkIn, checkOutDate = checkOut, items = updatedItems))
+        _state.update { it.copy(bill = updatedBill) }
         if (bill.id.isBlank()) return
         launchWithGlobalLoading {
-            runCatching { billRepo.updateDates(bill.id, checkIn, checkOut) }
+            runCatching {
+                billRepo.updateDates(bill.id, checkIn, checkOut)
+                billRepo.updateItems(bill.id, updatedItems, updatedBill.subtotal, updatedBill.taxAmount, updatedBill.discountAmount, updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
         }
     }
 
@@ -310,7 +359,8 @@ class StayBillingViewModel(
         val updated = if (d.type == "ROOM") {
             val nights = qty.toIntOrNull() ?: 1
             val price = d.unitPrice.toDoubleOrNull() ?: 0.0
-            d.copy(name = "Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${price.toLong()})")
+            val roomPrefix = if (d.name.contains(" — Room Charges")) d.name.substringBefore(" — Room Charges") + " — " else ""
+            d.copy(name = "${roomPrefix}Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${price.toLong()})")
         } else d
         s.copy(editBillItemDialog = updated)
     }
@@ -320,7 +370,8 @@ class StayBillingViewModel(
         val updated = if (d.type == "ROOM") {
             val nights = d.quantity.toIntOrNull() ?: 1
             val priceVal = price.toDoubleOrNull() ?: 0.0
-            d.copy(name = "Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${priceVal.toLong()})")
+            val roomPrefix = if (d.name.contains(" — Room Charges")) d.name.substringBefore(" — Room Charges") + " — " else ""
+            d.copy(name = "${roomPrefix}Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${priceVal.toLong()})")
         } else d
         s.copy(editBillItemDialog = updated)
     }
@@ -339,15 +390,60 @@ class StayBillingViewModel(
                 else item
             }
             val totals = recalculate(bill.copy(items = updatedItems))
+            // Detect mismatches when editing a ROOM item
+            val mismatch: Int? = if (d.type == "ROOM") {
+                val dateNights = if (bill.checkInDate != null && bill.checkOutDate != null)
+                    ChronoUnit.DAYS.between(bill.checkInDate.toInstant(), bill.checkOutDate.toInstant()).toInt()
+                else null
+                val otherRoomQtys = updatedItems.filter { it.type == "ROOM" && it.id != d.itemId }.map { it.quantity }.distinct()
+                val hasCrossRoomMismatch = otherRoomQtys.isNotEmpty() && otherRoomQtys != listOf(qty)
+                val hasDateMismatch = dateNights != null && qty != dateNights
+                if (hasCrossRoomMismatch || hasDateMismatch) qty else null
+            } else null
             runCatching {
                 billRepo.updateItems(bill.id, updatedItems, totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
             }.onSuccess {
-                _state.update { s -> s.copy(bill = s.bill?.let { totals }, editBillItemDialog = EditBillItemDialog()) }
+                _state.update { s -> s.copy(bill = s.bill?.let { totals }, editBillItemDialog = EditBillItemDialog(), nightsMismatchCount = mismatch) }
             }.onFailure {
                 _state.update { it.copy(editBillItemDialog = d.copy(isSaving = false)) }
             }
         }
     }
+
+    // ── Nights mismatch actions ───────────────────────────────────────────────
+
+    fun syncAllRoomsToNights() {
+        val nights = _state.value.nightsMismatchCount ?: return
+        val bill = _state.value.bill ?: return
+        val updatedItems = bill.items.map { item ->
+            if (item.type != "ROOM") item
+            else {
+                val roomPrefix = if (item.name.contains(" — Room Charges")) item.name.substringBefore(" — Room Charges") + " — " else ""
+                item.copy(
+                    name = "${roomPrefix}Room Charges ($nights night${if (nights != 1) "s" else ""} × ₹${item.unitPrice.toLong()})",
+                    quantity = nights,
+                    total = item.unitPrice * nights,
+                )
+            }
+        }
+        val totals = recalculate(bill.copy(items = updatedItems))
+        _state.update { it.copy(bill = totals, nightsMismatchCount = null) }
+        if (bill.id.isBlank()) return
+        viewModelScope.launch {
+            runCatching { billRepo.updateItems(bill.id, updatedItems, totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status) }
+        }
+    }
+
+    fun fixCheckoutDateForNights() {
+        val bill = _state.value.bill ?: return
+        val nights = _state.value.nightsMismatchCount ?: return
+        val checkIn = bill.checkInDate ?: return
+        val newCheckOut = java.util.Date(checkIn.time + nights * 86_400_000L)
+        _state.update { it.copy(nightsMismatchCount = null) }
+        updateDates(checkIn, newCheckOut)
+    }
+
+    fun dismissNightsMismatch() = _state.update { it.copy(nightsMismatchCount = null) }
 
     // ── Add payment ───────────────────────────────────────────────────────────
 
@@ -523,6 +619,109 @@ class StayBillingViewModel(
         }
     }
 
+    // ── Guest name ───────────────────────────────────────────────────────────
+
+    fun setPendingGuestName(name: String) = _state.update { it.copy(pendingGuestNameOverride = name) }
+
+    fun payViaQr() {
+        val bill = _state.value.bill ?: return
+        val pending = (bill.totalAmount - bill.advancePayment - bill.totalPaid).coerceAtLeast(0.0)
+        if (pending <= 0) return
+        _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(bankAmount = "%.2f".format(pending))) }
+    }
+
+    fun onBillGuestName(v: String) = _state.update { it.copy(billGuestName = v) }
+
+    fun onTaxPctInline(v: String) = _state.update { it.copy(editableTaxPct = v.filter { c -> c.isDigit() || c == '.' }) }
+
+    fun saveTaxPctInline() {
+        val pct = _state.value.editableTaxPct.toDoubleOrNull() ?: return
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedItems = bill.items.map { item ->
+            if (pct > 0) item.copy(taxPercentage = if (item.type == "ROOM") pct else item.taxPercentage)
+            else item.copy(taxPercentage = 0.0)
+        }
+        val updatedBill = bill.copy(taxEnabled = pct > 0, taxPercentage = pct, items = updatedItems)
+        val totals = recalculate(updatedBill)
+        viewModelScope.launch {
+            runCatching {
+                billRepo.updateTaxDiscount(bill.id, pct > 0, pct, bill.discountType, bill.discountValue,
+                    totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
+                billRepo.updateItems(bill.id, updatedItems, totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
+            }.onSuccess { _state.update { s -> s.copy(bill = totals) } }
+        }
+    }
+
+    fun onAdvancePaidInline(v: String) = _state.update { it.copy(editableAdvancePaid = v.filter { c -> c.isDigit() || c == '.' }) }
+
+    fun saveAdvancePaidInline() {
+        val amount = _state.value.editableAdvancePaid.toDoubleOrNull() ?: return
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedBill = bill.copy(advancePayment = amount)
+        val totals = recalculate(updatedBill)
+        viewModelScope.launch {
+            runCatching { billRepo.updateAdvancePaid(bill.id, amount, totals.pendingAmount, totals.status) }
+                .onSuccess { _state.update { s -> s.copy(bill = totals) } }
+        }
+    }
+
+    fun saveBillGuestName() {
+        val name = _state.value.billGuestName.trim()
+        val billId = _state.value.bill?.id ?: return
+        if (billId.isBlank()) return
+        viewModelScope.launch {
+            runCatching { billRepo.updateGuestName(billId, name) }
+                .onSuccess { _state.update { s -> s.copy(bill = s.bill?.copy(guestName = name)) } }
+        }
+    }
+
+    fun openGuestPicker() {
+        val bill = _state.value.bill ?: return
+        viewModelScope.launch {
+            val stayIds = bill.stayIds.ifEmpty { listOfNotNull(bill.stayId.takeIf { it.isNotBlank() }) }
+            val guests = stayIds.flatMap { stayId ->
+                val stay = runCatching { stayRepo.getById(stayId) }.getOrNull()
+                    ?: return@flatMap emptyList<GuestNameOption>()
+                buildList {
+                    if (stay.guestName.isNotBlank()) {
+                        add(GuestNameOption(name = stay.guestName, phone = stay.guestPhone, roomNumber = stay.roomNumber))
+                    }
+                    stay.guests.forEach { g ->
+                        if (g.name.isNotBlank() && g.name != stay.guestName) {
+                            add(GuestNameOption(name = g.name, phone = g.phone, roomNumber = stay.roomNumber))
+                        }
+                    }
+                }
+            }.distinctBy { it.name }
+            _state.update { it.copy(guestPickerOpen = true, billGuests = guests) }
+        }
+    }
+
+    fun closeGuestPicker() = _state.update { it.copy(guestPickerOpen = false) }
+
+    fun selectBillGuest(option: GuestNameOption) {
+        _state.update { it.copy(billGuestName = option.name, guestPickerOpen = false) }
+        saveBillGuestName()
+    }
+
+    fun onDiscountTypeInline(v: String) = _state.update { it.copy(editableDiscountType = v) }
+    fun onDiscountValueInline(v: String) = _state.update { it.copy(editableDiscountValue = v.filter { c -> c.isDigit() || c == '.' }) }
+
+    fun saveDiscountInline() {
+        val type = _state.value.editableDiscountType
+        val value = _state.value.editableDiscountValue.toDoubleOrNull() ?: 0.0
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedBill = recalculate(bill.copy(discountType = type, discountValue = value))
+        _state.update { it.copy(bill = updatedBill) }
+        viewModelScope.launch {
+            runCatching {
+                billRepo.updateTaxDiscount(bill.id, bill.taxEnabled, bill.taxPercentage, type, value,
+                    updatedBill.subtotal, updatedBill.taxAmount, updatedBill.discountAmount,
+                    updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
+        }
+    }
+
     // ── Tax / Discount ────────────────────────────────────────────────────────
 
     fun openTaxDiscount() {
@@ -550,11 +749,18 @@ class StayBillingViewModel(
         if (bill.id.isBlank()) return
         _state.update { it.copy(taxDiscountDialog = d.copy(isSaving = true)) }
         launchWithGlobalLoading {
+            val newTaxRate = d.taxPercentage.toDoubleOrNull() ?: 18.0
+            val updatedItems = if (d.taxEnabled) {
+                bill.items.map { item -> if (item.type == "ROOM") item.copy(taxPercentage = newTaxRate) else item }
+            } else {
+                bill.items.map { item -> item.copy(taxPercentage = 0.0) }
+            }
             val updatedBill = bill.copy(
                 taxEnabled = d.taxEnabled,
-                taxPercentage = d.taxPercentage.toDoubleOrNull() ?: 18.0,
+                taxPercentage = newTaxRate,
                 discountType = d.discountType,
                 discountValue = d.discountValue.toDoubleOrNull() ?: 0.0,
+                items = updatedItems,
             )
             val totals = recalculate(updatedBill)
             runCatching {
@@ -612,7 +818,11 @@ class StayBillingViewModel(
 
     private fun recalculate(bill: Bill): Bill {
         val subtotal = bill.items.sumOf { it.total }
-        val taxAmount = if (bill.taxEnabled) subtotal * bill.taxPercentage / 100.0 else 0.0
+        // Use per-item tax rates when items carry them; fall back to bill-level rate if all items have 0
+        val taxAmount = if (bill.taxEnabled) {
+            val perItemTax = bill.items.sumOf { it.total * it.taxPercentage / 100.0 }
+            if (perItemTax > 0.0) perItemTax else subtotal * bill.taxPercentage / 100.0
+        } else 0.0
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0
             else -> bill.discountValue

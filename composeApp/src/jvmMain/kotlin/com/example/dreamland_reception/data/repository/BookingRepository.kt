@@ -132,6 +132,15 @@ object FirestoreBookingRepository : BookingRepository {
 
     private fun com.google.cloud.firestore.DocumentSnapshot.toBooking() = runCatching {
         val guestDetails = get("guestDetails") as? Map<*, *>
+        val allGuests = (get("allGuests") as? List<*>)?.mapNotNull { entry ->
+            (entry as? Map<*, *>)?.let {
+                com.example.dreamland_reception.data.model.GuestDetail(
+                    name = it["name"] as? String ?: "",
+                    phone = it["phone"] as? String ?: "",
+                    idProofVerified = it["idProofVerified"] as? Boolean ?: false,
+                )
+            }
+        } ?: emptyList()
         val guests = get("guests") as? Map<*, *>
         val options = get("options") as? Map<*, *>
         val breakfast = options?.get("breakfast") as? Map<*, *>
@@ -145,6 +154,7 @@ object FirestoreBookingRepository : BookingRepository {
             userName = getString("userName") ?: "",
             guestName = guestDetails?.get("name") as? String ?: "",
             guestPhone = guestDetails?.get("phone") as? String ?: "",
+            allGuestDetails = allGuests,
             roomCategoryId = getString("roomCategoryId") ?: "",
             roomCategoryName = getString("roomCategoryName") ?: "",
             roomInstanceId = getString("roomInstanceId") ?: "",
@@ -182,6 +192,9 @@ object FirestoreBookingRepository : BookingRepository {
             "name" to guestName,
             "phone" to guestPhone,
         ),
+        "allGuests" to allGuestDetails.map { g ->
+            mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified)
+        },
         "guests" to mapOf(
             "adults" to adults,
             "children" to children,

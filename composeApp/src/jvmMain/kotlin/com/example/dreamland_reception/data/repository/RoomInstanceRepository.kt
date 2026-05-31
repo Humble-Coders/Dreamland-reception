@@ -15,6 +15,7 @@ interface RoomInstanceRepository {
     suspend fun getAvailable(): List<RoomInstance>
     suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean = false, includeCleaning: Boolean = false): List<RoomInstance>
     suspend fun updateStatus(id: String, status: String, currentStayId: String? = null)
+    suspend fun markNeedsCleaning(id: String, needsCleaning: Boolean)
     fun listenByHotel(hotelId: String): Flow<List<RoomInstance>>
 }
 
@@ -52,6 +53,10 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
         col.document(id).update(updates).get(); Unit
     }
 
+    override suspend fun markNeedsCleaning(id: String, needsCleaning: Boolean) = withContext(Dispatchers.IO) {
+        col.document(id).update("needsCleaning", needsCleaning).get(); Unit
+    }
+
     override fun listenByHotel(hotelId: String): Flow<List<RoomInstance>> = callbackFlow {
         val registration = col.whereEqualTo("hotelId", hotelId)
             .addSnapshotListener { snapshot, error ->
@@ -70,6 +75,7 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
             categoryName = getString("categoryName") ?: "",
             roomNumber = getString("roomNumber") ?: "",
             status = getString("status") ?: "AVAILABLE",
+            needsCleaning = getBoolean("needsCleaning") ?: false,
             currentStayId = getString("currentStayId"),
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
         )

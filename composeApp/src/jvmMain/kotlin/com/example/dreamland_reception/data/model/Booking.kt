@@ -2,15 +2,22 @@ package com.example.dreamland_reception.data.model
 
 import java.util.Date
 
+data class GuestDetail(
+    val name: String = "",
+    val phone: String = "",
+    val idProofVerified: Boolean = false,
+)
+
 data class Booking(
     val id: String = "",
     val hotelId: String = "",
     val hotelName: String = "",
     val userId: String = "",
     val userName: String = "",
-    // Guest info (stored in Firestore as guestDetails map)
+    // Guest info (primary stored in Firestore guestDetails map; all guests in allGuests list)
     val guestName: String = "",
     val guestPhone: String = "",
+    val allGuestDetails: List<GuestDetail> = emptyList(),
     // Room
     val roomCategoryId: String = "",
     val roomCategoryName: String = "",

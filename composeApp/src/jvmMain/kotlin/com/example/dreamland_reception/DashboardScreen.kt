@@ -174,7 +174,6 @@ fun DashboardScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     CheckAvailabilityCard()
-                    TrendsSection(state.trendPoints)
                     QuickActionsCard(
                         onNewWalkIn = onNewWalkIn,
                         onNavigateToOrders = onNavigateToOrders,
