@@ -2,6 +2,7 @@
 
 package com.example.dreamland_reception.billing
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
@@ -38,6 +41,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -67,6 +71,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -484,6 +490,9 @@ fun StayBillingScreen(
 
     val cpd = state.confirmPaymentDialog
     if (cpd.show) ConfirmPaymentDialogUI(cpd, state.bill, vm)
+
+    val ipd = state.invoicePdf
+    if (ipd.show) InvoicePdfViewerDialog(ipd, onClose = vm::closeInvoicePdf)
 
     if (state.guestPickerOpen) {
         GuestPickerDialog(
@@ -1504,6 +1513,107 @@ private fun ConfirmPaymentDialogUI(
                 }
             }
         }
+    }
+}
+
+// ── Invoice PDF Viewer ────────────────────────────────────────────────────────
+
+@Composable
+private fun InvoicePdfViewerDialog(
+    ipd: com.example.dreamland_reception.ui.viewmodel.InvoicePdfState,
+    onClose: () -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .fillMaxHeight(0.92f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface),
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // ── Header ────────────────────────────────────────────────────
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DreamlandForestElevated)
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Receipt, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("INVOICE", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
+                        Text("Tax Invoice (PDF)", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (ipd.url.isNotBlank()) {
+                        IconButton(onClick = { openInBrowser(ipd.url) }) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in browser", tint = DreamlandGold)
+                        }
+                    }
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = DreamlandMuted)
+                    }
+                }
+
+                // ── Body ──────────────────────────────────────────────────────
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    when {
+                        ipd.isGenerating -> Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(14.dp),
+                        ) {
+                            CircularProgressIndicator(color = DreamlandGold)
+                            Text("Generating invoice…", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+                            Text("This can take a few seconds.", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                        }
+                        ipd.error != null -> Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.padding(32.dp),
+                        ) {
+                            Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFEF5350), modifier = Modifier.size(32.dp))
+                            Text("Could not generate the invoice", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold)
+                            Text(ipd.error, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                            if (ipd.url.isNotBlank()) {
+                                OutlinedButton(
+                                    onClick = { openInBrowser(ipd.url) },
+                                    border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+                                ) { Text("Open in browser") }
+                            }
+                        }
+                        else -> LazyColumn(
+                            modifier = Modifier.fillMaxSize().background(Color(0xFF20302A)),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            items(ipd.pages) { page ->
+                                Image(
+                                    bitmap = remember(page) { page.toComposeImageBitmap() },
+                                    contentDescription = "Invoice page",
+                                    contentScale = ContentScale.FillWidth,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp)),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun openInBrowser(url: String) {
+    runCatching {
+        val desktop = java.awt.Desktop.getDesktop()
+        desktop.browse(java.net.URI.create(url))
     }
 }
 

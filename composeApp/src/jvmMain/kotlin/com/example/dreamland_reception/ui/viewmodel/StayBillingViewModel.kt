@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.accounting.AccountingRepository
+import com.example.dreamland_reception.data.billing.HumbleBillEngine
 import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.BillItem
 import com.example.dreamland_reception.data.model.PaymentTransaction
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.awt.image.BufferedImage
 import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.UUID
@@ -109,6 +111,16 @@ data class ConfirmPaymentDialog(
     val done: Boolean = false,
 )
 
+// ── Invoice PDF viewer ────────────────────────────────────────────────────────
+
+data class InvoicePdfState(
+    val show: Boolean = false,
+    val isGenerating: Boolean = false,
+    val error: String? = null,
+    val url: String = "",
+    val pages: List<BufferedImage> = emptyList(),
+)
+
 // ── Main state ────────────────────────────────────────────────────────────────
 
 data class StayBillingState(
@@ -134,6 +146,7 @@ data class StayBillingState(
     val taxDiscountDialog: TaxDiscountDialog = TaxDiscountDialog(),
     val confirmPaymentDialog: ConfirmPaymentDialog = ConfirmPaymentDialog(),
     val accountingStatus: AccountingStatus = AccountingStatus.Idle,
+    val invoicePdf: InvoicePdfState = InvoicePdfState(),
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -811,8 +824,36 @@ class StayBillingViewModel(
                         _state.update { it.copy(accountingStatus = AccountingStatus.Failed(e.message ?: "Accounting sync failed")) }
                     }
             }
+
+            // Generate the branded invoice PDF and open it in the in-app viewer.
+            generateInvoicePdf(settledBill, guestPhone)
         }
     }
+
+    // ── Invoice PDF ───────────────────────────────────────────────────────────
+
+    /**
+     * Requests a branded invoice PDF from the Humble Bill Engine and renders it for the
+     * in-app viewer. Runs in its own coroutine (not [launchWithGlobalLoading]) so the
+     * ~3–15s server-side render does not block the UI behind the global dim overlay;
+     * progress is shown inside the viewer dialog instead.
+     */
+    fun generateInvoicePdf(bill: Bill, guestPhone: String) {
+        if (bill.id.isBlank()) return
+        _state.update { it.copy(invoicePdf = InvoicePdfState(show = true, isGenerating = true)) }
+        viewModelScope.launch {
+            runCatching {
+                val url = HumbleBillEngine.generateInvoiceUrl(bill, guestPhone)
+                url to HumbleBillEngine.renderPdfPages(url)
+            }.onSuccess { (url, pages) ->
+                _state.update { it.copy(invoicePdf = it.invoicePdf.copy(isGenerating = false, url = url, pages = pages)) }
+            }.onFailure { e ->
+                _state.update { it.copy(invoicePdf = it.invoicePdf.copy(isGenerating = false, error = e.message ?: "Failed to generate invoice")) }
+            }
+        }
+    }
+
+    fun closeInvoicePdf() = _state.update { it.copy(invoicePdf = InvoicePdfState()) }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
