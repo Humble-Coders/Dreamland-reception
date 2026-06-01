@@ -219,12 +219,9 @@ private fun OrderListItem(order: Order, isSelected: Boolean, onClick: () -> Unit
                     if (order.totalAmount > 0) Text("₹${order.totalAmount.toLong()}", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
             }
-            Spacer(Modifier.height(2.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(timeAgo(order.orderedAt), color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
-                if (order.assignedToName.isNotBlank()) {
-                    Text("→ ${order.assignedToName}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+            if (order.assignedToName.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text("→ ${order.assignedToName}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -284,10 +281,6 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
         HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
         Spacer(Modifier.height(12.dp))
 
-        // Meta
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(timeAgo(order.orderedAt), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-        }
         if (order.assignedToName.isNotBlank()) {
             Spacer(Modifier.height(4.dp))
             Text("→ ${order.assignedToName}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)

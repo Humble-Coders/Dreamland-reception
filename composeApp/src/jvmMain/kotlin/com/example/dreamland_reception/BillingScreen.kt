@@ -424,8 +424,23 @@ private fun BillDetailPanel(
             }
         }
 
-        // Bill summary
-        BillSummaryCard(bill)
+        // Bill summary — compute live total to cap payments correctly.
+        // Raw transaction sums may double-count (e.g. stale CASH+BANK both recorded for the same
+        // payment). Cap so cash fills the remaining balance first, bank gets only what's left.
+        val rawCash = bill.transactions.filter { it.method == "CASH" }.sumOf { it.amount }
+        val rawBank = bill.transactions.filter { it.method == "BANK" }.sumOf { it.amount }
+        val liveTaxForSummary = run {
+            val perItem = bill.items.filter { it.taxPercentage > 0 }.sumOf { it.total * it.taxPercentage / 100.0 }
+            if (perItem > 0) perItem else bill.subtotal * bill.taxPercentage / 100.0
+        }
+        val liveDiscForSummary = when (bill.discountType) {
+            "PERCENT" -> bill.subtotal * bill.discountValue / 100.0; else -> bill.discountValue
+        }
+        val liveTotalForSummary = (bill.subtotal + liveTaxForSummary - liveDiscForSummary).coerceAtLeast(0.0)
+        val remaining = (liveTotalForSummary - bill.advancePayment).coerceAtLeast(0.0)
+        val savedCash = minOf(rawCash, remaining)
+        val savedBank = minOf(rawBank, (remaining - savedCash).coerceAtLeast(0.0))
+        BillSummaryCard(bill = bill, previewCash = savedCash, previewBank = savedBank, readOnly = true)
 
         // Payments
         Text("Payments", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)

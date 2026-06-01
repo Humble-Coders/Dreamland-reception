@@ -47,6 +47,7 @@ object FirestoreFoodItemRepository : FoodItemRepository {
             name = getString("name") ?: "",
             price = getDouble("price") ?: 0.0,
             category = getString("category") ?: "",
+            taxPercentage = (get("taxPercentage") as? Number)?.toDouble() ?: 0.0,
             isAvailable = getBoolean("isAvailable") ?: true,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
         )
@@ -57,6 +58,7 @@ object FirestoreFoodItemRepository : FoodItemRepository {
         "name" to name,
         "price" to price,
         "category" to category,
+        "taxPercentage" to taxPercentage,
         "isAvailable" to isAvailable,
         "createdAt" to createdAt,
     )

@@ -1,6 +1,7 @@
 package com.example.dreamland_reception.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.repository.BillRepository
@@ -8,7 +9,9 @@ import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import java.util.Date
 
 data class CreateBillDialogState(
@@ -57,24 +60,26 @@ class BillingViewModel(
     val state: StateFlow<BillingScreenState> = _state.asStateFlow()
 
     init {
-        load()
+        startListening()
     }
 
-    fun load() {
-        launchWithGlobalLoading {
-            _state.update { it.copy(isLoading = true, error = null) }
-            runCatching { billRepo.getByHotel(AppContext.hotelId) }
-                .onSuccess { bills ->
+    private fun startListening() {
+        _state.update { it.copy(isLoading = true, error = null) }
+        viewModelScope.launch {
+            billRepo.listenByHotel(AppContext.hotelId)
+                .catch { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
+                .collect { bills ->
                     val normalized = bills.map { bill ->
-                        // Recompute all derived totals so taxAmount/totalAmount are always
-                        // consistent with the stored taxEnabled/taxPercentage/items.
-                        val subtotal = bill.items.sumOf { it.total }
-                        val taxAmount = if (bill.taxEnabled) subtotal * bill.taxPercentage / 100.0 else 0.0
+                        val perItemTax = bill.items.filter { it.taxPercentage > 0 }
+                            .sumOf { it.total * it.taxPercentage / 100.0 }
+                        val taxAmount = if (bill.taxEnabled) {
+                            if (perItemTax > 0) perItemTax else bill.subtotal * bill.taxPercentage / 100.0
+                        } else 0.0
                         val discountAmount = when (bill.discountType) {
-                            "PERCENT" -> subtotal * bill.discountValue / 100.0
+                            "PERCENT" -> bill.subtotal * bill.discountValue / 100.0
                             else -> bill.discountValue
                         }
-                        val totalAmount = (subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
+                        val totalAmount = (bill.subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
                         val pendingAmount = (totalAmount - bill.totalPaid - bill.advancePayment).coerceAtLeast(0.0)
                         val roundedPending = Math.round(pendingAmount).toDouble()
                         val correctedStatus = when {
@@ -83,7 +88,6 @@ class BillingViewModel(
                             else -> "PENDING"
                         }
                         bill.copy(
-                            subtotal = subtotal,
                             taxAmount = taxAmount,
                             discountAmount = discountAmount,
                             totalAmount = totalAmount,
@@ -91,10 +95,14 @@ class BillingViewModel(
                             status = correctedStatus,
                         )
                     }
-                    _state.update { it.copy(bills = normalized, isLoading = false) }
+                    _state.update { it.copy(bills = normalized, isLoading = false, error = null) }
                 }
-                .onFailure { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
         }
+    }
+
+    fun load() {
+        // No-op — kept for compatibility with DreamlandAppInitializer.refreshAllViewModels()
+        // Live listener already handles updates
     }
 
     fun selectBill(id: String?) = _state.update { it.copy(selectedBillId = id) }

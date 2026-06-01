@@ -46,6 +46,7 @@ object FirestoreServiceRepository : ServiceRepository {
             hotelId = getString("hotelId") ?: "",
             name = getString("name") ?: "",
             price = getDouble("price") ?: 0.0,
+            taxPercentage = (get("taxPercentage") as? Number)?.toDouble() ?: 0.0,
             isActive = getBoolean("isActive") ?: true,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
         )
@@ -55,6 +56,7 @@ object FirestoreServiceRepository : ServiceRepository {
         "hotelId" to hotelId,
         "name" to name,
         "price" to price,
+        "taxPercentage" to taxPercentage,
         "isActive" to isActive,
         "createdAt" to createdAt,
     )

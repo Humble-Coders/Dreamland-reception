@@ -27,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +52,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -98,9 +102,14 @@ import com.example.dreamland_reception.ui.viewmodel.AddBillItemDialog
 import com.example.dreamland_reception.ui.viewmodel.AddPaymentDialog
 import com.example.dreamland_reception.ui.viewmodel.EditBillItemDialog
 import com.example.dreamland_reception.ui.viewmodel.EditPaymentDialog
+import com.example.dreamland_reception.ui.viewmodel.CatalogItem
+import com.example.dreamland_reception.ui.viewmodel.StayBillingState
 import com.example.dreamland_reception.ui.viewmodel.StayBillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.TaxDiscountDialog
+import com.example.dreamland_reception.stays.AutocompleteItemField
 import com.example.dreamland_reception.stays.SimpleDatePickerDialog
+import com.example.dreamland_reception.settings.AddFoodDialogUI
+import com.example.dreamland_reception.settings.AddServiceDialogUI
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -155,6 +164,7 @@ fun StayBillingScreen(
                         value = state.billGuestName,
                         onValueChange = vm::onBillGuestName,
                         singleLine = true,
+                        cursorBrush = SolidColor(Color.White),
                         textStyle = MaterialTheme.typography.titleLarge.copy(
                             color = DreamlandOnDark, fontWeight = FontWeight.Bold,
                         ),
@@ -330,6 +340,7 @@ fun StayBillingScreen(
                             editableDiscountValue = state.editableDiscountValue,
                             onTaxPctChange = vm::onTaxPctInline,
                             onTaxPctSave = vm::saveTaxPctInline,
+                            onTaxRateSave = { old, new -> vm.saveTaxRateForGroup(old, new) },
                             onAdvancePaidChange = vm::onAdvancePaidInline,
                             onAdvancePaidSave = vm::saveAdvancePaidInline,
                             onDiscountTypeChange = vm::onDiscountTypeInline,
@@ -385,18 +396,30 @@ fun StayBillingScreen(
                             )
                         }
 
-                        // "Paid via QR" — fills BANK with the full balance due
+                        // "Paid via QR" — fills BANK with the full balance due (disabled when already PAID)
                         if (!isPreview) {
+                            val liveRateForBtn = state.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
+                            val liveTaxForBtn = bill.subtotal * liveRateForBtn / 100.0
+                            val liveDiscValForBtn = state.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+                            val liveDiscAmtForBtn = when (state.editableDiscountType) {
+                                "PERCENT" -> bill.subtotal * liveDiscValForBtn / 100.0
+                                else -> liveDiscValForBtn
+                            }
+                            val liveTotalForBtn = (bill.subtotal + liveTaxForBtn - liveDiscAmtForBtn).coerceAtLeast(0.0)
+                            val liveAdvForBtn = state.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+                            val livePendingForBtn = (liveTotalForBtn - liveAdvForBtn - (pd.cashAmount.toDoubleOrNull() ?: 0.0) - (pd.bankAmount.toDoubleOrNull() ?: 0.0)).coerceAtLeast(0.0)
+                            val hasBalanceDue = livePendingForBtn > 0
                             OutlinedButton(
                                 onClick = { vm.payViaQr() },
+                                enabled = hasBalanceDue,
                                 modifier = Modifier.fillMaxWidth().height(44.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandGold),
+                                border = BorderStroke(1.dp, if (hasBalanceDue) DreamlandGold.copy(alpha = 0.5f) else DreamlandMuted.copy(alpha = 0.2f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (hasBalanceDue) DreamlandGold else DreamlandMuted),
                             ) {
-                                Icon(Icons.Filled.CropFree, contentDescription = null, modifier = Modifier.size(16.dp), tint = DreamlandGold)
+                                Icon(Icons.Filled.CropFree, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (hasBalanceDue) DreamlandGold else DreamlandMuted)
                                 Spacer(Modifier.width(8.dp))
-                                Text("Paid via QR", fontWeight = FontWeight.SemiBold, color = DreamlandGold)
+                                Text("Paid via QR", fontWeight = FontWeight.SemiBold, color = if (hasBalanceDue) DreamlandGold else DreamlandMuted)
                             }
                         }
 
@@ -476,8 +499,26 @@ fun StayBillingScreen(
     }
 
     // ── Dialogs ───────────────────────────────────────────────────────────────
+    val settingsVm = DreamlandAppInitializer.getSettingsViewModel()
+    val settingsState by settingsVm.state.collectAsStateWithLifecycle()
+
     val d = state.addItemDialog
-    if (d.show) AddItemDialog(d, vm)
+    if (d.show) AddItemDialog(d, vm, state)
+
+    // Show Add Food Item dialog when triggered from ORDER autocomplete "+ Add as new food item"
+    if (d.showAddFoodDialog) {
+        AddFoodDialogUI(settingsState.addFoodDialog, settingsVm)
+        LaunchedEffect(settingsState.addFoodDialog.show) {
+            if (!settingsState.addFoodDialog.show) vm.onAddItemFoodDialogClosed()
+        }
+    }
+    // Show Add Service dialog when triggered from SERVICE autocomplete "+ Add as new service"
+    if (d.showAddServiceDialog) {
+        AddServiceDialogUI(settingsState.addServiceDialog, settingsVm)
+        LaunchedEffect(settingsState.addServiceDialog.show) {
+            if (!settingsState.addServiceDialog.show) vm.onAddItemServiceDialogClosed()
+        }
+    }
 
     val ed = state.editBillItemDialog
     if (ed.show) EditBillItemDialogUI(ed, vm)
@@ -489,7 +530,27 @@ fun StayBillingScreen(
     if (td.show) TaxDiscountDialogUI(td, vm)
 
     val cpd = state.confirmPaymentDialog
-    if (cpd.show) ConfirmPaymentDialogUI(cpd, state.bill, vm)
+    if (cpd.show) {
+        val bill4Dialog = state.bill
+        val liveRateD = if (bill4Dialog != null) state.editableTaxPct.toDoubleOrNull() ?: bill4Dialog.taxPercentage else 0.0
+        val liveTaxForDialog = if (bill4Dialog != null) bill4Dialog.subtotal * liveRateD / 100.0 else 0.0
+        val liveTotalForDialog = if (bill4Dialog != null) {
+            val liveDiscVD = state.editableDiscountValue.toDoubleOrNull() ?: bill4Dialog.discountValue
+            val liveDiscD = when (state.editableDiscountType) {
+                "PERCENT" -> bill4Dialog.subtotal * liveDiscVD / 100.0; else -> liveDiscVD
+            }
+            (bill4Dialog.subtotal + liveTaxForDialog - liveDiscD).coerceAtLeast(0.0)
+        } else 0.0
+        ConfirmPaymentDialogUI(
+            cpd = cpd,
+            bill = state.bill,
+            vm = vm,
+            previewCash = pd.cashAmount.toDoubleOrNull() ?: 0.0,
+            previewBank = pd.bankAmount.toDoubleOrNull() ?: 0.0,
+            liveTotalAmount = liveTotalForDialog,
+            liveTaxAmount = liveTaxForDialog,
+        )
+    }
 
     val ipd = state.invoicePdf
     if (ipd.show) InvoicePdfViewerDialog(ipd, onClose = vm::closeInvoicePdf)
@@ -503,15 +564,34 @@ fun StayBillingScreen(
         )
     }
 
-    if (showBackConfirm) BackConfirmDialog(
-        billStatus = state.bill?.status ?: "PENDING",
-        onConfirm = {
-            showBackConfirm = false
-            DreamlandAppInitializer.getBillingViewModel().load()
-            onBack()
-        },
-        onDismiss = { showBackConfirm = false },
-    )
+    if (showBackConfirm) {
+        val bill = state.bill
+        val liveStatusForBack = if (bill != null) {
+            val liveRate = state.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
+            val perItemTax = bill.items.filter { it.taxPercentage > 0 }.sumOf { it.total * it.taxPercentage / 100.0 }
+            val liveTax = if (perItemTax > 0) perItemTax else bill.subtotal * liveRate / 100.0
+            val discV = state.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+            val discA = when (state.editableDiscountType) { "PERCENT" -> bill.subtotal * discV / 100.0; else -> discV }
+            val liveTotal = (bill.subtotal + liveTax - discA).coerceAtLeast(0.0)
+            val liveAdv = state.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+            val liveReceived = liveAdv + (pd.cashAmount.toDoubleOrNull() ?: 0.0) + (pd.bankAmount.toDoubleOrNull() ?: 0.0)
+            val livePending = (liveTotal - liveReceived).coerceAtLeast(0.0)
+            when {
+                livePending <= 0 && liveTotal > 0 -> "PAID"
+                liveReceived > 0 -> "PARTIAL"
+                else -> "PENDING"
+            }
+        } else "PENDING"
+        BackConfirmDialog(
+            billStatus = liveStatusForBack,
+            onConfirm = {
+                showBackConfirm = false
+                DreamlandAppInitializer.getBillingViewModel().load()
+                onBack()
+            },
+            onDismiss = { showBackConfirm = false },
+        )
+    }
 }
 
 // ── Sub-composables ───────────────────────────────────────────────────────────
@@ -611,6 +691,8 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onDelete: () 
                 Text(item.name, color = DreamlandOnDark, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
                 if (item.notes.isNotBlank()) Text(item.notes, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
                 Text("${item.quantity} × ₹${item.unitPrice.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                if (item.taxPercentage > 0)
+                    Text("Tax ${item.taxPercentage.toInt()}%", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
             }
             Text("₹${item.total.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
             if (!readOnly) {
@@ -685,12 +767,14 @@ internal fun BillSummaryCard(
     bill: Bill,
     previewCash: Double = 0.0,
     previewBank: Double = 0.0,
+    readOnly: Boolean = false,
     editableTaxPct: String = "",
     editableAdvancePaid: String = "",
     editableDiscountType: String = "FLAT",
     editableDiscountValue: String = "",
     onTaxPctChange: (String) -> Unit = {},
     onTaxPctSave: () -> Unit = {},
+    onTaxRateSave: (oldRate: Double, newRate: Double) -> Unit = { _, _ -> },
     onAdvancePaidChange: (String) -> Unit = {},
     onAdvancePaidSave: () -> Unit = {},
     onDiscountTypeChange: (String) -> Unit = {},
@@ -706,27 +790,92 @@ internal fun BillSummaryCard(
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
             SummaryRow("Subtotal", bill.subtotal)
 
-            // ── Editable tax percentage row ───────────────────────────────────
+            // ── Tax rows — per-rate when mixed, single editable pill when uniform ──
+            val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
+            val hasMultipleRates = taxByRate.size > 1
             val liveRate = editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-            val liveTaxAmount = if (liveRate > 0) bill.subtotal * liveRate / 100.0 else 0.0
+            val liveTaxAmount = if (hasMultipleRates) {
+                taxByRate.entries.sumOf { (rate, items) -> items.sumOf { it.total * rate / 100.0 } }
+            } else {
+                if (liveRate > 0) bill.subtotal * liveRate / 100.0 else 0.0
+            }
             var taxFocused by remember { mutableStateOf(false) }
-            if (bill.taxEnabled || liveRate > 0 || onTaxPctChange != {}) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+
+            if (readOnly) {
+                // Read-only tax display — no editable pills
+                if (hasMultipleRates) {
+                    taxByRate.forEach { (rate, rateItems) ->
+                        val rateAmt = rateItems.sumOf { it.total * rate / 100.0 }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Tax (${rate.toInt()}%)", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else if (bill.taxEnabled || liveRate > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Tax (${liveRate.toInt()}%)", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("₹${liveTaxAmount.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            } else if (hasMultipleRates) {
+                // One editable pill per distinct tax rate
+                taxByRate.forEach { (rate, rateItems) ->
+                    var rateStr by remember(rate) { mutableStateOf("%.0f".format(rate)) }
+                    var rateFocused by remember { mutableStateOf(false) }
+                        val rateAmt = rateItems.sumOf { it.total * (rateStr.toDoubleOrNull() ?: rate) / 100.0 }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Tax", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .border(1.dp, if (rateFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                        .background(if (rateFocused) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    BasicTextField(
+                                        value = rateStr,
+                                        onValueChange = { rateStr = it.filter { c -> c.isDigit() || c == '.' } },
+                                        singleLine = true,
+                                        cursorBrush = SolidColor(DreamlandOnDark),
+                                        textStyle = MaterialTheme.typography.bodySmall.copy(
+                                            color = if (rateFocused) DreamlandOnDark else DreamlandMuted,
+                                            textAlign = TextAlign.End,
+                                            fontWeight = if (rateFocused) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                        keyboardActions = KeyboardActions(onDone = { onTaxRateSave(rate, rateStr.toDoubleOrNull() ?: rate) }),
+                                        modifier = Modifier.width(30.dp).onFocusChanged { fs ->
+                                            rateFocused = fs.isFocused
+                                            if (!fs.isFocused) onTaxRateSave(rate, rateStr.toDoubleOrNull() ?: rate)
+                                        },
+                                        decorationBox = { inner ->
+                                            Box(contentAlignment = Alignment.CenterEnd) {
+                                                if (rateStr.isEmpty()) Text("0", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
+                                                inner()
+                                            }
+                                        },
+                                    )
+                                    Text("%", color = if (rateFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                                }
+                                Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+            } else if (bill.taxEnabled || liveRate > 0) {
+                // Single uniform rate — existing editable pill
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Tax", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // Editable percentage pill
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
-                                .border(
-                                    1.dp,
-                                    if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f),
-                                    RoundedCornerShape(6.dp),
-                                )
+                                .border(1.dp, if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
                                 .background(if (taxFocused) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
                                 .padding(horizontal = 8.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -743,15 +892,13 @@ internal fun BillSummaryCard(
                                 ),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = { onTaxPctSave() }),
-                                modifier = Modifier
-                                    .width(30.dp)
-                                    .onFocusChanged { fs ->
-                                        taxFocused = fs.isFocused
-                                        if (!fs.isFocused) onTaxPctSave()
-                                    },
+                                modifier = Modifier.width(30.dp).onFocusChanged { fs ->
+                                    taxFocused = fs.isFocused
+                                    if (!fs.isFocused) onTaxPctSave()
+                                },
                                 decorationBox = { inner ->
                                     Box(contentAlignment = Alignment.CenterEnd) {
-                                        if (editableTaxPct.isEmpty()) Text("0", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
+                                        if (editableTaxPct.isEmpty()) Text("%.0f".format(liveRate), color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
                                         inner()
                                     }
                                 },
@@ -769,46 +916,55 @@ internal fun BillSummaryCard(
                 "PERCENT" -> bill.subtotal * liveDiscountValue / 100.0
                 else -> liveDiscountValue
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                // Compact FLAT | % pills
-                listOf("FLAT" to "₹", "PERCENT" to "%").forEach { (key, label) ->
-                    val selected = editableDiscountType == key
-                    Box(
-                        modifier = Modifier
-                            .height(24.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
-                            .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                            .clickable { onDiscountTypeChange(key) }
-                            .padding(horizontal = 8.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 11.sp)
+            if (readOnly) {
+                if (liveDiscountAmount > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
                     }
                 }
-                // Discount value field
-                BasicTextField(
-                    value = editableDiscountValue,
-                    onValueChange = onDiscountValueChange,
-                    singleLine = true,
-                    cursorBrush = SolidColor(DreamlandOnDark),
-                    textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandOnDark, textAlign = TextAlign.End),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { onDiscountSave() }),
-                    modifier = Modifier.width(56.dp).onFocusChanged { if (!it.isFocused) onDiscountSave() },
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterEnd) {
-                            if (editableDiscountValue.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
-                            inner()
+            } else {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    // Compact FLAT | % pills
+                    listOf("FLAT" to "₹", "PERCENT" to "%").forEach { (key, label) ->
+                        val selected = editableDiscountType == key
+                        Box(
+                            modifier = Modifier
+                                .height(24.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                                .clickable { onDiscountTypeChange(key) }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 11.sp)
                         }
-                    },
-                )
-            }
-            if (liveDiscountAmount > 0) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Discount applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
-                    Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                    // Discount value field
+                    BasicTextField(
+                        value = editableDiscountValue,
+                        onValueChange = onDiscountValueChange,
+                        singleLine = true,
+                        cursorBrush = SolidColor(DreamlandOnDark),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandOnDark, textAlign = TextAlign.End),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onDiscountSave() }),
+                        modifier = Modifier.width(56.dp).onFocusChanged { if (!it.isFocused) onDiscountSave() },
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterEnd) {
+                                if (editableDiscountValue.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+                                inner()
+                            }
+                        },
+                    )
+                }
+                if (liveDiscountAmount > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Discount applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
+                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
 
@@ -823,60 +979,73 @@ internal fun BillSummaryCard(
                 Text("₹${liveTotal.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             }
 
-            // ── Editable advance paid row ─────────────────────────────────────
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (advanceFocused) DreamlandGold.copy(alpha = 0.05f) else Color.Transparent)
-                    .border(
-                        1.dp,
-                        if (advanceFocused) DreamlandGold.copy(alpha = 0.5f) else Color.Transparent,
-                        RoundedCornerShape(6.dp),
-                    )
-                    .padding(horizontal = if (advanceFocused) 8.dp else 0.dp, vertical = if (advanceFocused) 4.dp else 0.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                    if (!advanceFocused) {
-                        Text("✎", color = DreamlandMuted.copy(alpha = 0.35f), fontSize = 9.sp)
+            // ── Advance paid row ─────────────────────────────────────────────
+            if (readOnly) {
+                if (liveAdvance > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("₹", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.width(2.dp))
+                            Text("%.2f".format(liveAdvance), color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "₹",
-                        color = if (advanceFocused) DreamlandGold else DreamlandMuted,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = if (advanceFocused) FontWeight.SemiBold else FontWeight.Normal,
-                    )
-                    Spacer(Modifier.width(2.dp))
-                    BasicTextField(
-                        value = editableAdvancePaid,
-                        onValueChange = onAdvancePaidChange,
-                        singleLine = true,
-                        cursorBrush = SolidColor(DreamlandOnDark),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(
-                            color = if (advanceFocused) DreamlandOnDark else DreamlandMuted,
-                            textAlign = TextAlign.End,
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (advanceFocused) DreamlandGold.copy(alpha = 0.05f) else Color.Transparent)
+                        .border(
+                            1.dp,
+                            if (advanceFocused) DreamlandGold.copy(alpha = 0.5f) else Color.Transparent,
+                            RoundedCornerShape(6.dp),
+                        )
+                        .padding(horizontal = if (advanceFocused) 8.dp else 0.dp, vertical = if (advanceFocused) 4.dp else 0.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        if (!advanceFocused) {
+                            Text("✎", color = DreamlandMuted.copy(alpha = 0.35f), fontSize = 9.sp)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "₹",
+                            color = if (advanceFocused) DreamlandGold else DreamlandMuted,
+                            style = MaterialTheme.typography.bodySmall,
                             fontWeight = if (advanceFocused) FontWeight.SemiBold else FontWeight.Normal,
-                        ),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { onAdvancePaidSave() }),
-                        modifier = Modifier
-                            .width(70.dp)
-                            .onFocusChanged { fs ->
-                                advanceFocused = fs.isFocused
-                                if (!fs.isFocused) onAdvancePaidSave()
+                        )
+                        Spacer(Modifier.width(2.dp))
+                        BasicTextField(
+                            value = editableAdvancePaid,
+                            onValueChange = onAdvancePaidChange,
+                            singleLine = true,
+                            cursorBrush = SolidColor(DreamlandOnDark),
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
+                                color = if (advanceFocused) DreamlandOnDark else DreamlandMuted,
+                                textAlign = TextAlign.End,
+                                fontWeight = if (advanceFocused) FontWeight.SemiBold else FontWeight.Normal,
+                            ),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { onAdvancePaidSave() }),
+                            modifier = Modifier
+                                .width(70.dp)
+                                .onFocusChanged { fs ->
+                                    advanceFocused = fs.isFocused
+                                    if (!fs.isFocused) onAdvancePaidSave()
+                                },
+                            decorationBox = { inner ->
+                                Box(contentAlignment = Alignment.CenterEnd) {
+                                    if (editableAdvancePaid.isEmpty()) Text("%.2f".format(liveAdvance), color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
+                                    inner()
+                                }
                             },
-                        decorationBox = { inner ->
-                            Box(contentAlignment = Alignment.CenterEnd) {
-                                if (editableAdvancePaid.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
-                                inner()
-                            }
-                        },
-                    )
+                        )
+                    }
                 }
             }
             // Always use field values (previewCash/Bank are pre-filled from saved transactions
@@ -886,7 +1055,7 @@ internal fun BillSummaryCard(
             if (previewBank > 0) SummaryRow("Bank", previewBank)
             val effectivePending = (liveTotal - effectiveReceived).coerceAtLeast(0.0)
             // Overpayment warning
-            if (effectiveReceived > bill.totalAmount && bill.totalAmount > 0) {
+            if (effectiveReceived > liveTotal && liveTotal > 0) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -897,7 +1066,7 @@ internal fun BillSummaryCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "⚠ Payments exceed total by ₹${(effectiveReceived - bill.totalAmount).fmtAmt()}",
+                        "⚠ Payments exceed total by ₹${(effectiveReceived - liveTotal).fmtAmt()}",
                         color = Color(0xFFEF5350),
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
@@ -997,7 +1166,7 @@ private fun StatusBadge(status: String) {
 // ── Add Item Dialog ───────────────────────────────────────────────────────────
 
 @Composable
-private fun AddItemDialog(d: AddBillItemDialog, vm: StayBillingViewModel) {
+private fun AddItemDialog(d: AddBillItemDialog, vm: StayBillingViewModel, state: StayBillingState) {
     Dialog(
         onDismissRequest = { if (!d.isSaving) vm.closeAddItem() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1030,14 +1199,82 @@ private fun AddItemDialog(d: AddBillItemDialog, vm: StayBillingViewModel) {
                         Spacer(Modifier.width(8.dp))
                         Text("Item Details", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
                     }
+
+                    // ROOM: category + room number dropdowns
                     if (d.type == "ROOM") {
-                        BillingTextField("Room Number", d.roomNumber, onValueChange = vm::onAddItemRoomNumber)
+                        // Use Room.type as the authoritative category name source
+                        val categories = state.rooms.map { it.type }.filter { it.isNotBlank() }.distinct().sorted()
+                        DropdownField("Room Category", d.roomCategory, categories) { vm.onAddItemRoomCategory(it) }
+                        // Filter instances by the selected category's Room id
+                        val selectedRoomCat = if (d.roomCategory.isNotBlank()) state.rooms.find { it.type == d.roomCategory } else null
+                        val filteredInstances = if (selectedRoomCat == null) state.roomInstances
+                                                else state.roomInstances.filter { it.categoryId == selectedRoomCat.id }
+                        val roomNumbers = filteredInstances.map { it.roomNumber }.filter { it.isNotBlank() }.distinct().sorted()
+                        DropdownField("Room Number", d.roomNumber, roomNumbers) { num ->
+                            val inst = state.roomInstances.find { it.roomNumber == num } ?: return@DropdownField
+                            vm.onAddItemRoomInstanceSelected(inst)
+                        }
                     }
-                    BillingTextField("Name", d.name, onValueChange = vm::onAddItemName)
+
+                    // ORDER: food item autocomplete
+                    if (d.type == "ORDER") {
+                        val suggestions = state.foodItems
+                            .filter { d.nameQuery.isBlank() || it.name.contains(d.nameQuery, ignoreCase = true) }
+                            .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = it.category, isAvailable = it.isAvailable) }
+                        val allFoodNames = state.foodItems.map { it.name }.toSet()
+                        AutocompleteItemField(
+                            value = d.nameQuery,
+                            suggestions = suggestions,
+                            showSuggestions = d.showNameDropdown,
+                            onValueChange = vm::onAddItemNameQuery,
+                            onSuggestionSelected = { cat ->
+                                val item = state.foodItems.find { it.id == cat.id } ?: return@AutocompleteItemField
+                                vm.onAddItemFoodSelected(item)
+                            },
+                            onDismiss = vm::onAddItemNameDropdownDismiss,
+                            allCatalogNames = allFoodNames,
+                            onAddNew = vm::onAddItemAddNewFood,
+                            addNewLabel = "Add as new food item",
+                        )
+                    }
+
+                    // SERVICE: service autocomplete
+                    if (d.type == "SERVICE") {
+                        val svcSuggestions = state.services
+                            .filter { d.nameQuery.isBlank() || it.name.contains(d.nameQuery, ignoreCase = true) }
+                            .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = "Services", isAvailable = it.isActive) }
+                        val allSvcNames = state.services.map { it.name }.toSet()
+                        AutocompleteItemField(
+                            value = d.nameQuery,
+                            suggestions = svcSuggestions,
+                            showSuggestions = d.showNameDropdown,
+                            onValueChange = vm::onAddItemNameQuery,
+                            onSuggestionSelected = { cat ->
+                                val svc = state.services.find { it.id == cat.id } ?: return@AutocompleteItemField
+                                vm.onAddItemServiceSelected(svc)
+                            },
+                            onDismiss = vm::onAddItemNameDropdownDismiss,
+                            allCatalogNames = allSvcNames,
+                            onAddNew = vm::onAddItemAddNewService,
+                            addNewLabel = "Add as new service",
+                        )
+                    }
+
+                    // CUSTOM or ROOM: plain name field
+                    if (d.type == "ROOM" || d.type == "CUSTOM") {
+                        BillingTextField("Name", d.name, onValueChange = vm::onAddItemName)
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        BillingTextField("Quantity", d.quantity, onValueChange = vm::onAddItemQty, keyboard = KeyboardType.Number, modifier = Modifier.weight(1f))
+                        BillingTextField(if (d.type == "ROOM") "Nights" else "Quantity", d.quantity, onValueChange = vm::onAddItemQty, keyboard = KeyboardType.Number, modifier = Modifier.weight(1f))
                         BillingTextField("Unit Price (₹)", d.unitPrice, onValueChange = vm::onAddItemPrice, keyboard = KeyboardType.Decimal, modifier = Modifier.weight(1f))
                     }
+
+                    // Tax field for CUSTOM and editable override for ORDER/SERVICE
+                    if (d.type != "ROOM") {
+                        BillingTextField("Tax (%)", d.taxPct, onValueChange = vm::onAddItemTaxPct, keyboard = KeyboardType.Decimal)
+                    }
+
                     BillingTextField("Notes (optional)", d.notes, onValueChange = vm::onAddItemNotes)
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1056,6 +1293,57 @@ private fun AddItemDialog(d: AddBillItemDialog, vm: StayBillingViewModel) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DropdownField(
+    label: String,
+    value: String,
+    options: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    var fieldWidthDp by remember { mutableStateOf(0.dp) }
+    Box {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label, color = DreamlandMuted, fontSize = 13.sp) },
+            trailingIcon = {
+                Text(if (expanded) "▲" else "▼", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(end = 12.dp))
+            },
+            modifier = Modifier.fillMaxWidth().onSizeChanged {
+                fieldWidthDp = with(density) { it.width.toDp() }
+            },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = DreamlandOnDark,
+                unfocusedTextColor = DreamlandOnDark,
+                focusedBorderColor = DreamlandGold,
+                unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+            ),
+        )
+        Box(modifier = Modifier.matchParentSize().clickable { expanded = !expanded })
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.width(fieldWidthDp).background(DreamlandForestElevated),
+        ) {
+            if (options.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("No options available", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall) },
+                    onClick = { expanded = false },
+                )
+            }
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium) },
+                    onClick = { onSelect(option); expanded = false },
+                )
             }
         }
     }
@@ -1260,6 +1548,7 @@ private fun EditBillItemDialogUI(ed: EditBillItemDialog, vm: StayBillingViewMode
                     BillingTextField("Quantity", ed.quantity, onValueChange = vm::onEditItemQty, keyboard = KeyboardType.Number, modifier = Modifier.weight(1f))
                     BillingTextField("Unit Price (₹)", ed.unitPrice, onValueChange = vm::onEditItemPrice, keyboard = KeyboardType.Decimal, modifier = Modifier.weight(1f))
                 }
+                BillingTextField("Tax (%)", ed.taxPct, onValueChange = vm::onEditItemTaxPct, keyboard = KeyboardType.Decimal)
                 BillingTextField("Notes (optional)", ed.notes, onValueChange = vm::onEditItemNotes)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { vm.closeEditItem() }, modifier = Modifier.weight(1f).height(48.dp)) {
@@ -1374,6 +1663,10 @@ private fun ConfirmPaymentDialogUI(
     cpd: com.example.dreamland_reception.ui.viewmodel.ConfirmPaymentDialog,
     bill: com.example.dreamland_reception.data.model.Bill?,
     vm: StayBillingViewModel,
+    previewCash: Double = 0.0,
+    previewBank: Double = 0.0,
+    liveTotalAmount: Double = bill?.totalAmount ?: 0.0,
+    liveTaxAmount: Double = bill?.taxAmount ?: 0.0,
 ) {
     LaunchedEffect(cpd.done) {
         if (cpd.done) vm.closeConfirmPayment()
@@ -1424,29 +1717,42 @@ private fun ConfirmPaymentDialogUI(
                         ) {
                             ConfirmRow("Subtotal", "₹${bill.subtotal.fmtAmt()}", DreamlandOnDark)
                             if (bill.taxEnabled)
-                                ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${bill.taxAmount.fmtAmt()}", DreamlandOnDark)
+                                ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
                             if (bill.discountAmount > 0)
                                 ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Text("₹${bill.totalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                Text("₹${liveTotalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
                             if (bill.advancePayment > 0)
                                 ConfirmRow("Advance paid", "₹${bill.advancePayment.fmtAmt()}", Color(0xFF4CAF50))
-                            if (bill.totalPaid > 0)
+                            // Show "Payments received" only when no preview payment fields are populated
+                            // (previewCash/Bank already represent the same saved transactions)
+                            val hasPreviewPayments = previewCash > 0 || previewBank > 0
+                            if (!hasPreviewPayments && bill.totalPaid > 0)
                                 ConfirmRow("Payments received", "₹${bill.totalPaid.fmtAmt()}", Color(0xFF4CAF50))
-                            if (bill.pendingAmount > 0) {
+                            // Live payment amounts being entered now
+                            if (previewCash > 0) ConfirmRow("Cash", "₹${previewCash.fmtAmt()}", Color(0xFF4CAF50))
+                            if (previewBank > 0) ConfirmRow("Bank", "₹${previewBank.fmtAmt()}", Color(0xFF4CAF50))
+                            // Effective pending = total - advance - saved payments - currently entered
+                            // previewCash/previewBank are replacement totals (include saved transactions)
+                            // so DO NOT add bill.totalPaid — that would double-count
+                            val effectiveReceived = bill.advancePayment + previewCash + previewBank
+                            val effectivePending = (liveTotalAmount - effectiveReceived).coerceAtLeast(0.0)
+                            if (effectivePending > 0) {
                                 HorizontalDivider(color = Color(0xFFEF5350).copy(alpha = 0.3f))
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("Balance Due", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
-                                    Text("₹${bill.pendingAmount.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text("₹${effectivePending.fmtAmt()}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 }
                             }
                         }
 
                         // Status preview
-                        val willBePaid = bill.pendingAmount <= 0 && bill.totalAmount > 0
+                        val effectiveReceivedOuter = bill.advancePayment + previewCash + previewBank
+                        val effectivePendingOuter = (liveTotalAmount - effectiveReceivedOuter).coerceAtLeast(0.0)
+                        val willBePaid = effectivePendingOuter <= 0 && liveTotalAmount > 0
                         val statusColor = if (willBePaid) Color(0xFF4CAF50) else Color(0xFFFF9800)
                         val statusLabel = if (willBePaid) "PAID" else "PARTIAL"
                         val statusDesc = if (willBePaid) "Full amount received — bill will be marked as Paid" else "Balance still due — bill will be marked as Partial"

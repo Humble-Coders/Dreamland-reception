@@ -12,6 +12,7 @@ import java.util.Date
 interface RoomInstanceRepository {
     suspend fun getAll(): List<RoomInstance>
     suspend fun getById(id: String): RoomInstance?
+    suspend fun getByHotel(hotelId: String): List<RoomInstance>
     suspend fun getAvailable(): List<RoomInstance>
     suspend fun getByCategory(categoryId: String, hotelId: String, includeAssigned: Boolean = false, includeCleaning: Boolean = false): List<RoomInstance>
     suspend fun updateStatus(id: String, status: String, currentStayId: String? = null)
@@ -29,6 +30,11 @@ object FirestoreRoomInstanceRepository : RoomInstanceRepository {
 
     override suspend fun getAll(): List<RoomInstance> = withContext(Dispatchers.IO) {
         col.orderBy("roomNumber").get().get().documents.mapNotNull { it.toRoomInstance() }
+    }
+
+    override suspend fun getByHotel(hotelId: String): List<RoomInstance> = withContext(Dispatchers.IO) {
+        col.whereEqualTo("hotelId", hotelId).get().get().documents.mapNotNull { it.toRoomInstance() }
+            .sortedBy { it.roomNumber }
     }
 
     override suspend fun getById(id: String): RoomInstance? = withContext(Dispatchers.IO) {

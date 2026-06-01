@@ -215,9 +215,9 @@ class OrdersViewModel(
             val foodItems = runCatching { foodItemRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val catalog = foodItems
-                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
                 services
-                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = "Services", isAvailable = it.isActive) }
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = "Services", isAvailable = it.isActive) }
             val firstCategory = catalog.filter { it.isAvailable }.map { it.category }.distinct().firstOrNull() ?: ""
             _createOrderDialog.update { it.copy(
                 activeStays = stays,
@@ -238,9 +238,9 @@ class OrdersViewModel(
             val foodItems = runCatching { foodItemRepo.getByHotel(hotelId) }.getOrElse { return@launchWithGlobalLoading }
             val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { return@launchWithGlobalLoading }
             val catalog = foodItems
-                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = it.category.ifBlank { "Food" }, isAvailable = it.isAvailable) } +
                 services
-                .map { CatalogItem(id = it.id, name = it.name, price = it.price, category = "Services", isAvailable = it.isActive) }
+                .map { CatalogItem(id = it.id, name = it.name, price = it.price, taxPercentage = it.taxPercentage, category = "Services", isAvailable = it.isActive) }
             // Re-filter suggestions for all current items so "Add new" disappears immediately
             // for any item whose name now exists in the refreshed catalog
             _createOrderDialog.update { s ->

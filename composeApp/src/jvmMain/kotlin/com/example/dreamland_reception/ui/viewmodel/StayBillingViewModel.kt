@@ -9,13 +9,20 @@ import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.BillItem
 import com.example.dreamland_reception.data.model.PaymentTransaction
 import com.example.dreamland_reception.data.model.Stay
+import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.repository.BillRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillRepository
+import com.example.dreamland_reception.data.repository.FirestoreFoodItemRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
+import com.example.dreamland_reception.data.repository.FirestoreRoomInstanceRepository
 import com.example.dreamland_reception.data.repository.FirestoreRoomRepository
+import com.example.dreamland_reception.data.repository.FirestoreServiceRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.data.repository.FoodItemRepository
 import com.example.dreamland_reception.data.repository.OrderRepository
+import com.example.dreamland_reception.data.repository.RoomInstanceRepository
 import com.example.dreamland_reception.data.repository.RoomRepository
+import com.example.dreamland_reception.data.repository.ServiceRepository
 import com.example.dreamland_reception.data.repository.StayRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,10 +49,16 @@ data class AddBillItemDialog(
     val show: Boolean = false,
     val step: Int = 0,             // 0 = choose type, 1 = enter details
     val type: String = "CUSTOM",   // ROOM | ORDER | SERVICE | CUSTOM
-    val roomNumber: String = "",   // only used when type == ROOM
+    val roomNumber: String = "",
+    val roomCategory: String = "",
     val name: String = "",
+    val nameQuery: String = "",
+    val showNameDropdown: Boolean = false,
+    val showAddFoodDialog: Boolean = false,
+    val showAddServiceDialog: Boolean = false,
     val quantity: String = "1",
     val unitPrice: String = "",
+    val taxPct: String = "",
     val notes: String = "",
     val isSaving: Boolean = false,
 )
@@ -98,6 +111,7 @@ data class EditBillItemDialog(
     val name: String = "",
     val quantity: String = "1",
     val unitPrice: String = "",
+    val taxPct: String = "",
     val notes: String = "",
     val isSaving: Boolean = false,
 )
@@ -138,6 +152,12 @@ data class StayBillingState(
     val guestPickerOpen: Boolean = false,
     val billGuests: List<GuestNameOption> = emptyList(),
 
+    // catalog data for add-item dropdowns
+    val roomInstances: List<RoomInstance> = emptyList(),
+    val rooms: List<com.example.dreamland_reception.data.model.Room> = emptyList(),
+    val foodItems: List<com.example.dreamland_reception.data.model.FoodItem> = emptyList(),
+    val services: List<com.example.dreamland_reception.data.model.Service> = emptyList(),
+
     // dialogs
     val addItemDialog: AddBillItemDialog = AddBillItemDialog(),
     val editBillItemDialog: EditBillItemDialog = EditBillItemDialog(),
@@ -156,6 +176,9 @@ class StayBillingViewModel(
     private val stayRepo: StayRepository = FirestoreStayRepository,
     private val orderRepo: OrderRepository = FirestoreOrderRepository,
     private val roomRepo: RoomRepository = FirestoreRoomRepository,
+    private val instanceRepo: RoomInstanceRepository = FirestoreRoomInstanceRepository,
+    private val foodRepo: FoodItemRepository = FirestoreFoodItemRepository,
+    private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
     private val accountingRepo: AccountingRepository = AccountingRepository,
 ) : ViewModel() {
 
@@ -165,16 +188,25 @@ class StayBillingViewModel(
     fun loadByBillId(billId: String) {
         if (billId.isBlank()) return
         launchWithGlobalLoading {
-            _state.update { it.copy(isLoading = true, error = null) }
-            val bill = runCatching { billRepo.getById(billId) }.getOrNull()?.let { recalculate(it) }
+            _state.update { it.copy(isLoading = true, error = null, addPaymentDialog = AddPaymentDialog()) }
+            val bill = runCatching { billRepo.getById(billId) }.getOrNull()
+                ?.let { recalculate(it) }
+                ?.let { migrateRoomItemTaxRates(it) }
+                ?.let { migrateFoodServiceItemTaxRates(it) }
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: ""
+            val hotelId = AppContext.hotelId
+            val instances = runCatching { instanceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+            val allRooms = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+            val foods = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+            val svcs = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
                 editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle, error = if (bill == null) "Bill not found" else null) }
         }
     }
@@ -182,9 +214,12 @@ class StayBillingViewModel(
     fun load(stayId: String) {
         if (stayId.isBlank()) return
         launchWithGlobalLoading {
-            _state.update { it.copy(isLoading = true, error = null) }
+            _state.update { it.copy(isLoading = true, error = null, addPaymentDialog = AddPaymentDialog()) }
             val stay = runCatching { stayRepo.getById(stayId) }.getOrNull()
-            var bill = runCatching { billRepo.getByStay(stayId) }.getOrNull()?.let { recalculate(it) }
+            var bill = runCatching { billRepo.getByStay(stayId) }.getOrNull()
+                ?.let { recalculate(it) }
+                ?.let { migrateRoomItemTaxRates(it) }
+                ?.let { migrateFoodServiceItemTaxRates(it) }
 
             // For ACTIVE stays: build an in-memory preview only — no Firestore write.
             // The real bill document is created in "bills" at checkout by StaysViewModel.
@@ -252,19 +287,89 @@ class StayBillingViewModel(
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: stay?.guestName ?: ""
+            val hotelId2 = AppContext.hotelId
+            val instances2 = runCatching { instanceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
+            val allRooms2 = runCatching { roomRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
+            val foods2 = runCatching { foodRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
+            val svcs2 = runCatching { serviceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
                 editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle) }
         }
     }
 
+    private suspend fun migrateRoomItemTaxRates(bill: Bill): Bill {
+        if (bill.items.none { it.type == "ROOM" && it.taxPercentage == 0.0 }) return bill
+        val stayIds = bill.stayIds.ifEmpty { listOfNotNull(bill.stayId.takeIf { it.isNotBlank() }) }
+        val stays = stayIds.mapNotNull { id -> runCatching { stayRepo.getById(id) }.getOrNull() }
+        if (stays.isEmpty()) return bill
+        val roomTaxMap = mutableMapOf<String, Double>()
+        for (stay in stays) {
+            val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
+            if (room != null && room.taxPercentage > 0) roomTaxMap[stay.roomNumber] = room.taxPercentage
+        }
+        if (roomTaxMap.isEmpty()) return bill
+        val updatedItems = bill.items.map { item ->
+            if (item.type != "ROOM" || item.taxPercentage > 0) item
+            else {
+                val roomNum = if (item.name.startsWith("Room ")) {
+                    item.name.removePrefix("Room ").trim().split(" ", "·", "—").firstOrNull()?.trim() ?: ""
+                } else ""
+                item.copy(taxPercentage = roomTaxMap[roomNum] ?: 0.0)
+            }
+        }
+        val updatedBill = recalculate(bill.copy(items = updatedItems))
+        if (bill.id.isNotBlank()) {
+            runCatching {
+                billRepo.updateItems(bill.id, updatedItems, updatedBill.subtotal, updatedBill.taxAmount,
+                    updatedBill.discountAmount, updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
+        }
+        return updatedBill
+    }
+
+    private suspend fun migrateFoodServiceItemTaxRates(bill: Bill): Bill {
+        if (bill.items.none { (it.type == "ORDER" || it.type == "SERVICE") && it.taxPercentage == 0.0 }) return bill
+        val hotelId = bill.hotelId.ifBlank { AppContext.hotelId }
+        val foodItems = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+        val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+        val foodTaxByName = foodItems.filter { it.taxPercentage > 0 }.associate { it.name.trim().lowercase() to it.taxPercentage }
+        val serviceTaxByName = services.filter { it.taxPercentage > 0 }.associate { it.name.trim().lowercase() to it.taxPercentage }
+        var changed = false
+        val updatedItems = bill.items.map { item ->
+            if (item.taxPercentage > 0) return@map item
+            val rate = when (item.type) {
+                "ORDER"   -> foodTaxByName[item.name.trim().lowercase()]
+                "SERVICE" -> serviceTaxByName[item.name.trim().lowercase()]
+                else      -> null
+            } ?: return@map item
+            changed = true
+            item.copy(taxPercentage = rate)
+        }
+        if (!changed) return bill
+        val updatedBill = recalculate(bill.copy(items = updatedItems))
+        if (bill.id.isNotBlank()) {
+            runCatching {
+                billRepo.updateItems(bill.id, updatedItems, updatedBill.subtotal, updatedBill.taxAmount,
+                    updatedBill.discountAmount, updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
+        }
+        return updatedBill
+    }
+
     private fun initPaymentAmountsFrom(bill: Bill?): AddPaymentDialog {
         val txs = bill?.transactions ?: return AddPaymentDialog()
-        val cash = txs.filter { it.method == "CASH" }.sumOf { it.amount }
-        val bank = txs.filter { it.method == "BANK" }.sumOf { it.amount }
+        val rawCash = txs.filter { it.method == "CASH" }.sumOf { it.amount }
+        val rawBank = txs.filter { it.method == "BANK" }.sumOf { it.amount }
+        // Cap to live remaining balance so stale duplicate transactions don't cause overpayment display
+        val liveTotal = if (bill != null) recalculate(bill).totalAmount else 0.0
+        val remaining = (liveTotal - (bill?.advancePayment ?: 0.0)).coerceAtLeast(0.0)
+        val cash = minOf(rawCash, remaining)
+        val bank = minOf(rawBank, (remaining - cash).coerceAtLeast(0.0))
         return AddPaymentDialog(
             cashAmount = if (cash > 0) "%.2f".format(cash) else "",
             bankAmount = if (bank > 0) "%.2f".format(bank) else "",
@@ -308,6 +413,91 @@ class StayBillingViewModel(
     fun onAddItemNotes(v: String) = _state.update { it.copy(addItemDialog = it.addItemDialog.copy(notes = v)) }
     fun onAddItemBackToTypeSelect() = _state.update { it.copy(addItemDialog = it.addItemDialog.copy(step = 0)) }
 
+    // ROOM dropdowns
+    fun onAddItemRoomCategory(cat: String) = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(roomCategory = cat, roomNumber = ""))
+    }
+    fun onAddItemRoomInstanceSelected(instance: RoomInstance) {
+        val room = _state.value.rooms.find { it.id == instance.categoryId }
+        // Derive category name from Room.type if categoryName on the instance is blank
+        val catName = instance.categoryName.ifBlank { room?.type ?: "" }
+        _state.update { s -> s.copy(addItemDialog = s.addItemDialog.copy(
+            roomNumber = instance.roomNumber,
+            roomCategory = catName,
+            unitPrice = if (room != null && room.pricePerNight > 0) room.pricePerNight.toLong().toString() else "",
+            taxPct = if (room != null && room.taxPercentage > 0) "%.0f".format(room.taxPercentage) else "",
+        )) }
+    }
+
+    // ORDER/SERVICE autocomplete
+    fun onAddItemNameQuery(v: String) = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(nameQuery = v, name = v, showNameDropdown = true))
+    }
+    fun onAddItemNameDropdownDismiss() = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(showNameDropdown = false))
+    }
+    fun onAddItemTaxPct(v: String) = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(taxPct = v.filter { c -> c.isDigit() || c == '.' }))
+    }
+    fun onAddItemFoodSelected(item: com.example.dreamland_reception.data.model.FoodItem) = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(
+            name = item.name, nameQuery = item.name, showNameDropdown = false,
+            unitPrice = if (item.price > 0) item.price.toLong().toString() else "",
+            taxPct = if (item.taxPercentage > 0) "%.0f".format(item.taxPercentage) else "",
+        ))
+    }
+    fun onAddItemServiceSelected(svc: com.example.dreamland_reception.data.model.Service) = _state.update { s ->
+        s.copy(addItemDialog = s.addItemDialog.copy(
+            name = svc.name, nameQuery = svc.name, showNameDropdown = false,
+            unitPrice = if (svc.price > 0) svc.price.toLong().toString() else "",
+            taxPct = if (svc.taxPercentage > 0) "%.0f".format(svc.taxPercentage) else "",
+        ))
+    }
+
+    // Open Settings dialogs for adding new food/service items
+    fun onAddItemAddNewFood(name: String) {
+        _state.update { s -> s.copy(addItemDialog = s.addItemDialog.copy(showAddFoodDialog = true)) }
+        com.example.dreamland_reception.DreamlandAppInitializer.getSettingsViewModel().openAddFood(name)
+    }
+    fun onAddItemFoodDialogClosed() {
+        launchWithGlobalLoading {
+            val updated = runCatching { foodRepo.getByHotel(AppContext.hotelId) }.getOrElse { _state.value.foodItems }
+            val lastAdded = updated.sortedByDescending { it.createdAt }.firstOrNull()
+            _state.update { s -> s.copy(
+                foodItems = updated,
+                addItemDialog = s.addItemDialog.copy(
+                    showAddFoodDialog = false,
+                    name = lastAdded?.name ?: s.addItemDialog.name,
+                    nameQuery = lastAdded?.name ?: s.addItemDialog.nameQuery,
+                    unitPrice = lastAdded?.price?.toLong()?.toString() ?: s.addItemDialog.unitPrice,
+                    taxPct = if (lastAdded != null && lastAdded.taxPercentage > 0) "%.0f".format(lastAdded.taxPercentage) else s.addItemDialog.taxPct,
+                    showNameDropdown = false,
+                )
+            ) }
+        }
+    }
+    fun onAddItemAddNewService(name: String) {
+        _state.update { s -> s.copy(addItemDialog = s.addItemDialog.copy(showAddServiceDialog = true)) }
+        com.example.dreamland_reception.DreamlandAppInitializer.getSettingsViewModel().openAddService(name)
+    }
+    fun onAddItemServiceDialogClosed() {
+        launchWithGlobalLoading {
+            val updated = runCatching { serviceRepo.getByHotel(AppContext.hotelId) }.getOrElse { _state.value.services }
+            val lastAdded = updated.sortedByDescending { it.createdAt }.firstOrNull()
+            _state.update { s -> s.copy(
+                services = updated,
+                addItemDialog = s.addItemDialog.copy(
+                    showAddServiceDialog = false,
+                    name = lastAdded?.name ?: s.addItemDialog.name,
+                    nameQuery = lastAdded?.name ?: s.addItemDialog.nameQuery,
+                    unitPrice = lastAdded?.price?.toLong()?.toString() ?: s.addItemDialog.unitPrice,
+                    taxPct = if (lastAdded != null && lastAdded.taxPercentage > 0) "%.0f".format(lastAdded.taxPercentage) else s.addItemDialog.taxPct,
+                    showNameDropdown = false,
+                )
+            ) }
+        }
+    }
+
     fun submitAddItem() {
         val d = _state.value.addItemDialog
         val bill = _state.value.bill ?: return
@@ -316,9 +506,10 @@ class StayBillingViewModel(
         val price = d.unitPrice.toDoubleOrNull() ?: 0.0
         _state.update { it.copy(addItemDialog = d.copy(isSaving = true)) }
         launchWithGlobalLoading {
-            val itemName = if (d.type == "ROOM" && d.roomNumber.isNotBlank())
-                "Room ${d.roomNumber.trim()} — ${d.name.trim()}"
-            else d.name.trim()
+            val itemName = if (d.type == "ROOM" && d.roomNumber.isNotBlank()) {
+                val catPart = if (d.roomCategory.isNotBlank()) " · ${d.roomCategory.trim()}" else ""
+                "Room ${d.roomNumber.trim()}$catPart — ${d.name.trim()}"
+            } else d.name.trim()
             val newItem = BillItem(
                 id = UUID.randomUUID().toString(),
                 name = itemName,
@@ -326,6 +517,7 @@ class StayBillingViewModel(
                 quantity = qty,
                 unitPrice = price,
                 total = price * qty,
+                taxPercentage = d.taxPct.toDoubleOrNull() ?: 0.0,
                 notes = d.notes.trim(),
             )
             val updatedItems = bill.items + newItem
@@ -361,6 +553,7 @@ class StayBillingViewModel(
             show = true, itemId = item.id, type = item.type,
             name = item.name, quantity = item.quantity.toString(),
             unitPrice = if (item.unitPrice > 0) item.unitPrice.toLong().toString() else "",
+            taxPct = if (item.taxPercentage > 0) "%.0f".format(item.taxPercentage) else "",
             notes = item.notes,
         ))
     }
@@ -388,6 +581,7 @@ class StayBillingViewModel(
         } else d
         s.copy(editBillItemDialog = updated)
     }
+    fun onEditItemTaxPct(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(taxPct = v.filter { c -> c.isDigit() || c == '.' })) }
     fun onEditItemNotes(v: String) = _state.update { it.copy(editBillItemDialog = it.editBillItemDialog.copy(notes = v)) }
 
     fun submitEditItem() {
@@ -399,7 +593,7 @@ class StayBillingViewModel(
         _state.update { it.copy(editBillItemDialog = d.copy(isSaving = true)) }
         launchWithGlobalLoading {
             val updatedItems = bill.items.map { item ->
-                if (item.id == d.itemId) item.copy(name = d.name.trim(), quantity = qty, unitPrice = price, total = price * qty, notes = d.notes.trim())
+                if (item.id == d.itemId) item.copy(name = d.name.trim(), quantity = qty, unitPrice = price, total = price * qty, notes = d.notes.trim(), taxPercentage = d.taxPct.toDoubleOrNull() ?: item.taxPercentage)
                 else item
             }
             val totals = recalculate(bill.copy(items = updatedItems))
@@ -479,9 +673,10 @@ class StayBillingViewModel(
             kept + PaymentTransaction(id = UUID.randomUUID().toString(), amount = newTotal, method = method)
         else kept
         val newTotalPaid = updated.sumOf { it.amount }
-        val newPending = (bill.totalAmount - newTotalPaid - bill.advancePayment).coerceAtLeast(0.0)
+        val recalcTotals = recalculate(bill)  // use live total from current items/tax
+        val newPending = (recalcTotals.totalAmount - newTotalPaid - bill.advancePayment).coerceAtLeast(0.0)
         val newStatus = when {
-            newPending <= 0 && bill.totalAmount > 0 -> "PAID"
+            newPending <= 0 && recalcTotals.totalAmount > 0 -> "PAID"
             newTotalPaid + bill.advancePayment > 0 -> "PARTIAL"
             else -> "PENDING"
         }
@@ -638,12 +833,37 @@ class StayBillingViewModel(
 
     fun payViaQr() {
         val bill = _state.value.bill ?: return
-        val pending = (bill.totalAmount - bill.advancePayment - bill.totalPaid).coerceAtLeast(0.0)
+        val liveRate = _state.value.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
+        val liveTax = bill.subtotal * liveRate / 100.0
+        val discV = _state.value.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+        val discA = when (_state.value.editableDiscountType) {
+            "PERCENT" -> bill.subtotal * discV / 100.0
+            else -> discV
+        }
+        val liveTotal = (bill.subtotal + liveTax - discA).coerceAtLeast(0.0)
+        val liveAdv = _state.value.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+        val typedCash = _state.value.addPaymentDialog.cashAmount.toDoubleOrNull() ?: 0.0
+        val pending = (liveTotal - liveAdv - typedCash).coerceAtLeast(0.0)
         if (pending <= 0) return
         _state.update { it.copy(addPaymentDialog = it.addPaymentDialog.copy(bankAmount = "%.2f".format(pending))) }
     }
 
     fun onBillGuestName(v: String) = _state.update { it.copy(billGuestName = v) }
+
+    fun saveTaxRateForGroup(oldRate: Double, newRate: Double) {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedItems = bill.items.map { item ->
+            if (item.taxPercentage == oldRate) item.copy(taxPercentage = newRate) else item
+        }
+        val updatedBill = recalculate(bill.copy(taxEnabled = updatedItems.any { it.taxPercentage > 0 }, items = updatedItems))
+        _state.update { it.copy(bill = updatedBill) }
+        viewModelScope.launch {
+            runCatching {
+                billRepo.updateItems(bill.id, updatedItems, updatedBill.subtotal, updatedBill.taxAmount,
+                    updatedBill.discountAmount, updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
+        }
+    }
 
     fun onTaxPctInline(v: String) = _state.update { it.copy(editableTaxPct = v.filter { c -> c.isDigit() || c == '.' }) }
 
@@ -815,7 +1035,7 @@ class StayBillingViewModel(
             com.example.dreamland_reception.DreamlandAppInitializer.getBillingViewModel().load()
 
             // Accounting runs in a sibling coroutine — failure is surfaced via accountingStatus only.
-            val settledBill = bill
+            val settledBill = recalculate(bill)
             val guestPhone = _state.value.stay?.guestPhone ?: ""
             viewModelScope.launch {
                 accountingRepo.settle(settledBill, guestPhone)

@@ -168,6 +168,7 @@ private fun ServicesTab(services: List<Service>, dialog: AddServiceDialog, vm: S
 @Composable
 private fun ServiceRow(service: Service, vm: SettingsViewModel) {
     var priceText by remember(service.id) { mutableStateOf(service.price.toBigDecimal().stripTrailingZeros().toPlainString()) }
+    var taxText by remember(service.id) { mutableStateOf(if (service.taxPercentage > 0) service.taxPercentage.toBigDecimal().stripTrailingZeros().toPlainString() else "") }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
@@ -217,6 +218,24 @@ private fun ServiceRow(service: Service, vm: SettingsViewModel) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = {
                     priceText.toDoubleOrNull()?.let { vm.updateServicePrice(service.id, it) }
+                    focusManager.clearFocus()
+                }),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
+                colors = fieldColors(),
+            )
+            Spacer(Modifier.width(6.dp))
+            OutlinedTextField(
+                value = taxText,
+                onValueChange = { v ->
+                    taxText = v.filter { it.isDigit() || it == '.' }
+                },
+                modifier = Modifier.width(80.dp),
+                suffix = { Text("%", color = DreamlandMuted) },
+                placeholder = { Text("Tax", color = DreamlandMuted.copy(alpha = 0.4f), style = MaterialTheme.typography.bodySmall) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    vm.updateServiceTax(service.id, taxText.toDoubleOrNull() ?: 0.0)
                     focusManager.clearFocus()
                 }),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
@@ -274,6 +293,7 @@ private fun FoodMenuTab(foodItems: List<FoodItem>, dialog: AddFoodDialog, vm: Se
 @Composable
 private fun FoodItemRow(item: FoodItem, vm: SettingsViewModel) {
     var priceText by remember(item.id) { mutableStateOf(item.price.toBigDecimal().stripTrailingZeros().toPlainString()) }
+    var taxText by remember(item.id) { mutableStateOf(if (item.taxPercentage > 0) item.taxPercentage.toBigDecimal().stripTrailingZeros().toPlainString() else "") }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
 
@@ -321,6 +341,24 @@ private fun FoodItemRow(item: FoodItem, vm: SettingsViewModel) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = {
                     priceText.toDoubleOrNull()?.let { vm.updateFoodPrice(item.id, it) }
+                    focusManager.clearFocus()
+                }),
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
+                colors = fieldColors(),
+            )
+            Spacer(Modifier.width(6.dp))
+            OutlinedTextField(
+                value = taxText,
+                onValueChange = { v ->
+                    taxText = v.filter { it.isDigit() || it == '.' }
+                },
+                modifier = Modifier.width(80.dp),
+                suffix = { Text("%", color = DreamlandMuted) },
+                placeholder = { Text("Tax", color = DreamlandMuted.copy(alpha = 0.4f), style = MaterialTheme.typography.bodySmall) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    vm.updateFoodTax(item.id, taxText.toDoubleOrNull() ?: 0.0)
                     focusManager.clearFocus()
                 }),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
@@ -450,6 +488,15 @@ internal fun AddServiceDialogUI(state: AddServiceDialog, vm: SettingsViewModel) 
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     colors = fieldColors(),
                 )
+                OutlinedTextField(
+                    value = state.tax,
+                    onValueChange = vm::onAddServiceTax,
+                    label = { Text("Tax (%)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    colors = fieldColors(),
+                )
             }
         },
         confirmButton = {
@@ -493,6 +540,15 @@ internal fun AddFoodDialogUI(state: AddFoodDialog, vm: SettingsViewModel) {
                     value = state.price,
                     onValueChange = vm::onAddFoodPrice,
                     label = { Text("Price (₹)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    colors = fieldColors(),
+                )
+                OutlinedTextField(
+                    value = state.tax,
+                    onValueChange = vm::onAddFoodTax,
+                    label = { Text("Tax (%)") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),

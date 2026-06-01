@@ -7,6 +7,7 @@ data class Service(
     val hotelId: String = "",
     val name: String = "",
     val price: Double = 0.0,
+    val taxPercentage: Double = 0.0,
     val isActive: Boolean = true,
     val createdAt: Date = Date(),
 )

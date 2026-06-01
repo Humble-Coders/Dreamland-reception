@@ -5,6 +5,9 @@ import com.example.dreamland_reception.data.model.BillItem
 import com.example.dreamland_reception.data.model.PaymentTransaction
 import com.google.cloud.firestore.Firestore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.util.Date
 
@@ -12,6 +15,7 @@ interface BillRepository {
     suspend fun getByStay(stayId: String): Bill?
     suspend fun getById(billId: String): Bill?
     suspend fun getByHotel(hotelId: String): List<Bill>
+    fun listenByHotel(hotelId: String): Flow<List<Bill>>
     suspend fun createForStay(bill: Bill): String
     suspend fun updateItems(id: String, items: List<BillItem>, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
     suspend fun addTransaction(id: String, tx: PaymentTransaction, totalPaid: Double, pendingAmount: Double, status: String)
@@ -44,6 +48,17 @@ object FirestoreBillRepository : BillRepository {
         col.whereEqualTo("hotelId", hotelId).get().get()
             .documents.mapNotNull { it.toBill() }
             .sortedBy { it.createdAt }
+    }
+
+    override fun listenByHotel(hotelId: String): Flow<List<Bill>> = callbackFlow {
+        val registration = col.whereEqualTo("hotelId", hotelId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) { close(error); return@addSnapshotListener }
+                val bills = snapshot?.documents?.mapNotNull { it.toBill() }
+                    ?.sortedBy { it.createdAt } ?: emptyList()
+                trySend(bills)
+            }
+        awaitClose { registration.remove() }
     }
 
     override suspend fun createForStay(bill: Bill): String = withContext(Dispatchers.IO) {
@@ -163,9 +178,9 @@ object FirestoreBillRepository : BillRepository {
         name = get("name") as? String ?: "",
         type = get("type") as? String ?: "CUSTOM",
         quantity = (get("quantity") as? Long)?.toInt() ?: 1,
-        unitPrice = (get("unitPrice") as? Double) ?: 0.0,
-        total = (get("total") as? Double) ?: 0.0,
-        taxPercentage = (get("taxPercentage") as? Double) ?: 0.0,
+        unitPrice = (get("unitPrice") as? Number)?.toDouble() ?: 0.0,
+        total = (get("total") as? Number)?.toDouble() ?: 0.0,
+        taxPercentage = (get("taxPercentage") as? Number)?.toDouble() ?: 0.0,
         refId = get("refId") as? String ?: "",
         notes = get("notes") as? String ?: "",
     )

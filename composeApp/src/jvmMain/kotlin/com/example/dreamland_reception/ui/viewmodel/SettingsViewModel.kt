@@ -30,6 +30,7 @@ data class AddServiceDialog(
     val show: Boolean = false,
     val name: String = "",
     val price: String = "",
+    val tax: String = "",
     val isSaving: Boolean = false,
 )
 
@@ -37,6 +38,7 @@ data class AddFoodDialog(
     val show: Boolean = false,
     val name: String = "",
     val price: String = "",
+    val tax: String = "",
     val categories: Set<String> = emptySet(),
     val isSaving: Boolean = false,
 )
@@ -149,6 +151,7 @@ class SettingsViewModel(
     fun closeAddService() = _state.update { it.copy(addServiceDialog = AddServiceDialog()) }
     fun onAddServiceName(v: String) = _state.update { it.copy(addServiceDialog = it.addServiceDialog.copy(name = v)) }
     fun onAddServicePrice(v: String) = _state.update { it.copy(addServiceDialog = it.addServiceDialog.copy(price = v.filter { c -> c.isDigit() || c == '.' })) }
+    fun onAddServiceTax(v: String) = _state.update { it.copy(addServiceDialog = it.addServiceDialog.copy(tax = v.filter { c -> c.isDigit() || c == '.' })) }
 
     fun submitAddService() {
         val d = _state.value.addServiceDialog
@@ -157,7 +160,7 @@ class SettingsViewModel(
         _state.update { it.copy(addServiceDialog = d.copy(isSaving = true)) }
         launchWithGlobalLoading {
             runCatching {
-                serviceRepo.add(Service(hotelId = hotelId, name = d.name.trim(), price = d.price.toDoubleOrNull() ?: 0.0))
+                serviceRepo.add(Service(hotelId = hotelId, name = d.name.trim(), price = d.price.toDoubleOrNull() ?: 0.0, taxPercentage = d.tax.toDoubleOrNull() ?: 0.0))
             }.onSuccess {
                 val updated = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { _state.value.services }
                 _state.update { it.copy(services = updated, addServiceDialog = AddServiceDialog()) }
@@ -190,12 +193,22 @@ class SettingsViewModel(
         }
     }
 
+    fun updateServiceTax(id: String, tax: Double) {
+        _state.update { s -> s.copy(services = s.services.map { if (it.id == id) it.copy(taxPercentage = tax) else it }) }
+        viewModelScope.launch {
+            delay(800)
+            val service = _state.value.services.find { it.id == id } ?: return@launch
+            runCatching { serviceRepo.update(service) }
+        }
+    }
+
     // ── Food Items ────────────────────────────────────────────────────────────
 
     fun openAddFood(name: String = "") = _state.update { it.copy(addFoodDialog = AddFoodDialog(show = true, name = name)) }
     fun closeAddFood() = _state.update { it.copy(addFoodDialog = AddFoodDialog()) }
     fun onAddFoodName(v: String) = _state.update { it.copy(addFoodDialog = it.addFoodDialog.copy(name = v)) }
     fun onAddFoodPrice(v: String) = _state.update { it.copy(addFoodDialog = it.addFoodDialog.copy(price = v.filter { c -> c.isDigit() || c == '.' })) }
+    fun onAddFoodTax(v: String) = _state.update { it.copy(addFoodDialog = it.addFoodDialog.copy(tax = v.filter { c -> c.isDigit() || c == '.' })) }
     fun onAddFoodCategory(v: String) = _state.update { s ->
         val current = s.addFoodDialog.categories
         s.copy(addFoodDialog = s.addFoodDialog.copy(
@@ -211,7 +224,7 @@ class SettingsViewModel(
         launchWithGlobalLoading {
             val categoryStr = d.categories.joinToString(",")
             runCatching {
-                foodRepo.add(FoodItem(hotelId = hotelId, name = d.name.trim(), price = d.price.toDoubleOrNull() ?: 0.0, category = categoryStr))
+                foodRepo.add(FoodItem(hotelId = hotelId, name = d.name.trim(), price = d.price.toDoubleOrNull() ?: 0.0, category = categoryStr, taxPercentage = d.tax.toDoubleOrNull() ?: 0.0))
             }.onSuccess {
                 val updated = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { _state.value.foodItems }
                 _state.update { it.copy(foodItems = updated, addFoodDialog = AddFoodDialog()) }
@@ -237,6 +250,15 @@ class SettingsViewModel(
 
     fun updateFoodPrice(id: String, price: Double) {
         _state.update { s -> s.copy(foodItems = s.foodItems.map { if (it.id == id) it.copy(price = price) else it }) }
+        viewModelScope.launch {
+            delay(800)
+            val item = _state.value.foodItems.find { it.id == id } ?: return@launch
+            runCatching { foodRepo.update(item) }
+        }
+    }
+
+    fun updateFoodTax(id: String, tax: Double) {
+        _state.update { s -> s.copy(foodItems = s.foodItems.map { if (it.id == id) it.copy(taxPercentage = tax) else it }) }
         viewModelScope.launch {
             delay(800)
             val item = _state.value.foodItems.find { it.id == id } ?: return@launch

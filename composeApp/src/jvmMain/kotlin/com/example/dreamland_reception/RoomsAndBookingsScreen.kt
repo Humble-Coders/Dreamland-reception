@@ -464,7 +464,6 @@ private fun RoomsTabContent(state: RoomsAndBookingsUiState, vm: RoomsAndBookings
     fun roomDisplayStatus(room: RoomInstance): String = when {
         room.status == "MAINTENANCE" -> "MAINTENANCE"
         room.status == "CLEANING"    -> "CLEANING"
-        room.needsCleaning           -> "CLEANING"   // checked out but needs cleaning — show as cleaning
         hotelTimesReady && state.activeStaysByRoom[room.roomNumber]?.let { s ->
             s.expectedCheckOut.after(rangeStart!!)
         } == true -> "OCCUPIED"
@@ -757,7 +756,7 @@ private fun RoomDetailPanel(
                     ) {
                         Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(14.dp), tint = Color.White)
                         Spacer(Modifier.width(6.dp))
-                        Text("Mark Available", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(if (room.needsCleaning && room.status != "CLEANING") "Mark Clean" else "Mark Available", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 if (room.status != "OCCUPIED") {
