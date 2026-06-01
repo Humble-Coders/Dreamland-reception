@@ -47,6 +47,7 @@ data class Bill(
     val advancePayment: Double = 0.0,
     val pendingAmount: Double = 0.0,
     val status: String = "PENDING",   // PENDING | PARTIAL | PAID
+    val invoiceUrl: String = "",
     val createdAt: Date = Date(),
     val updatedAt: Date = Date(),
 )

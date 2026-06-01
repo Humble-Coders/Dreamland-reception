@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,8 +36,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -145,6 +149,40 @@ fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsVi
 //                                InfoRow("Late Check-Out Charge", "₹${hotel.lateCheckOutCharge}")
 //                            }
 //                        }
+                    }
+
+                    // ── Email Settings (local, not in Firestore) ──────────────
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("EMAIL SETTINGS", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
+                            OutlinedTextField(
+                                value = state.senderEmail,
+                                onValueChange = vm::onSenderEmailChanged,
+                                label = { Text("Invoice Sender Email") },
+                                placeholder = { Text("noreply@yourdomain.com") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = DreamlandOnDark,
+                                    unfocusedTextColor = DreamlandOnDark,
+                                    focusedBorderColor = DreamlandGold,
+                                    unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                                    focusedLabelColor = DreamlandGold,
+                                    unfocusedLabelColor = DreamlandMuted,
+                                    cursorColor = DreamlandOnDark,
+                                ),
+                            )
+                            Text(
+                                "Stored locally on this device only — not saved to Firestore.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DreamlandMuted,
+                            )
+                        }
                     }
                 }
 

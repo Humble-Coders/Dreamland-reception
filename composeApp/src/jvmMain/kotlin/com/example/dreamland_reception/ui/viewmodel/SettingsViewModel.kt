@@ -80,6 +80,10 @@ data class SettingsUiState(
     val addServiceDialog: AddServiceDialog = AddServiceDialog(),
     val addFoodDialog: AddFoodDialog = AddFoodDialog(),
     val addComplaintTypeDialog: AddComplaintTypeDialog = AddComplaintTypeDialog(),
+
+    // Local config (stored on-device via Java Preferences, not in Firestore)
+    val senderEmail: String = com.example.dreamland_reception.data.LocalConfig.senderEmail,
+    val resendApiKey: String = com.example.dreamland_reception.data.LocalConfig.resendApiKey,
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -143,6 +147,18 @@ class SettingsViewModel(
         val hotelId = _state.value.selectedHotelId
         if (hotelId.isNotBlank()) loadHotelData(hotelId)
         _state.update { it.copy(firebaseConnected = FirebaseManager.isConnected, firebaseError = FirebaseManager.initError) }
+    }
+
+    // ── Local config ─────────────────────────────────────────────────────────
+
+    fun onSenderEmailChanged(v: String) {
+        com.example.dreamland_reception.data.LocalConfig.senderEmail = v
+        _state.update { it.copy(senderEmail = v) }
+    }
+
+    fun onResendApiKeyChanged(v: String) {
+        com.example.dreamland_reception.data.LocalConfig.resendApiKey = v
+        _state.update { it.copy(resendApiKey = v) }
     }
 
     // ── Services ──────────────────────────────────────────────────────────────

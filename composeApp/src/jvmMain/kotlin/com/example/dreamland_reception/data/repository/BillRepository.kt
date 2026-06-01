@@ -24,6 +24,12 @@ interface BillRepository {
     suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
     suspend fun updateGuestName(id: String, name: String)
     suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String)
+    suspend fun finalizeTransaction(
+        id: String, items: List<BillItem>,
+        subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double,
+        transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String,
+    )
+    suspend fun updateInvoiceUrl(id: String, url: String)
 }
 
 object FirestoreBillRepository : BillRepository {
@@ -70,10 +76,12 @@ object FirestoreBillRepository : BillRepository {
         subtotal: Double, taxAmount: Double, discountAmount: Double,
         totalAmount: Double, pendingAmount: Double, status: String,
     ) = withContext(Dispatchers.IO) {
+        val effectiveTaxPct = if (subtotal > 0.0) Math.round(taxAmount / subtotal * 10000.0) / 100.0 else 0.0
         col.document(id).update(mapOf(
             "items" to items.map { it.toMap() },
             "subtotal" to subtotal,
             "taxAmount" to taxAmount,
+            "taxPercentage" to effectiveTaxPct,
             "discountAmount" to discountAmount,
             "totalAmount" to totalAmount,
             "pendingAmount" to pendingAmount,
@@ -168,6 +176,7 @@ object FirestoreBillRepository : BillRepository {
             advancePayment = getDouble("advancePayment") ?: 0.0,
             pendingAmount = getDouble("pendingAmount") ?: 0.0,
             status = getString("status") ?: "PENDING",
+            invoiceUrl = getString("invoiceUrl") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
             updatedAt = getTimestamp("updatedAt")?.toDate() ?: Date(),
         )
@@ -214,6 +223,35 @@ object FirestoreBillRepository : BillRepository {
         )).get(); Unit
     }
 
+    override suspend fun finalizeTransaction(
+        id: String, items: List<BillItem>,
+        subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double,
+        transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String,
+    ) = withContext(Dispatchers.IO) {
+        val fs = FirestoreRepositorySupport.get()
+        val effectiveTaxPct = if (subtotal > 0.0) Math.round(taxAmount / subtotal * 10000.0) / 100.0 else 0.0
+        fs.runTransaction { txn ->
+            val ref = col.document(id)
+            txn.update(ref, mapOf(
+                "items"         to items.map { it.toMap() },
+                "subtotal"      to subtotal,
+                "taxAmount"     to taxAmount,
+                "taxPercentage" to effectiveTaxPct,
+                "discountAmount" to discountAmount,
+                "totalAmount"   to totalAmount,
+                "transactions"  to transactions.map { it.toMap() },
+                "totalPaid"     to totalPaid,
+                "pendingAmount" to pendingAmount,
+                "status"        to status,
+                "updatedAt"     to Date(),
+            ))
+        }.get(); Unit
+    }
+
+    override suspend fun updateInvoiceUrl(id: String, url: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("invoiceUrl" to url, "updatedAt" to Date())).get(); Unit
+    }
+
     private fun Bill.toMap() = mapOf(
         "hotelId" to hotelId,
         "stayId" to stayId,
@@ -237,6 +275,7 @@ object FirestoreBillRepository : BillRepository {
         "advancePayment" to advancePayment,
         "pendingAmount" to pendingAmount,
         "status" to status,
+        "invoiceUrl" to invoiceUrl,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt,
     )

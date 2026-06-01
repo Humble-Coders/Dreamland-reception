@@ -69,9 +69,12 @@ object AccountingRepository {
         }
 
         // ── 1. Rounded monetary values — single source of truth ───────────────
-        val taxRate        = if (bill.taxEnabled) bill.taxPercentage / 100.0 else 0.0
+        // Use bill.taxAmount (pre-computed by recalculate() from per-item rates) as the
+        // authoritative tax value. Derive an effective rate for APIs that need a rate parameter.
         val subtotal       = roundAmount(bill.subtotal)
-        val tax            = roundAmount(subtotal * taxRate)
+        val tax            = roundAmount(if (bill.taxEnabled) bill.taxAmount else 0.0)
+        // Round to 4 decimal places so invoice displays clean rates (e.g. 6.53% not 6.5275049115...%)
+        val taxRate        = if (bill.taxEnabled && subtotal > 0.0) Math.round(tax / subtotal * 10000.0) / 10000.0 else 0.0
         val total          = roundAmount(subtotal + tax)
         val advanceRounded = roundAmount(bill.advancePayment)
         val hasAdvance     = advanceRounded > 0.01

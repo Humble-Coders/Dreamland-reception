@@ -11,6 +11,8 @@ import com.example.dreamland_reception.data.model.PaymentTransaction
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.repository.BillRepository
+import com.example.dreamland_reception.data.repository.FirestoreUserRepository
+import com.example.dreamland_reception.data.repository.UserRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreFoodItemRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
@@ -24,6 +26,7 @@ import com.example.dreamland_reception.data.repository.RoomInstanceRepository
 import com.example.dreamland_reception.data.repository.RoomRepository
 import com.example.dreamland_reception.data.repository.ServiceRepository
 import com.example.dreamland_reception.data.repository.StayRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -133,6 +136,17 @@ data class InvoicePdfState(
     val error: String? = null,
     val url: String = "",
     val pages: List<BufferedImage> = emptyList(),
+    val availablePrinters: List<String> = emptyList(),
+    val selectedPrinter: String = "",
+    val isPrinting: Boolean = false,
+    val printError: String? = null,
+    val emailDialogOpen: Boolean = false,
+    val guestEmail: String = "",
+    val isSending: Boolean = false,
+    val sendError: String? = null,
+    val sendSuccess: Boolean = false,
+    val showQrDialog: Boolean = false,
+    val qrImage: BufferedImage? = null,
 )
 
 // ── Main state ────────────────────────────────────────────────────────────────
@@ -179,6 +193,7 @@ class StayBillingViewModel(
     private val instanceRepo: RoomInstanceRepository = FirestoreRoomInstanceRepository,
     private val foodRepo: FoodItemRepository = FirestoreFoodItemRepository,
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
+    private val userRepo: UserRepository = FirestoreUserRepository,
     private val accountingRepo: AccountingRepository = AccountingRepository,
 ) : ViewModel() {
 
@@ -207,7 +222,8 @@ class StayBillingViewModel(
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
-                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle, error = if (bill == null) "Bill not found" else null) }
+                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
+                invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
         }
     }
 
@@ -298,7 +314,8 @@ class StayBillingViewModel(
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
-                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle) }
+                addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
+                invoicePdf = InvoicePdfState()) }
         }
     }
 
@@ -833,8 +850,15 @@ class StayBillingViewModel(
 
     fun payViaQr() {
         val bill = _state.value.bill ?: return
-        val liveRate = _state.value.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-        val liveTax = bill.subtotal * liveRate / 100.0
+        // Compute tax using per-item rates first (same logic as BillSummaryCard)
+        // This handles multi-rate bills (e.g. 12% ROOM + 18% ORDER) correctly
+        val perItemTax = bill.items.filter { it.taxPercentage > 0 }.sumOf { it.total * it.taxPercentage / 100.0 }
+        val liveTax = if (perItemTax > 0) {
+            perItemTax
+        } else {
+            val liveRate = _state.value.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
+            bill.subtotal * liveRate / 100.0
+        }
         val discV = _state.value.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
         val discA = when (_state.value.editableDiscountType) {
             "PERCENT" -> bill.subtotal * discV / 100.0
@@ -1026,17 +1050,70 @@ class StayBillingViewModel(
         }
         _state.update { it.copy(confirmPaymentDialog = it.confirmPaymentDialog.copy(isProcessing = true, error = null)) }
         launchWithGlobalLoading {
-            // Bill status in "bills" is already current from prior addTransaction/updateItems writes.
-            // confirmPayment's role is to trigger accounting and officially close the billing session.
+            // Build transactions from the current dialog payment fields (not stale Firestore data).
+            // "Paid via QR" / manual entry only update local state; we commit them here.
+            val pd = _state.value.addPaymentDialog
+            val cashTotal = pd.cashAmount.toDoubleOrNull() ?: 0.0
+            val bankTotal = pd.bankAmount.toDoubleOrNull() ?: 0.0
+            val otherTxs = bill.transactions.filter { it.method != "CASH" && it.method != "BANK" }
+            val cashTx = if (cashTotal > 0) PaymentTransaction(
+                id = bill.transactions.firstOrNull { it.method == "CASH" }?.id ?: UUID.randomUUID().toString(),
+                method = "CASH", amount = cashTotal, status = "PAID", createdAt = Date()
+            ) else null
+            val bankTx = if (bankTotal > 0) PaymentTransaction(
+                id = bill.transactions.firstOrNull { it.method == "BANK" }?.id ?: UUID.randomUUID().toString(),
+                method = "BANK", amount = bankTotal, status = "PAID", createdAt = Date()
+            ) else null
+            val updatedTxs = otherTxs + listOfNotNull(cashTx, bankTx)
+            val newTotalPaid = updatedTxs.sumOf { it.amount }
+
+            // Recalculate totals using correct transactions and per-item tax rates.
+            val billWithTxs = bill.copy(transactions = updatedTxs, totalPaid = newTotalPaid)
+            val settledBill = recalculate(billWithTxs)
+
+            // Write everything atomically in a single Firestore transaction.
+            runCatching {
+                billRepo.finalizeTransaction(
+                    bill.id, settledBill.items,
+                    settledBill.subtotal, settledBill.taxAmount,
+                    settledBill.discountAmount, settledBill.totalAmount,
+                    updatedTxs, newTotalPaid,
+                    settledBill.pendingAmount, settledBill.status,
+                )
+            }
+
             _state.update { it.copy(
+                bill = settledBill.copy(transactions = updatedTxs, totalPaid = newTotalPaid),
                 confirmPaymentDialog = it.confirmPaymentDialog.copy(isProcessing = false, done = true),
                 accountingStatus = AccountingStatus.InProgress,
             ) }
             com.example.dreamland_reception.DreamlandAppInitializer.getBillingViewModel().load()
 
-            // Accounting runs in a sibling coroutine — failure is surfaced via accountingStatus only.
-            val settledBill = recalculate(bill)
-            val guestPhone = _state.value.stay?.guestPhone ?: ""
+            // Resolve the correct phone for the billing guest (settledBill.guestName).
+            // For group bills the loaded stay may belong to a different guest — fetch the
+            // primary stay by bill.stayId to get the correct phone so the accounting system
+            // and invoice Lambda create the record under the right customer name.
+            val loadedStay = _state.value.stay
+            val guestPhone: String = if (loadedStay?.guestName == settledBill.guestName) {
+                loadedStay.guestPhone
+            } else {
+                var found: String? = null
+                if (settledBill.stayId.isNotBlank()) {
+                    try {
+                        val s = stayRepo.getById(settledBill.stayId)
+                        if (s?.guestName == settledBill.guestName) found = s.guestPhone
+                    } catch (_: Exception) {}
+                }
+                if (found == null) {
+                    for (id in settledBill.stayIds) {
+                        try {
+                            val s = stayRepo.getById(id)
+                            if (s?.guestName == settledBill.guestName) { found = s.guestPhone; break }
+                        } catch (_: Exception) {}
+                    }
+                }
+                found ?: ""
+            }
             viewModelScope.launch {
                 accountingRepo.settle(settledBill, guestPhone)
                     .onSuccess { _state.update { it.copy(accountingStatus = AccountingStatus.Synced) } }
@@ -1060,10 +1137,20 @@ class StayBillingViewModel(
      */
     fun generateInvoicePdf(bill: Bill, guestPhone: String) {
         if (bill.id.isBlank()) return
+        // Recompute taxPercentage as rounded effective blended rate so the invoice Lambda
+        // shows consistent CGST/SGST rate labels (e.g. 4.86% not the stale stored value).
+        val effectiveTaxPct = if (bill.taxEnabled && bill.subtotal > 0)
+            Math.round(bill.taxAmount / bill.subtotal * 10000.0) / 100.0
+        else bill.taxPercentage
+        val billForInvoice = bill.copy(taxPercentage = effectiveTaxPct)
         _state.update { it.copy(invoicePdf = InvoicePdfState(show = true, isGenerating = true)) }
         viewModelScope.launch {
             runCatching {
-                val url = HumbleBillEngine.generateInvoiceUrl(bill, guestPhone)
+                val url = HumbleBillEngine.generateInvoiceUrl(billForInvoice, guestPhone)
+                // Persist the PDF URL in the bills collection (best-effort, non-blocking)
+                if (bill.id.isNotBlank()) {
+                    runCatching { billRepo.updateInvoiceUrl(bill.id, url) }
+                }
                 url to HumbleBillEngine.renderPdfPages(url)
             }.onSuccess { (url, pages) ->
                 _state.update { it.copy(invoicePdf = it.invoicePdf.copy(isGenerating = false, url = url, pages = pages)) }
@@ -1073,7 +1160,158 @@ class StayBillingViewModel(
         }
     }
 
-    fun closeInvoicePdf() = _state.update { it.copy(invoicePdf = InvoicePdfState()) }
+    fun closeInvoicePdf() = _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(show = false)) }
+
+    fun openInvoicePdf() {
+        val ipd = _state.value.invoicePdf
+        if (ipd.url.isNotBlank() && ipd.pages.isNotEmpty()) {
+            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(show = true)) }
+        } else {
+            val bill = _state.value.bill ?: return
+            val loadedStay = _state.value.stay
+            viewModelScope.launch {
+                val guestPhone: String = if (loadedStay?.guestName == bill.guestName) {
+                    loadedStay.guestPhone
+                } else {
+                    var found: String? = null
+                    if (bill.stayId.isNotBlank()) {
+                        try {
+                            val s = stayRepo.getById(bill.stayId)
+                            if (s?.guestName == bill.guestName) found = s.guestPhone
+                        } catch (_: Exception) {}
+                    }
+                    if (found == null) {
+                        for (id in bill.stayIds) {
+                            try {
+                                val s = stayRepo.getById(id)
+                                if (s?.guestName == bill.guestName) { found = s.guestPhone; break }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    found ?: ""
+                }
+                generateInvoicePdf(bill, guestPhone)
+            }
+        }
+    }
+
+    // ── Email invoice ─────────────────────────────────────────────────────────
+
+    fun openEmailDialog() {
+        // Pre-fill with empty; fetch from users collection if userId available
+        val userId = _state.value.stay?.userId ?: ""
+        _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(emailDialogOpen = true, guestEmail = "", sendError = null, sendSuccess = false)) }
+        if (userId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val email = runCatching { userRepo.getByIds(setOf(userId)).firstOrNull()?.email ?: "" }.getOrElse { "" }
+            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(guestEmail = email)) }
+        }
+    }
+
+    fun onGuestEmailChanged(email: String) = _state.update { s ->
+        s.copy(invoicePdf = s.invoicePdf.copy(guestEmail = email, sendError = null, sendSuccess = false))
+    }
+
+    fun closeEmailDialog() = _state.update { s ->
+        s.copy(invoicePdf = s.invoicePdf.copy(emailDialogOpen = false, sendError = null, sendSuccess = false))
+    }
+
+    fun openQrDialog() {
+        val url = _state.value.invoicePdf.url
+        if (url.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val qrImage = runCatching {
+                val writer = com.google.zxing.qrcode.QRCodeWriter()
+                val matrix = writer.encode(url, com.google.zxing.BarcodeFormat.QR_CODE, 400, 400)
+                com.google.zxing.client.j2se.MatrixToImageWriter.toBufferedImage(matrix)
+            }.getOrNull()
+            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(showQrDialog = true, qrImage = qrImage)) }
+        }
+    }
+
+    fun closeQrDialog() = _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(showQrDialog = false)) }
+
+    fun sendInvoiceEmail() {
+        val ipd = _state.value.invoicePdf
+        val email = ipd.guestEmail.trim()
+        if (email.isBlank() || ipd.url.isBlank()) return
+        _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isSending = true, sendError = null, sendSuccess = false)) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                // Download PDF bytes
+                val pdfBytes = java.net.URL(ipd.url).readBytes()
+                val base64Pdf = java.util.Base64.getEncoder().encodeToString(pdfBytes)
+                val bill = _state.value.bill
+                val guestName = bill?.guestName ?: "Guest"
+                val hotelName = "Hotel Dreamland"
+                val resendApiKey = "re_cqBLhngi_CofomAF7AEc3k8fxPD9gR9Aq" // ← paste your Resend API key here
+                val senderEmail = com.example.dreamland_reception.data.LocalConfig.senderEmail
+                    .ifBlank { "noreply@bookmydreamland.com" }
+                val body = """
+                    {
+                      "from": "$senderEmail",
+                      "to": ["$email"],
+                      "subject": "Your Tax Invoice - $hotelName",
+                      "html": "<p>Dear $guestName,</p><p>Please find attached your tax invoice.</p><p>Thank you for staying with us!</p><p>Regards,<br/>$hotelName</p>",
+                      "attachments": [{"filename": "invoice.pdf", "content": "$base64Pdf"}]
+                    }
+                """.trimIndent()
+                val connection = java.net.URL("https://api.resend.com/emails").openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Authorization", "Bearer $resendApiKey")
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.doOutput = true
+                connection.outputStream.use { it.write(body.toByteArray()) }
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    val err = connection.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
+                    throw Exception(err)
+                }
+            }.onSuccess {
+                _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isSending = false, sendSuccess = true, emailDialogOpen = false)) }
+            }.onFailure { e ->
+                _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isSending = false, sendError = e.message ?: "Failed to send email")) }
+            }
+        }
+    }
+
+    fun loadPrinters() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = javax.print.PrintServiceLookup.lookupPrintServices(null, null).map { it.name }
+            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(
+                availablePrinters = names,
+                selectedPrinter = s.invoicePdf.selectedPrinter.ifBlank { names.firstOrNull() ?: "" },
+            )) }
+        }
+    }
+
+    fun selectPrinter(name: String) = _state.update { s ->
+        s.copy(invoicePdf = s.invoicePdf.copy(selectedPrinter = name))
+    }
+
+    fun printInvoice() {
+        val ipd = _state.value.invoicePdf
+        if (ipd.url.isBlank() || ipd.selectedPrinter.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isPrinting = true, printError = null)) }
+            runCatching {
+                val bytes = java.net.URL(ipd.url).readBytes()
+                val printer = javax.print.PrintServiceLookup.lookupPrintServices(null, null)
+                    .firstOrNull { it.name == ipd.selectedPrinter }
+                    ?: throw Exception("Printer '${ipd.selectedPrinter}' not found")
+                val doc = org.apache.pdfbox.pdmodel.PDDocument.load(bytes)
+                val job = java.awt.print.PrinterJob.getPrinterJob()
+                job.setPrintService(printer)
+                job.setPageable(org.apache.pdfbox.printing.PDFPageable(doc))
+                job.print()
+                doc.close()
+            }.onSuccess {
+                _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isPrinting = false)) }
+            }.onFailure { e ->
+                _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(isPrinting = false, printError = e.message)) }
+            }
+        }
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachMoney
@@ -469,29 +470,27 @@ fun StayBillingScreen(
                             else -> Unit
                         }
 
-                        // Generate invoice (disabled stub)
                         Button(
-                            onClick = { /* PDF stub - not implemented yet */ },
-                            enabled = false,
+                            onClick = { vm.openInvoicePdf() },
+                            enabled = state.bill?.status == "PAID" && !state.invoicePdf.isGenerating,
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = DreamlandGold,
+                                contentColor = DreamlandForest,
                                 disabledContainerColor = DreamlandMuted.copy(alpha = 0.3f),
                             ),
                         ) {
-                            Icon(Icons.Filled.Receipt, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Generate Invoice (PDF)", fontWeight = FontWeight.SemiBold)
+                            if (state.invoicePdf.isGenerating) {
+                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = DreamlandForest)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Generating…", fontWeight = FontWeight.SemiBold, color = DreamlandForest)
+                            } else {
+                                Icon(Icons.Filled.Receipt, contentDescription = null, modifier = Modifier.size(18.dp), tint = DreamlandForest)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Generate Invoice (PDF)", fontWeight = FontWeight.SemiBold, color = DreamlandForest)
+                            }
                         }
-
-                        Text(
-                            "PDF generation coming soon",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = DreamlandMuted,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
                     }
                 }
             }
@@ -533,7 +532,12 @@ fun StayBillingScreen(
     if (cpd.show) {
         val bill4Dialog = state.bill
         val liveRateD = if (bill4Dialog != null) state.editableTaxPct.toDoubleOrNull() ?: bill4Dialog.taxPercentage else 0.0
-        val liveTaxForDialog = if (bill4Dialog != null) bill4Dialog.subtotal * liveRateD / 100.0 else 0.0
+        val perItemTaxD = bill4Dialog?.items?.filter { it.taxPercentage > 0 }?.sumOf { it.total * it.taxPercentage / 100.0 } ?: 0.0
+        val liveTaxForDialog = when {
+            perItemTaxD > 0 -> perItemTaxD
+            bill4Dialog != null -> bill4Dialog.subtotal * liveRateD / 100.0
+            else -> 0.0
+        }
         val liveTotalForDialog = if (bill4Dialog != null) {
             val liveDiscVD = state.editableDiscountValue.toDoubleOrNull() ?: bill4Dialog.discountValue
             val liveDiscD = when (state.editableDiscountType) {
@@ -553,7 +557,7 @@ fun StayBillingScreen(
     }
 
     val ipd = state.invoicePdf
-    if (ipd.show) InvoicePdfViewerDialog(ipd, onClose = vm::closeInvoicePdf)
+    if (ipd.show) InvoicePdfViewerDialog(ipd, vm, onClose = vm::closeInvoicePdf)
 
     if (state.guestPickerOpen) {
         GuestPickerDialog(
@@ -1827,8 +1831,10 @@ private fun ConfirmPaymentDialogUI(
 @Composable
 private fun InvoicePdfViewerDialog(
     ipd: com.example.dreamland_reception.ui.viewmodel.InvoicePdfState,
+    vm: StayBillingViewModel,
     onClose: () -> Unit,
 ) {
+    LaunchedEffect(Unit) { vm.loadPrinters() }
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -1855,13 +1861,191 @@ private fun InvoicePdfViewerDialog(
                         Text("INVOICE", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
                         Text("Tax Invoice (PDF)", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
                     }
+                    // Printer dropdown + Print button (only when PDF is ready)
                     if (ipd.url.isNotBlank()) {
+                        var printerExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            OutlinedButton(
+                                onClick = { if (ipd.availablePrinters.isNotEmpty()) printerExpanded = true },
+                                modifier = Modifier.widthIn(min = 140.dp, max = 220.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.4f)),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DreamlandOnDark),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            ) {
+                                Text(
+                                    when {
+                                        ipd.availablePrinters.isEmpty() -> "No printers found"
+                                        ipd.selectedPrinter.isBlank() -> "Select Printer"
+                                        else -> ipd.selectedPrinter
+                                    },
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                if (ipd.availablePrinters.isNotEmpty())
+                                    Text("▼", color = DreamlandGold, style = MaterialTheme.typography.labelSmall)
+                            }
+                            DropdownMenu(
+                                expanded = printerExpanded,
+                                onDismissRequest = { printerExpanded = false },
+                                modifier = Modifier.background(DreamlandForestElevated),
+                            ) {
+                                ipd.availablePrinters.forEach { printer ->
+                                    DropdownMenuItem(
+                                        text = { Text(printer, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall) },
+                                        onClick = { vm.selectPrinter(printer); printerExpanded = false },
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = { vm.printInvoice() },
+                            enabled = !ipd.isPrinting && ipd.selectedPrinter.isNotBlank() && ipd.availablePrinters.isNotEmpty(),
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = DreamlandForest),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        ) {
+                            if (ipd.isPrinting) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = DreamlandForest)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                if (ipd.isPrinting) "Printing…" else "Print",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        ipd.printError?.let { err ->
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "⚠ $err",
+                                color = Color(0xFFEF5350),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.widthIn(max = 180.dp),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                    }
+                    // QR / Email / Open buttons
+                    if (ipd.url.isNotBlank()) {
+                        IconButton(onClick = { vm.openQrDialog() }) {
+                            Icon(Icons.Filled.CropFree, contentDescription = "Show QR Code", tint = DreamlandGold)
+                        }
+                        IconButton(onClick = { vm.openEmailDialog() }) {
+                            Icon(
+                                Icons.Filled.Email,
+                                contentDescription = "Send Email",
+                                tint = if (ipd.sendSuccess) Color(0xFF4CAF50) else DreamlandGold,
+                            )
+                        }
                         IconButton(onClick = { openInBrowser(ipd.url) }) {
                             Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in browser", tint = DreamlandGold)
                         }
                     }
                     IconButton(onClick = onClose) {
                         Icon(Icons.Filled.Close, contentDescription = "Close", tint = DreamlandMuted)
+                    }
+                }
+
+                // ── Send Email Dialog ─────────────────────────────────────────
+                if (ipd.emailDialogOpen) {
+                    Dialog(
+                        onDismissRequest = { if (!ipd.isSending) vm.closeEmailDialog() },
+                        properties = DialogProperties(usePlatformDefaultWidth = false),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 320.dp, max = 440.dp)
+                                .fillMaxWidth(0.35f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(DreamlandForestSurface)
+                                .padding(24.dp),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                Text("Send Invoice by Email", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                                OutlinedTextField(
+                                    value = ipd.guestEmail,
+                                    onValueChange = vm::onGuestEmailChanged,
+                                    label = { Text("Recipient Email") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Send),
+                                    keyboardActions = KeyboardActions(onSend = { vm.sendInvoiceEmail() }),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = DreamlandOnDark,
+                                        unfocusedTextColor = DreamlandOnDark,
+                                        focusedBorderColor = DreamlandGold,
+                                        unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                                        cursorColor = DreamlandOnDark,
+                                    ),
+                                )
+                                ipd.sendError?.let { err ->
+                                    Text("⚠ $err", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelSmall)
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    TextButton(onClick = { vm.closeEmailDialog() }, modifier = Modifier.weight(1f)) {
+                                        Text("Cancel", color = DreamlandMuted)
+                                    }
+                                    Button(
+                                        onClick = { vm.sendInvoiceEmail() },
+                                        enabled = ipd.guestEmail.trim().isNotBlank() && !ipd.isSending,
+                                        modifier = Modifier.weight(2f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = DreamlandForest),
+                                        shape = RoundedCornerShape(10.dp),
+                                    ) {
+                                        if (ipd.isSending) {
+                                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DreamlandForest)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Text(if (ipd.isSending) "Sending…" else "Send Email", fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── QR Code Dialog ────────────────────────────────────────────
+                if (ipd.showQrDialog) {
+                    Dialog(
+                        onDismissRequest = { vm.closeQrDialog() },
+                        properties = DialogProperties(usePlatformDefaultWidth = false),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .widthIn(min = 280.dp, max = 340.dp)
+                                .fillMaxWidth(0.28f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(DreamlandForestSurface)
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Text("Scan to view invoice", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
+                                if (ipd.qrImage != null) {
+                                    androidx.compose.foundation.Image(
+                                        bitmap = remember(ipd.qrImage) { ipd.qrImage.toComposeImageBitmap() },
+                                        contentDescription = "Invoice QR Code",
+                                        modifier = Modifier.size(260.dp).clip(RoundedCornerShape(8.dp)),
+                                    )
+                                } else {
+                                    CircularProgressIndicator(color = DreamlandGold, modifier = Modifier.size(40.dp))
+                                }
+                                Text("Open on any phone camera", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
+                                TextButton(onClick = { vm.closeQrDialog() }) {
+                                    Text("Close", color = DreamlandMuted)
+                                }
+                            }
+                        }
                     }
                 }
 
