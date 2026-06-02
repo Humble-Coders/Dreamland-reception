@@ -34,6 +34,8 @@ import com.example.dreamland_reception.data.repository.RoomRepository
 import com.example.dreamland_reception.data.repository.ServiceRepository
 import com.example.dreamland_reception.data.model.BookingSource
 import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRepository
+import com.example.dreamland_reception.data.repository.FirestoreScannerRepository
+import com.example.dreamland_reception.data.repository.ScannerRepository
 import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.util.localTodayUtcMidnight
@@ -86,6 +88,13 @@ data class GuestEntry(
     val name: String = "",
     val phone: String = "",
     val idProofVerified: Boolean = false,
+    val gender: String = "",
+    val govIdNumber: String = "",
+    val address: String = "",
+    val dob: String = "",
+    val age: Int? = null,
+    val govIdPicture1: String = "",
+    val govIdPicture2: String = "",
 )
 
 data class RoomGuestAssignment(
@@ -175,6 +184,7 @@ data class WalkInState(
     // Cached from last computeAvailability() run — used by pre-flight check at submit time (no extra reads)
     val cachedConfirmedBookings: List<Booking> = emptyList(),
     val cachedActiveStays: List<com.example.dreamland_reception.data.model.Stay> = emptyList(),
+    val scannerMessage: String? = null,
 )
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
@@ -319,6 +329,7 @@ class StaysViewModel(
     private val foodItemRepo: FoodItemRepository = FirestoreFoodItemRepository,
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
     private val userRepo: com.example.dreamland_reception.data.repository.UserRepository = com.example.dreamland_reception.data.repository.FirestoreUserRepository,
+    private val scannerRepo: ScannerRepository = FirestoreScannerRepository,
 ) : ViewModel() {
 
     private val _listState = MutableStateFlow(StaysListState(isLoading = true))
@@ -685,7 +696,7 @@ class StaysViewModel(
                     val specificIds = ws.selectedInstanceIds.filter { ws.selectedInstanceDetails[it]?.categoryId == catId }
                     val allGuestDetails = ws.guestEntries
                         .filter { it.name.isNotBlank() || it.phone.isNotBlank() }
-                        .map { GuestDetail(name = it.name.trim(), phone = it.phone.trim(), idProofVerified = it.idProofVerified) }
+                        .map { GuestDetail(name = it.name.trim(), phone = it.phone.trim(), idProofVerified = it.idProofVerified, gender = it.gender, govIdNumber = it.govIdNumber, address = it.address, dob = it.dob, age = it.age ?: 0) }
                     specificIds.forEach { instanceId ->
                         val inst = ws.selectedInstanceDetails[instanceId]
                         bookingRepo.add(Booking(
@@ -781,6 +792,58 @@ class StaysViewModel(
         val updated = ws.guestEntries.toMutableList().also { it.removeAt(index) }
         ws.copy(guestEntries = updated, adults = updated.size)
     }
+
+    fun onGuestGender(index: Int, v: String) = updateGuestEntry(index) { it.copy(gender = v) }
+    fun onGuestGovIdNumber(index: Int, v: String) = updateGuestEntry(index) { it.copy(govIdNumber = v) }
+    fun onGuestAddress(index: Int, v: String) = updateGuestEntry(index) { it.copy(address = v) }
+    fun onGuestAge(index: Int, v: String) = updateGuestEntry(index) { it.copy(age = v.filter(Char::isDigit).toIntOrNull()) }
+    fun onGuestDob(index: Int, v: String) {
+        val age = calculateAgeFromDob(v)
+        updateGuestEntry(index) { it.copy(dob = v, age = age) }
+    }
+
+    private fun updateGuestEntry(index: Int, update: (GuestEntry) -> GuestEntry) =
+        _walkInState.update { ws ->
+            val entries = ws.guestEntries.toMutableList()
+            if (index < entries.size) entries[index] = update(entries[index])
+            ws.copy(guestEntries = entries)
+        }
+
+    private fun calculateAgeFromDob(dob: String): Int? {
+        val parts = dob.split("/")
+        if (parts.size != 3) return null
+        return runCatching {
+            val d = java.time.LocalDate.of(parts[2].toInt(), parts[1].toInt(), parts[0].toInt())
+            java.time.Period.between(d, java.time.LocalDate.now()).years
+        }.getOrNull()
+    }
+
+    fun fillGuestFromScanner(index: Int) {
+        viewModelScope.launch {
+            val doc = runCatching { scannerRepo.fetchFirstAndDelete() }.getOrNull()
+            if (doc == null) {
+                _walkInState.update { ws -> ws.copy(scannerMessage = "No scanned document found") }
+                return@launch
+            }
+            val age = if (doc.age > 0) doc.age else calculateAgeFromDob(doc.dob) ?: 0
+            updateGuestEntry(index) { entry ->
+                entry.copy(
+                    name = doc.name.ifBlank { entry.name },
+                    dob = doc.dob.ifBlank { entry.dob },
+                    gender = doc.gender.ifBlank { entry.gender },
+                    govIdNumber = doc.govIdNumber.ifBlank { entry.govIdNumber },
+                    age = if (age > 0) age else entry.age,
+                    govIdPicture1 = doc.govIdPictures.getOrElse(0) { entry.govIdPicture1 },
+                    govIdPicture2 = doc.govIdPictures.getOrElse(1) { entry.govIdPicture2 },
+                )
+            }
+            if (index == 0 && doc.name.isNotBlank()) {
+                _walkInState.update { ws -> ws.copy(guestName = doc.name, scannerMessage = null) }
+            }
+        }
+    }
+
+    fun clearScannerMessage() = _walkInState.update { it.copy(scannerMessage = null) }
 
     fun onCategorySelected(categoryId: String) {
         val cat = _walkInState.value.categories.find { it.id == categoryId } ?: return
@@ -1331,7 +1394,7 @@ class StaysViewModel(
                         assignment.guestIndices.filter { it != primaryIdx }.sorted()
                     val guestRecords = orderedIndices.mapNotNull { idx ->
                         ws.guestEntries.getOrNull(idx)?.let { e ->
-                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified)
+                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, address = e.address, dob = e.dob, age = e.age ?: 0)
                         }
                     }.ifEmpty {
                         ws.guestEntries.take(1).map { e ->
@@ -1581,7 +1644,7 @@ class StaysViewModel(
             val entries = if (booking.allGuestDetails.isNotEmpty()) {
                 // Restore all guest entries saved at booking time; pad to adults count if needed
                 val fromBooking = booking.allGuestDetails.map { g ->
-                    GuestEntry(name = g.name, phone = g.phone, idProofVerified = g.idProofVerified)
+                    GuestEntry(name = g.name, phone = g.phone, idProofVerified = g.idProofVerified, gender = g.gender, govIdNumber = g.govIdNumber, address = g.address, dob = g.dob, age = g.age.takeIf { it > 0 })
                 }
                 val needed = booking.adults.coerceAtLeast(1)
                 if (fromBooking.size >= needed) fromBooking.take(needed)

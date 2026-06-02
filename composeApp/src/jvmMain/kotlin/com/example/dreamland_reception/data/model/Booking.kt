@@ -6,6 +6,11 @@ data class GuestDetail(
     val name: String = "",
     val phone: String = "",
     val idProofVerified: Boolean = false,
+    val gender: String = "",
+    val govIdNumber: String = "",
+    val address: String = "",
+    val dob: String = "",
+    val age: Int = 0,
 )
 
 data class Booking(

@@ -37,6 +37,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -51,10 +52,12 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -542,6 +545,14 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
 
 @Composable
 private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
+    // Auto-dismiss scanner message after 3s
+    LaunchedEffect(state.scannerMessage) {
+        if (state.scannerMessage != null) {
+            delay(3000)
+            vm.clearScannerMessage()
+        }
+    }
+
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(Icons.Filled.Hotel, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(18.dp))
         Text(
@@ -553,6 +564,25 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
     }
     Spacer(Modifier.height(12.dp))
 
+    // Scanner error toast
+    if (state.scannerMessage != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFFEF5350).copy(alpha = 0.15f))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Text(
+                "⚠ ${state.scannerMessage}",
+                color = Color(0xFFEF5350),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         state.guestEntries.forEachIndexed { index, guest ->
             GuestWizardCard(
@@ -561,6 +591,12 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
                 onNameChange = { vm.onGuestName(index, it) },
                 onPhoneChange = { vm.onGuestPhone(index, it) },
                 onIdProofChange = { vm.onGuestIdProof(index, it) },
+                onGenderChange = { vm.onGuestGender(index, it) },
+                onGovIdChange = { vm.onGuestGovIdNumber(index, it) },
+                onAddressChange = { vm.onGuestAddress(index, it) },
+                onDobChange = { vm.onGuestDob(index, it) },
+                onAgeChange = { vm.onGuestAge(index, it) },
+                onScannerClick = { vm.fillGuestFromScanner(index) },
                 onRemove = if (index > 0) { { vm.removeGuest(index) } } else null,
             )
         }
@@ -986,64 +1022,45 @@ private fun GuestWizardCard(
     onNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
     onIdProofChange: (Boolean) -> Unit,
+    onGenderChange: (String) -> Unit,
+    onGovIdChange: (String) -> Unit,
+    onAddressChange: (String) -> Unit,
+    onDobChange: (String) -> Unit,
+    onAgeChange: (String) -> Unit,
+    onScannerClick: () -> Unit,
     onRemove: (() -> Unit)? = null,
 ) {
     val isPrimary = index == 0
+    // Let fields size naturally so text + label never clip
+    val fieldMod = Modifier
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Number circle + label + optional remove
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Header: number circle + label + Use Scanner + Remove
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
+                        .size(26.dp)
                         .clip(CircleShape)
                         .background(if (isPrimary) DreamlandGold else Color.Transparent)
                         .border(1.dp, if (isPrimary) DreamlandGold else DreamlandMuted.copy(alpha = 0.5f), CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "${index + 1}",
-                        color = if (isPrimary) Color(0xFF0D1F17) else DreamlandMuted,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                    )
+                    Text("${index + 1}", color = if (isPrimary) Color(0xFF0D1F17) else DreamlandMuted, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
-                Text(
-                    "Guest ${index + 1}",
-                    color = DreamlandGold,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                if (onRemove != null) {
-                    TextButton(
-                        onClick = onRemove,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                    ) {
-                        Text("Remove", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-
-            // Name + phone (all guests get both fields; only primary name is mandatory)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = if (isPrimary) "Full Name *" else "Full Name")
-                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone Number", keyboardType = KeyboardType.Phone)
-            }
-
-            // ID proof toggle
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("ID Proof Verified", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
+                Text("Guest ${index + 1}", color = DreamlandGold, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                // ID Proof toggle inline
+                Text("ID ✓", color = DreamlandMuted, fontSize = 11.sp)
                 Switch(
                     checked = entry.idProofVerified,
                     onCheckedChange = onIdProofChange,
+                    modifier = Modifier.height(24.dp),
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = Color(0xFF0D1F17),
                         checkedTrackColor = Color(0xFF4CAF50),
@@ -1051,9 +1068,136 @@ private fun GuestWizardCard(
                         uncheckedTrackColor = DreamlandForestElevated,
                     ),
                 )
+                OutlinedButton(
+                    onClick = onScannerClick,
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.6f)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp),
+                ) {
+                    Text("Use Scanner", color = DreamlandGold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
+                if (onRemove != null) {
+                    TextButton(onClick = onRemove, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
+                        Text("Remove", color = Color(0xFFEF5350), fontSize = 11.sp)
+                    }
+                }
+            }
+
+            // Row 1: Full Name + Phone
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DreamlandTextField(modifier = fieldMod.weight(1f), value = entry.name, onValueChange = onNameChange, label = if (isPrimary) "Full Name *" else "Full Name")
+                DreamlandTextField(modifier = fieldMod.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone", keyboardType = KeyboardType.Phone)
+            }
+
+            // Row 2: Gender + DOB + Age + Govt ID No. (CenterVertically aligns all to the same midpoint)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                DreamlandTextField(modifier = fieldMod.weight(0.8f), value = entry.gender, onValueChange = onGenderChange, label = "Gender")
+                DobPickerField(modifier = Modifier.weight(1.2f), dob = entry.dob, onDobChange = onDobChange)
+                DreamlandTextField(modifier = fieldMod.weight(0.6f), value = entry.age?.toString() ?: "", onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) }, label = "Age", keyboardType = KeyboardType.Number)
+                DreamlandTextField(modifier = fieldMod.weight(1.4f), value = entry.govIdNumber, onValueChange = onGovIdChange, label = "Govt ID No.")
+            }
+
+            // Row 3: Address + ID image buttons
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.address, onValueChange = onAddressChange, label = "Address")
+                if (entry.govIdPicture1.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = { openUrlInBrowser(entry.govIdPicture1) },
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    ) { Text("ID Image 1", color = DreamlandGold, fontSize = 11.sp) }
+                }
+                if (entry.govIdPicture2.isNotBlank()) {
+                    OutlinedButton(
+                        onClick = { openUrlInBrowser(entry.govIdPicture2) },
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    ) { Text("ID Image 2", color = DreamlandGold, fontSize = 11.sp) }
+                }
             }
         }
     }
+}
+
+private fun openUrlInBrowser(url: String) {
+    runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
+}
+
+@Composable
+private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChange: (String) -> Unit) {
+    val parts = dob.split("/")
+    var selDay   by remember(dob) { mutableStateOf(parts.getOrNull(0)?.toIntOrNull() ?: 1) }
+    var selMonth by remember(dob) { mutableStateOf(parts.getOrNull(1)?.toIntOrNull() ?: 1) }
+    var selYear  by remember(dob) { mutableStateOf(parts.getOrNull(2)?.toIntOrNull() ?: java.time.LocalDate.now().year) }
+
+    var dayExpanded   by remember { mutableStateOf(false) }
+    var monthExpanded by remember { mutableStateOf(false) }
+    var yearExpanded  by remember { mutableStateOf(false) }
+
+    val monthNames = listOf("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+    val currentYear = java.time.LocalDate.now().year
+
+    fun commit() = onDobChange("%02d/%02d/%04d".format(selDay, selMonth, selYear))
+
+    val btnBorder = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f))
+    val btnPad = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
+    val btnShape = RoundedCornerShape(8.dp)
+
+    // 56.dp = M3 OutlinedTextField container height (without label overhead above the border)
+    Box(
+        modifier
+            .padding(top = 8.dp)
+            .height(56.dp)
+            .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Day
+        Box(Modifier.weight(1f)) {
+            OutlinedButton(onClick = { dayExpanded = true }, shape = btnShape, border = btnBorder,
+                contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
+            ) { Text("%02d".format(selDay), color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+            DropdownMenu(expanded = dayExpanded, onDismissRequest = { dayExpanded = false },
+                modifier = Modifier.background(DreamlandForestElevated).heightIn(max = 200.dp)) {
+                (1..31).forEach { d ->
+                    DropdownMenuItem(text = { Text("%02d".format(d), color = DreamlandOnDark, fontSize = 12.sp) },
+                        onClick = { selDay = d; dayExpanded = false; commit() })
+                }
+            }
+        }
+        Text("/", color = DreamlandMuted, fontSize = 13.sp)
+        // Month
+        Box(Modifier.weight(1.2f)) {
+            OutlinedButton(onClick = { monthExpanded = true }, shape = btnShape, border = btnBorder,
+                contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
+            ) { Text(monthNames.getOrElse(selMonth - 1) { "Jan" }, color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+            DropdownMenu(expanded = monthExpanded, onDismissRequest = { monthExpanded = false },
+                modifier = Modifier.background(DreamlandForestElevated).heightIn(max = 200.dp)) {
+                monthNames.forEachIndexed { i, name ->
+                    DropdownMenuItem(text = { Text(name, color = DreamlandOnDark, fontSize = 12.sp) },
+                        onClick = { selMonth = i + 1; monthExpanded = false; commit() })
+                }
+            }
+        }
+        Text("/", color = DreamlandMuted, fontSize = 13.sp)
+        // Year
+        Box(Modifier.weight(1.5f)) {
+            OutlinedButton(onClick = { yearExpanded = true }, shape = btnShape, border = btnBorder,
+                contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
+            ) { Text(selYear.toString(), color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+            DropdownMenu(expanded = yearExpanded, onDismissRequest = { yearExpanded = false },
+                modifier = Modifier.background(DreamlandForestElevated).heightIn(max = 220.dp)) {
+                (currentYear downTo 1920).forEach { y ->
+                    DropdownMenuItem(text = { Text(y.toString(), color = DreamlandOnDark, fontSize = 12.sp) },
+                        onClick = { selYear = y; yearExpanded = false; commit() })
+                }
+            }
+        }
+    }   // end inner Row
+    }   // end outer Box
 }
 
 // ── Wizard section label (uppercase, gold, no divider) ────────────────────────
