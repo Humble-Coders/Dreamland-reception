@@ -11,6 +11,10 @@ interface UserRepository {
     suspend fun getAllByHotel(hotelId: String): List<Guest>
     suspend fun getByIds(ids: Set<String>): List<Guest>
     suspend fun markCheckedIn(userId: String, checkedIn: Boolean)
+    /** Returns the doc id of the user whose `phoneNumber` exactly matches, or null. */
+    suspend fun findIdByPhone(phoneNumber: String): String?
+    /** Creates a reception-owned guest user (auto id stored in `uid`, empty `fireAuthId`). Returns the id. */
+    suspend fun createGuestUser(displayName: String, phoneNumber: String): String
 }
 
 object FirestoreUserRepository : UserRepository {
@@ -30,8 +34,33 @@ object FirestoreUserRepository : UserRepository {
 
     override suspend fun markCheckedIn(userId: String, checkedIn: Boolean) = withContext(Dispatchers.IO) {
         if (userId.isBlank()) return@withContext
-        col.document(userId).update("checkedIn", checkedIn).get()
+        col.document(userId).update(mapOf("isCheckedIn" to checkedIn, "updatedAt" to Date())).get()
         Unit
+    }
+
+    override suspend fun findIdByPhone(phoneNumber: String): String? = withContext(Dispatchers.IO) {
+        if (phoneNumber.isBlank()) return@withContext null
+        col.whereEqualTo("phoneNumber", phoneNumber).limit(1).get().get()
+            .documents.firstOrNull()?.id
+    }
+
+    override suspend fun createGuestUser(displayName: String, phoneNumber: String): String = withContext(Dispatchers.IO) {
+        val ref = col.document()   // Firestore-generated auto id
+        val id = ref.id
+        val now = Date()
+        ref.set(
+            mapOf(
+                "uid" to id,
+                "fireAuthId" to "",            // filled by the mobile app on OTP linking
+                "displayName" to displayName,
+                "phoneNumber" to phoneNumber,
+                "isCheckedIn" to true,
+                "providers" to emptyList<String>(),
+                "createdAt" to now,
+                "updatedAt" to now,
+            ),
+        ).get()
+        id
     }
 
     override suspend fun getByIds(ids: Set<String>): List<Guest> = withContext(Dispatchers.IO) {

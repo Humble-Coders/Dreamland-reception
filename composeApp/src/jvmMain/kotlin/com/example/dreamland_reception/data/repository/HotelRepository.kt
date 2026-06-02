@@ -9,6 +9,8 @@ interface HotelRepository {
     suspend fun getAll(): List<Hotel>
     suspend fun getById(id: String): Hotel?
     suspend fun update(hotel: Hotel)
+    /** Field-level update of just the GRC template — avoids the full-document overwrite in [update]. */
+    suspend fun updateGrcTemplate(hotelId: String, html: String)
 }
 
 object FirestoreHotelRepository : HotelRepository {
@@ -27,6 +29,10 @@ object FirestoreHotelRepository : HotelRepository {
 
     override suspend fun update(hotel: Hotel) = withContext(Dispatchers.IO) {
         col.document(hotel.id).set(hotel.toMap()).get(); Unit
+    }
+
+    override suspend fun updateGrcTemplate(hotelId: String, html: String) = withContext(Dispatchers.IO) {
+        col.document(hotelId).update("grcTemplateHtml", html).get(); Unit
     }
 
     private fun com.google.cloud.firestore.DocumentSnapshot.toHotel() = runCatching {
@@ -57,6 +63,7 @@ object FirestoreHotelRepository : HotelRepository {
             earlyCheckInPrice = getDouble("earlyCheckInPrice") ?: 300.0,
             lateCheckOutAllowed = getBoolean("lateCheckOutAllowed") ?: false,
             lateCheckOutPrice = getDouble("lateCheckOutPrice") ?: 200.0,
+            grcTemplateHtml = getString("grcTemplateHtml") ?: "",
         )
     }.getOrNull()
 
@@ -82,5 +89,6 @@ object FirestoreHotelRepository : HotelRepository {
         "earlyCheckInPrice" to earlyCheckInPrice,
         "lateCheckOutAllowed" to lateCheckOutAllowed,
         "lateCheckOutPrice" to lateCheckOutPrice,
+        "grcTemplateHtml" to grcTemplateHtml,
     )
 }

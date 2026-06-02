@@ -8,6 +8,7 @@ data class GuestRecord(
     val idProofVerified: Boolean = false,
     val gender: String = "",
     val govIdNumber: String = "",
+    val govIdPictures: List<String> = emptyList(),   // URLs of the scanned ID images
     val address: String = "",
     val dob: String = "",
     val age: Int = 0,

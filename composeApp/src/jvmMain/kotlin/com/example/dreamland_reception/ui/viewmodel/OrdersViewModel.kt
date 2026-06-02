@@ -303,6 +303,9 @@ class OrdersViewModel(
             exactMatch.price.toLong().toString() else currentEntry.price
         s.copy(items = s.items.toMutableList().also {
             it[index] = it[index].copy(
+                // Bind to the catalog item only on an exact match; otherwise treat as custom.
+                itemId = exactMatch?.id ?: "",
+                taxPercentage = exactMatch?.taxPercentage ?: 0.0,
                 name = v,
                 price = autoPrice,
                 suggestions = suggestions,
@@ -314,6 +317,8 @@ class OrdersViewModel(
     fun selectCreateOrderItemSuggestion(index: Int, suggestion: CatalogItem) = _createOrderDialog.update { s ->
         s.copy(items = s.items.toMutableList().also {
             it[index] = it[index].copy(
+                itemId = suggestion.id,
+                taxPercentage = suggestion.taxPercentage,
                 name = suggestion.name,
                 price = if (suggestion.price > 0) suggestion.price.toLong().toString() else "",
                 suggestions = emptyList(),
@@ -364,22 +369,24 @@ class OrdersViewModel(
         val stay = s.activeStays.find { it.id == s.selectedStayId } ?: return
         _createOrderDialog.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
-            val orderItems = validItems.map {
-                OrderItem(it.name.trim(), it.quantity, it.price.toDoubleOrNull() ?: 0.0)
-            }
-            val total = orderItems.sumOf { it.price * it.quantity }
+            val orderItems = validItems.map { it.toOrderItem() }
             val orderType = if (validItems.any { it.category == "Services" }) "SERVICE" else "ROOM_SERVICE"
             runCatching {
                 orderRepo.add(Order(
                     hotelId = AppContext.hotelId,
+                    userId = stay.userId,
                     stayId = stay.id,
+                    groupStayId = stay.groupStayId,
+                    roomInstanceId = stay.roomInstanceId,
                     roomNumber = stay.roomNumber,
                     guestName = stay.guestName,
                     items = orderItems,
                     type = orderType,
-                    totalAmount = total,
+                    subtotalAmount = orderItems.sumOf { it.subtotal },
+                    totalTaxAmount = orderItems.sumOf { it.taxAmount },
+                    totalAmount = orderItems.sumOf { it.total },
                     notes = s.notes.trim(),
-                    orderedAt = Date(),
+                    createdAt = Date(),
                 ))
             }.onSuccess {
                 _createOrderDialog.value = CreateOrderDialogState()

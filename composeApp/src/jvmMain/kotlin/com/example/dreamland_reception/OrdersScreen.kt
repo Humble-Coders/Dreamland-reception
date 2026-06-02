@@ -262,7 +262,7 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
             order.items.forEach { item ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("${item.name} ×${item.quantity}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    if (item.price > 0) Text("₹${(item.price * item.quantity).toLong()}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    if (item.total > 0) Text("₹${item.total.toLong()}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

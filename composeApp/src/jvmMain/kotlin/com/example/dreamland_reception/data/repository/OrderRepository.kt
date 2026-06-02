@@ -31,7 +31,9 @@ object FirestoreOrderRepository : OrderRepository {
     private val col get() = FirestoreRepositorySupport.get().collection("orders")
 
     override suspend fun getAll(): List<Order> = withContext(Dispatchers.IO) {
-        col.orderBy("orderedAt").get().get().documents.mapNotNull { it.toOrder() }
+        // Sort client-side so legacy docs (which used `orderedAt`) are not dropped by an
+        // orderBy on a field they may not have.
+        col.get().get().documents.mapNotNull { it.toOrder() }.sortedBy { it.createdAt }
     }
 
     override suspend fun getPending(): List<Order> = withContext(Dispatchers.IO) {
@@ -42,13 +44,13 @@ object FirestoreOrderRepository : OrderRepository {
     override suspend fun getByStay(stayId: String): List<Order> = withContext(Dispatchers.IO) {
         col.whereEqualTo("stayId", stayId)
             .get().get().documents.mapNotNull { it.toOrder() }
-            .sortedBy { it.orderedAt }
+            .sortedBy { it.createdAt }
     }
 
     override suspend fun getByHotel(hotelId: String): List<Order> = withContext(Dispatchers.IO) {
         col.whereEqualTo("hotelId", hotelId)
             .get().get().documents.mapNotNull { it.toOrder() }
-            .sortedByDescending { it.orderedAt }
+            .sortedByDescending { it.createdAt }
     }
 
     override suspend fun add(order: Order): String = withContext(Dispatchers.IO) {
@@ -73,7 +75,7 @@ object FirestoreOrderRepository : OrderRepository {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) { close(error); return@addSnapshotListener }
                 val orders = snapshot?.documents?.mapNotNull { it.toOrder() }
-                    ?.sortedByDescending { it.orderedAt } ?: emptyList()
+                    ?.sortedByDescending { it.createdAt } ?: emptyList()
                 trySend(orders)
             }
         awaitClose { registration.remove() }
@@ -84,7 +86,7 @@ object FirestoreOrderRepository : OrderRepository {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) { close(error); return@addSnapshotListener }
                 val orders = snapshot?.documents?.mapNotNull { it.toOrder() }
-                    ?.sortedBy { it.orderedAt } ?: emptyList()
+                    ?.sortedBy { it.createdAt } ?: emptyList()
                 trySend(orders)
             }
         awaitClose { registration.remove() }
@@ -96,38 +98,79 @@ object FirestoreOrderRepository : OrderRepository {
         Order(
             id = id,
             hotelId = getString("hotelId") ?: "",
+            userId = getString("userId") ?: "",
             stayId = getString("stayId") ?: "",
+            groupStayId = getString("groupStayId") ?: "",
+            roomInstanceId = getString("roomInstanceId") ?: "",
             roomNumber = getString("roomNumber") ?: "",
             guestName = getString("guestName") ?: "",
-            items = rawItems.map {
-                OrderItem(
-                    name = it["name"] as? String ?: "",
-                    quantity = (it["quantity"] as? Long)?.toInt() ?: 1,
-                    price = (it["price"] as? Double) ?: 0.0,
-                )
-            },
+            items = rawItems.map { it.toOrderItem() },
             type = getString("type") ?: "ORDER",
+            subtotalAmount = getDouble("subtotalAmount") ?: 0.0,
+            totalTaxAmount = getDouble("totalTaxAmount") ?: 0.0,
             totalAmount = getDouble("totalAmount") ?: 0.0,
             status = getString("status") ?: "NEW",
             notes = getString("notes") ?: "",
-            orderedAt = getTimestamp("orderedAt")?.toDate() ?: Date(),
+            // `orderedAt` is the legacy field name; fall back to it for pre-rename docs.
+            createdAt = getTimestamp("createdAt")?.toDate() ?: getTimestamp("orderedAt")?.toDate() ?: Date(),
             assignedTo = getString("assignedTo") ?: "",
             assignedToName = getString("assignedToName") ?: "",
         )
     }.getOrNull()
 
+    /**
+     * Maps a Firestore item map to [OrderItem], synthesising the tax breakdown for legacy
+     * docs that only stored `{itemId?, name, price, quantity}` (per schema legacy-compat note):
+     * `price → basePrice`, `taxedPrice = basePrice`, `taxAmount = 0`, `subtotal = total = basePrice × qty`.
+     */
+    private fun Map<String, Any>.toOrderItem(): OrderItem {
+        val quantity = (get("quantity") as? Number)?.toInt() ?: 1
+        val legacyPrice = (get("price") as? Number)?.toDouble()
+        val basePrice = (get("basePrice") as? Number)?.toDouble() ?: legacyPrice ?: 0.0
+        val taxPercentage = (get("taxPercentage") as? Number)?.toDouble() ?: 0.0
+        val taxedPrice = (get("taxedPrice") as? Number)?.toDouble() ?: (basePrice * (1 + taxPercentage / 100.0))
+        return OrderItem(
+            itemId = get("itemId") as? String ?: "",
+            name = get("name") as? String ?: "",
+            quantity = quantity,
+            basePrice = basePrice,
+            taxPercentage = taxPercentage,
+            taxedPrice = taxedPrice,
+            taxAmount = (get("taxAmount") as? Number)?.toDouble() ?: ((taxedPrice - basePrice) * quantity),
+            subtotal = (get("subtotal") as? Number)?.toDouble() ?: (basePrice * quantity),
+            total = (get("total") as? Number)?.toDouble() ?: (taxedPrice * quantity),
+        )
+    }
+
     private fun Order.toMap() = mapOf(
         "hotelId" to hotelId,
+        "userId" to userId,
         "stayId" to stayId,
+        "groupStayId" to groupStayId,
+        "roomInstanceId" to roomInstanceId,
         "roomNumber" to roomNumber,
         "guestName" to guestName,
-        "items" to items.map { mapOf("name" to it.name, "quantity" to it.quantity, "price" to it.price) },
+        "items" to items.map { it.toMap() },
         "type" to type,
+        "subtotalAmount" to subtotalAmount,
+        "totalTaxAmount" to totalTaxAmount,
         "totalAmount" to totalAmount,
         "status" to status,
         "notes" to notes,
-        "orderedAt" to orderedAt,
+        "createdAt" to createdAt,
         "assignedTo" to assignedTo,
         "assignedToName" to assignedToName,
+    )
+
+    private fun OrderItem.toMap() = mapOf(
+        "itemId" to itemId,
+        "name" to name,
+        "quantity" to quantity,
+        "basePrice" to basePrice,
+        "taxPercentage" to taxPercentage,
+        "taxedPrice" to taxedPrice,
+        "taxAmount" to taxAmount,
+        "subtotal" to subtotal,
+        "total" to total,
     )
 }

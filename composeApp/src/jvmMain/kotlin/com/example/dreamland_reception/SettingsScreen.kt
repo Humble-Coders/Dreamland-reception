@@ -30,7 +30,10 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -182,6 +185,65 @@ fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsVi
                                 style = MaterialTheme.typography.labelSmall,
                                 color = DreamlandMuted,
                             )
+                        }
+                    }
+
+                    // ── GRC Form Template (printed at check-in) ───────────────
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("GRC FORM TEMPLATE", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
+                            Text(
+                                "HTML printed as the Guest Registration Card at check-in. Use placeholders like " +
+                                    "{{guestName}}, {{idNumber}}, {{roomNumber}}, {{checkIn}}, {{checkOut}}, {{hotelName}} and {{idImages}}.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DreamlandMuted,
+                            )
+                            OutlinedTextField(
+                                value = state.grcTemplateDraft,
+                                onValueChange = vm::onGrcTemplateChanged,
+                                label = { Text("GRC HTML template (blank = built-in default)") },
+                                modifier = Modifier.fillMaxWidth().height(260.dp),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = DreamlandOnDark,
+                                    unfocusedTextColor = DreamlandOnDark,
+                                    focusedBorderColor = DreamlandGold,
+                                    unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                                    focusedLabelColor = DreamlandGold,
+                                    unfocusedLabelColor = DreamlandMuted,
+                                    cursorColor = DreamlandOnDark,
+                                ),
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(onClick = vm::resetGrcTemplateToDefault) {
+                                    Text("Reset to default", color = DreamlandMuted)
+                                }
+                                Spacer(Modifier.weight(1f))
+                                if (state.grcSaved) {
+                                    Text("Saved ✓", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium)
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Button(
+                                    onClick = vm::saveGrcTemplate,
+                                    enabled = !state.grcSaving,
+                                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                                    shape = RoundedCornerShape(10.dp),
+                                ) {
+                                    if (state.grcSaving) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFF0D1F17))
+                                    } else {
+                                        Text("Save Template", color = Color(0xFF0D1F17), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

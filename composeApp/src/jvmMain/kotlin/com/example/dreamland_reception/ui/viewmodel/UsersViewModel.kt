@@ -73,6 +73,8 @@ class UsersViewModel(
         val userIds = buildSet<String> {
             allBookings.forEach { if (it.userId.isNotBlank()) add(it.userId) }
             allStays.forEach { stay -> bookingIdToUserId[stay.bookingId]?.let { add(it) } }
+            // Walk-in stays carry a userId directly (no booking) — include them too.
+            allStays.forEach { if (it.userId.isNotBlank()) add(it.userId) }
         }
         val rawUsers = runCatching { userRepo.getByIds(userIds) }.getOrElse { emptyList() }
         // Enrich guests whose name/phone is blank with data from their most recent booking

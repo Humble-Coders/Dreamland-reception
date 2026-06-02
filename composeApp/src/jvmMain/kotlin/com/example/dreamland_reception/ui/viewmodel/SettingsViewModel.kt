@@ -84,6 +84,11 @@ data class SettingsUiState(
     // Local config (stored on-device via Java Preferences, not in Firestore)
     val senderEmail: String = com.example.dreamland_reception.data.LocalConfig.senderEmail,
     val resendApiKey: String = com.example.dreamland_reception.data.LocalConfig.resendApiKey,
+
+    // GRC (Guest Registration Card) template editor
+    val grcTemplateDraft: String = "",
+    val grcSaving: Boolean = false,
+    val grcSaved: Boolean = false,
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -136,6 +141,8 @@ class SettingsViewModel(
                     services = services,
                     foodItems = food,
                     complaintTypes = complaints,
+                    grcTemplateDraft = hotel?.grcTemplateHtml ?: "",
+                    grcSaved = false,
                     isLoadingData = false,
                 )
             }
@@ -159,6 +166,28 @@ class SettingsViewModel(
     fun onResendApiKeyChanged(v: String) {
         com.example.dreamland_reception.data.LocalConfig.resendApiKey = v
         _state.update { it.copy(resendApiKey = v) }
+    }
+
+    // ── GRC template ───────────────────────────────────────────────────────────
+
+    fun onGrcTemplateChanged(v: String) = _state.update { it.copy(grcTemplateDraft = v, grcSaved = false) }
+
+    fun resetGrcTemplateToDefault() = _state.update {
+        it.copy(grcTemplateDraft = com.example.dreamland_reception.grc.GrcRenderer.DEFAULT_TEMPLATE, grcSaved = false)
+    }
+
+    fun saveGrcTemplate() {
+        val hotelId = _state.value.selectedHotelId
+        if (hotelId.isBlank()) return
+        val html = _state.value.grcTemplateDraft
+        _state.update { it.copy(grcSaving = true, grcSaved = false) }
+        launchWithGlobalLoading {
+            runCatching { hotelRepo.updateGrcTemplate(hotelId, html) }
+                .onSuccess {
+                    _state.update { s -> s.copy(grcSaving = false, grcSaved = true, selectedHotel = s.selectedHotel?.copy(grcTemplateHtml = html)) }
+                }
+                .onFailure { e -> _state.update { it.copy(grcSaving = false, error = e.message) } }
+        }
     }
 
     // ── Services ──────────────────────────────────────────────────────────────

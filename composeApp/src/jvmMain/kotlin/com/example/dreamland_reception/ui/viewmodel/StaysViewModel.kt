@@ -39,8 +39,12 @@ import com.example.dreamland_reception.data.repository.ScannerRepository
 import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.util.localTodayUtcMidnight
+import com.example.dreamland_reception.util.normalizePhoneE164
 import com.example.dreamland_reception.util.toLocalDayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
+import com.example.dreamland_reception.grc.GrcData
+import com.example.dreamland_reception.grc.GrcRenderer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -128,6 +132,20 @@ data class CheckInMismatchConfirmState(
     val unmetBookingCount: Int = 0,         // how many group bookings won't be linked
 )
 
+/** Per-guest print phase on the GRC step. */
+enum class GrcPhase { IDLE, WORKING, DONE, ERROR }
+
+/** Sentinel "printer" that saves the GRC PDF to a file instead of printing (useful for testing). */
+const val GRC_SAVE_AS_PDF = "Save as PDF…"
+
+/** State for the GRC-print wizard step (shared printer selection + per-guest print status). */
+data class GrcStepState(
+    val availablePrinters: List<String> = emptyList(),
+    val selectedPrinter: String = "",
+    val statuses: Map<Int, GrcPhase> = emptyMap(),   // guestEntry index -> phase
+    val errors: Map<Int, String> = emptyMap(),       // guestEntry index -> error message
+)
+
 data class WalkInState(
     val isOpen: Boolean = false,
     // primary guest info (synced from guestEntries[0])
@@ -185,6 +203,7 @@ data class WalkInState(
     val cachedConfirmedBookings: List<Booking> = emptyList(),
     val cachedActiveStays: List<com.example.dreamland_reception.data.model.Stay> = emptyList(),
     val scannerMessage: String? = null,
+    val grc: GrcStepState = GrcStepState(),
 )
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
@@ -216,13 +235,36 @@ data class CatalogItem(
 )
 
 data class OrderItemEntry(
+    val itemId: String = "",          // catalog item id when bound to foodItems/services; "" for custom
     val name: String = "",
     val quantity: Int = 1,
-    val price: String = "",
+    val price: String = "",           // per-unit pre-tax base price
+    val taxPercentage: Double = 0.0,  // carried from the catalog item; 0 for custom
     val category: String = "",
     val suggestions: List<CatalogItem> = emptyList(),
     val showSuggestions: Boolean = false,
 )
+
+/**
+ * Builds a persisted [OrderItem] from a dialog entry, deriving the tax breakdown
+ * (`taxedPrice` / `taxAmount` / `subtotal` / `total`) from the entered pre-tax price
+ * and the catalog item's [OrderItemEntry.taxPercentage].
+ */
+fun OrderItemEntry.toOrderItem(): OrderItem {
+    val base = price.toDoubleOrNull() ?: 0.0
+    val taxedUnit = base * (1 + taxPercentage / 100.0)
+    return OrderItem(
+        itemId = itemId,
+        name = name.trim(),
+        quantity = quantity,
+        basePrice = base,
+        taxPercentage = taxPercentage,
+        taxedPrice = taxedUnit,
+        taxAmount = (taxedUnit - base) * quantity,
+        subtotal = base * quantity,
+        total = taxedUnit * quantity,
+    )
+}
 
 data class AddOrderState(
     val isOpen: Boolean = false,
@@ -845,6 +887,107 @@ class StaysViewModel(
 
     fun clearScannerMessage() = _walkInState.update { it.copy(scannerMessage = null) }
 
+    // ── GRC (Guest Registration Card) printing step ────────────────────────────
+
+    fun loadGrcPrinters() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = javax.print.PrintServiceLookup.lookupPrintServices(null, null).map { it.name }
+            _walkInState.update { ws ->
+                ws.copy(grc = ws.grc.copy(
+                    availablePrinters = names,
+                    selectedPrinter = ws.grc.selectedPrinter.ifBlank { names.firstOrNull() ?: "" },
+                ))
+            }
+        }
+    }
+
+    fun selectGrcPrinter(name: String) =
+        _walkInState.update { it.copy(grc = it.grc.copy(selectedPrinter = name)) }
+
+    /** Renders the GRC for one guest (by guestEntries index) and prints it to the selected printer. */
+    fun printGrcForGuest(index: Int) {
+        val ws = _walkInState.value
+        val entry = ws.guestEntries.getOrNull(index) ?: return
+        val printer = ws.grc.selectedPrinter
+        if (printer.isBlank()) {
+            _walkInState.update { it.copy(grc = it.grc.copy(
+                statuses = it.grc.statuses + (index to GrcPhase.ERROR),
+                errors = it.grc.errors + (index to "Select a printer first"),
+            )) }
+            return
+        }
+        _walkInState.update { it.copy(grc = it.grc.copy(
+            statuses = it.grc.statuses + (index to GrcPhase.WORKING),
+            errors = it.grc.errors - index,
+        )) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
+                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcData(ws, entry, hotel))
+                if (printer == GRC_SAVE_AS_PDF) {
+                    val safe = entry.name.ifBlank { "guest" }.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').ifBlank { "guest" }
+                    val file = java.io.File(System.getProperty("java.io.tmpdir"), "GRC-$safe-${System.currentTimeMillis()}.pdf")
+                    file.writeBytes(pdf)
+                    runCatching { java.awt.Desktop.getDesktop().open(file) }
+                } else {
+                    GrcRenderer.print(pdf, printer)
+                }
+            }.onSuccess {
+                _walkInState.update { it.copy(grc = it.grc.copy(statuses = it.grc.statuses + (index to GrcPhase.DONE))) }
+            }.onFailure { e ->
+                _walkInState.update { it.copy(grc = it.grc.copy(
+                    statuses = it.grc.statuses + (index to GrcPhase.ERROR),
+                    errors = it.grc.errors + (index to (e.message ?: "Print failed")),
+                )) }
+            }
+        }
+    }
+
+    private fun buildGrcData(
+        ws: WalkInState,
+        entry: GuestEntry,
+        hotel: com.example.dreamland_reception.data.model.Hotel?,
+    ): GrcData {
+        val fmt = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
+        val rooms = ws.selectedInstanceIds.mapNotNull { ws.selectedInstanceDetails[it]?.roomNumber }
+            .filter { it.isNotBlank() }
+        val categories = ws.selectedInstanceIds.mapNotNull { ws.selectedInstanceDetails[it]?.categoryName }
+            .filter { it.isNotBlank() }.distinct()
+        val nights = ws.expectedCheckOut?.let { co ->
+            java.util.concurrent.TimeUnit.MILLISECONDS.toDays(co.time - ws.checkInTime.time).coerceAtLeast(1)
+        }
+        val hotelAddress = listOfNotNull(
+            hotel?.address?.takeIf { it.isNotBlank() },
+            hotel?.city?.takeIf { it.isNotBlank() },
+        ).joinToString(", ")
+        return GrcData(
+            hotelName = hotel?.name?.takeIf { it.isNotBlank() } ?: AppContext.hotelName,
+            hotelAddress = hotelAddress,
+            hotelContact = hotel?.contactPhone ?: "",
+            folioNo = (rooms.firstOrNull()?.let { "$it-" } ?: "") +
+                java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(Date()),
+            date = fmt.format(Date()),
+            guestName = entry.name.trim(),
+            guestPhone = entry.phone.trim(),
+            gender = entry.gender,
+            dob = entry.dob,
+            idNumber = entry.govIdNumber,
+            address = entry.address,
+            roomNumber = rooms.joinToString(", "),
+            roomCategory = categories.joinToString(", "),
+            checkIn = fmt.format(ws.checkInTime),
+            checkOut = ws.expectedCheckOut?.let { fmt.format(it) } ?: "",
+            nights = nights?.toString() ?: "",
+            adults = ws.adults.toString(),
+            children = ws.children.toString(),
+            advance = ws.advancePayment.ifBlank { "0" },
+            idImageUrls = listOfNotNull(
+                entry.govIdPicture1.takeIf { it.isNotBlank() },
+                entry.govIdPicture2.takeIf { it.isNotBlank() },
+            ),
+        )
+    }
+
     fun onCategorySelected(categoryId: String) {
         val cat = _walkInState.value.categories.find { it.id == categoryId } ?: return
         _walkInState.update { ws -> ws.copy(
@@ -1261,6 +1404,14 @@ class StaysViewModel(
         val primaryName = ws.guestEntries.firstOrNull()?.name?.trim()?.ifBlank { ws.guestName.trim() } ?: ws.guestName.trim()
         if (primaryName.isBlank()) { _walkInState.update { it.copy(error = "Primary guest name is required") }; return }
         if (ws.selectedInstanceIds.isEmpty()) { _walkInState.update { it.copy(error = "Please select at least one room") }; return }
+        // At least one guest phone is required so every stay can be linked to a user — unless a
+        // linked booking already supplies a userId (app booking; the user account exists).
+        val hasBookingUser = ws.sourceBooking?.userId?.isNotBlank() == true ||
+            ws.groupBookings.any { it.userId.isNotBlank() }
+        if (!hasBookingUser && ws.guestEntries.none { normalizePhoneE164(it.phone) != null }) {
+            _walkInState.update { it.copy(error = "At least one guest must have a valid phone number") }
+            return
+        }
         if (ws.expectedCheckOut == null) { _walkInState.update { it.copy(error = "Please set expected check-out date") }; return }
         if (!ws.expectedCheckOut.after(ws.checkInTime)) {
             _walkInState.update { it.copy(error = "Check-out must be after check-in") }
@@ -1366,6 +1517,48 @@ class StaysViewModel(
                 // Shared ID linking all rooms in a multi-room walk-in; empty for single-room stays
                 val walkInGroupId = if (roomCount > 1) UUID.randomUUID().toString() else ""
 
+                // ── Resolve guest user accounts (users collection) ────────────────
+                // One user doc per phone (deduped). Existing docs (matched on the normalized
+                // phoneNumber) are reused untouched; new docs get an auto id stored in `uid`,
+                // empty fireAuthId, and isCheckedIn = true. Identity (dob/gender/govId/…) is
+                // NOT written here — it stays on the stay's guest records.
+                val phoneToUid = mutableMapOf<String, String>()
+                suspend fun resolveUid(name: String, normalizedPhone: String): String {
+                    phoneToUid[normalizedPhone]?.let { return it }
+                    val uid = userRepo.findIdByPhone(normalizedPhone)
+                        ?: userRepo.createGuestUser(name.ifBlank { "Guest" }, normalizedPhone)
+                    phoneToUid[normalizedPhone] = uid
+                    return uid
+                }
+
+                // Each room's "own" account: the booking's userId when checking in from a
+                // booking, otherwise a phoned guest in that room (preferring the primary).
+                val roomOwnUid = mutableMapOf<String, String>()
+                ws.selectedInstanceIds.forEachIndexed { roomIndex, instanceId ->
+                    val linkedBooking = when {
+                        ws.isGroupCheckIn -> ws.instanceToBookingId[instanceId]?.let { id -> ws.groupBookings.find { it.id == id } }
+                        roomIndex == 0 -> ws.sourceBooking
+                        else -> null
+                    }
+                    val bookingUserId = linkedBooking?.userId?.takeIf { it.isNotBlank() }
+                    roomOwnUid[instanceId] = if (bookingUserId != null) bookingUserId else {
+                        val assignment = ws.roomGuestAssignment[instanceId] ?: RoomGuestAssignment(guestIndices = setOf(0))
+                        val primaryIdx = assignment.primaryIndex ?: assignment.guestIndices.minOrNull() ?: 0
+                        val ordered = listOf(primaryIdx) + assignment.guestIndices.filter { it != primaryIdx }.sorted()
+                        val phoned = ordered.firstNotNullOfOrNull { idx ->
+                            ws.guestEntries.getOrNull(idx)?.let { e -> normalizePhoneE164(e.phone)?.let { n -> e to n } }
+                        }
+                        if (phoned != null) resolveUid(phoned.first.name.trim().ifBlank { primaryName }, phoned.second) else ""
+                    }
+                }
+                // For a multi-room group, any room with no phoned guest borrows the group's
+                // account holder (the first room that resolved to a real user).
+                val groupAccountHolderUid = ws.selectedInstanceIds
+                    .firstNotNullOfOrNull { roomOwnUid[it]?.takeIf { u -> u.isNotBlank() } } ?: ""
+                // Mark every resolved account checked in (idempotent; new docs already are).
+                roomOwnUid.values.filter { it.isNotBlank() }.toSet()
+                    .forEach { uid -> runCatching { userRepo.markCheckedIn(uid, true) } }
+
                 val firstStayId = ws.selectedInstanceIds.mapIndexed { roomIndex, instanceId ->
                     val roomInstance = instanceRepo.getById(instanceId)
                         ?: throw Exception("Room instance $instanceId not found")
@@ -1394,7 +1587,7 @@ class StaysViewModel(
                         assignment.guestIndices.filter { it != primaryIdx }.sorted()
                     val guestRecords = orderedIndices.mapNotNull { idx ->
                         ws.guestEntries.getOrNull(idx)?.let { e ->
-                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, address = e.address, dob = e.dob, age = e.age ?: 0)
+                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0)
                         }
                     }.ifEmpty {
                         ws.guestEntries.take(1).map { e ->
@@ -1416,7 +1609,8 @@ class StaysViewModel(
                             roomIndex == 0 -> ws.sourceBooking?.id ?: ""
                             else -> ""
                         },
-                        userId = linkedBooking?.userId ?: "",
+                        userId = roomOwnUid[instanceId]?.takeIf { it.isNotBlank() }
+                            ?: if (roomCount > 1) groupAccountHolderUid else "",
                         userName = linkedBooking?.userName ?: "",
                         guestName = roomGuestName,
                         guestPhone = roomGuestPhone,
@@ -1439,12 +1633,6 @@ class StaysViewModel(
                         groupStayId = linkedBooking?.groupBookingId?.takeIf { it.isNotBlank() } ?: walkInGroupId,
                     )
                     val stayId = stayRepo.checkInBatch(stay, instanceId)
-
-                    // Mark the booking's user as checked in
-                    val checkInUserId = linkedBooking?.userId ?: ""
-                    if (checkInUserId.isNotBlank()) {
-                        runCatching { userRepo.markCheckedIn(checkInUserId, true) }
-                    }
 
                     if (ws.isGroupCheckIn) {
                         // Link each room to its original group booking (by instanceToBookingId map)
@@ -1924,6 +2112,19 @@ class StaysViewModel(
                         if (booking != null) bookingRepo.update(booking.copy(status = "COMPLETED"))
                     }
                 }
+
+                // Flip isCheckedIn off for each checked-out user, but only once they have
+                // no remaining ACTIVE stay (a group account holder may still occupy other rooms).
+                val checkedOutUserIds = staysToCheckOut.map { it.userId }.filter { it.isNotBlank() }.toSet()
+                if (checkedOutUserIds.isNotEmpty()) {
+                    val stillActiveUserIds = runCatching { stayRepo.getActive(AppContext.hotelId) }
+                        .getOrElse { emptyList() }
+                        .map { it.userId }.filter { it.isNotBlank() }.toSet()
+                    checkedOutUserIds.forEach { uid ->
+                        if (uid !in stillActiveUserIds) runCatching { userRepo.markCheckedIn(uid, false) }
+                    }
+                }
+
                 runCatching { createCheckoutBill(staysToCheckOut, checkoutTime, cos.lateCheckoutCharge) }
             }.onSuccess {
                 runCatching { com.example.dreamland_reception.ui.notification.NotificationManager.playSound() }
@@ -2106,6 +2307,9 @@ class StaysViewModel(
             exactMatch.price.toLong().toString() else currentEntry.price
         s.copy(items = s.items.toMutableList().also {
             it[index] = it[index].copy(
+                // Bind to the catalog item only on an exact match; otherwise treat as custom.
+                itemId = exactMatch?.id ?: "",
+                taxPercentage = exactMatch?.taxPercentage ?: 0.0,
                 name = v,
                 price = autoPrice,
                 suggestions = suggestions,
@@ -2117,6 +2321,8 @@ class StaysViewModel(
     fun selectOrderItemSuggestion(index: Int, suggestion: CatalogItem) = _addOrderState.update { s ->
         s.copy(items = s.items.toMutableList().also {
             it[index] = it[index].copy(
+                itemId = suggestion.id,
+                taxPercentage = suggestion.taxPercentage,
                 name = suggestion.name,
                 price = if (suggestion.price > 0) suggestion.price.toLong().toString() else "",
                 suggestions = emptyList(),
@@ -2156,20 +2362,24 @@ class StaysViewModel(
         }
         _addOrderState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
-            val orderItems = validItems.map { OrderItem(name = it.name.trim(), quantity = it.quantity, price = it.price.toDoubleOrNull() ?: 0.0) }
-            val total = orderItems.sumOf { it.price * it.quantity }
+            val orderItems = validItems.map { it.toOrderItem() }
             val orderType = if (validItems.any { it.category == "Services" }) "SERVICE" else "ROOM_SERVICE"
             runCatching {
                 orderRepo.add(Order(
                     hotelId = AppContext.hotelId,
+                    userId = stay.userId,
                     stayId = stay.id,
+                    groupStayId = stay.groupStayId,
+                    roomInstanceId = stay.roomInstanceId,
                     roomNumber = stay.roomNumber,
                     guestName = stay.guestName,
                     items = orderItems,
                     type = orderType,
-                    totalAmount = total,
+                    subtotalAmount = orderItems.sumOf { it.subtotal },
+                    totalTaxAmount = orderItems.sumOf { it.taxAmount },
+                    totalAmount = orderItems.sumOf { it.total },
                     notes = s.notes.trim(),
-                    orderedAt = Date(),
+                    createdAt = Date(),
                 ))
             }.onSuccess {
                 _addOrderState.value = AddOrderState()

@@ -159,6 +159,7 @@ object FirestoreStayRepository : StayRepository {
                         idProofVerified = it["idProofVerified"] as? Boolean ?: false,
                         gender = it["gender"] as? String ?: "",
                         govIdNumber = it["govIdNumber"] as? String ?: "",
+                        govIdPictures = (it["govIdPictures"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
                         address = it["address"] as? String ?: "",
                         dob = it["dob"] as? String ?: "",
                         age = (it["age"] as? Number)?.toInt() ?: 0,
@@ -198,8 +199,8 @@ object FirestoreStayRepository : StayRepository {
         "updatedAt" to updatedAt,
         "guests" to guests.map { g ->
             mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified,
-                "gender" to g.gender, "govIdNumber" to g.govIdNumber, "address" to g.address,
-                "dob" to g.dob, "age" to g.age)
+                "gender" to g.gender, "govIdNumber" to g.govIdNumber, "govIdPictures" to g.govIdPictures,
+                "address" to g.address, "dob" to g.dob, "age" to g.age)
         },
         "groupStayId" to groupStayId,
     )

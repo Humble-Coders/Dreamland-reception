@@ -29,12 +29,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hotel
+import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material.icons.filled.DateRange
@@ -78,6 +82,8 @@ import com.example.dreamland_reception.DreamlandForestSurface
 import com.example.dreamland_reception.DreamlandGold
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
+import com.example.dreamland_reception.ui.viewmodel.GRC_SAVE_AS_PDF
+import com.example.dreamland_reception.ui.viewmodel.GrcPhase
 import com.example.dreamland_reception.ui.viewmodel.GuestEntry
 import com.example.dreamland_reception.ui.viewmodel.RoomGuestAssignment
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
@@ -97,6 +103,16 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
     if (!state.isOpen) return
 
     var currentStep by remember { mutableStateOf(1) }
+
+    // The GRC-print step exists only for actual check-ins (not "Add Booking" mode).
+    val showGrcStep = !state.isBookingMode
+    val stepLabels = if (showGrcStep)
+        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Print\nGRC", "Confirm")
+    else
+        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm")
+    val totalSteps = stepLabels.size
+    val confirmStep = totalSteps          // last step is always Confirm
+    val grcStep = if (showGrcStep) 4 else -1
 
     Dialog(
         onDismissRequest = vm::closeWalkIn,
@@ -141,7 +157,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(16.dp))
-                WizardStepIndicator(currentStep, onStepClick = { currentStep = it })
+                WizardStepIndicator(currentStep, stepLabels, onStepClick = { currentStep = it })
                 Spacer(Modifier.height(16.dp))
             }
 
@@ -159,7 +175,8 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     1 -> Step1StayDetails(state, vm)
                     2 -> Step2GuestInfo(state, vm)
                     3 -> Step3AssignRooms(state = state, vm = vm)
-                    4 -> Step4Confirm(state, vm)
+                    grcStep -> Step4PrintGrc(state, vm)
+                    confirmStep -> Step4Confirm(state, vm)
                 }
             }
 
@@ -187,7 +204,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                     Spacer(Modifier.width(1.dp))
                 }
 
-                if (currentStep < 4) {
+                if (currentStep < totalSteps) {
                     Button(
                         onClick = { currentStep++ },
                         colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
@@ -198,7 +215,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                         Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(18.dp))
                     }
                 } else {
-                    // Step 4: submit — require ALL guests to have ID verified
+                    // Final (Confirm) step: submit — require ALL guests to have ID verified
                     val allIdVerified = state.guestEntries.all { it.idProofVerified }
                     Button(
                         onClick = { if (state.isBookingMode) vm.submitAsBooking() else vm.requestSubmitWalkIn() },
@@ -253,8 +270,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 // ── Step indicator ────────────────────────────────────────────────────────────
 
 @Composable
-private fun WizardStepIndicator(currentStep: Int, onStepClick: (Int) -> Unit) {
-    val steps = listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm")
+private fun WizardStepIndicator(currentStep: Int, steps: List<String>, onStepClick: (Int) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -755,6 +771,137 @@ private fun Step3AssignRooms(state: WalkInState, vm: StaysViewModel) {
             }
         }
     }
+}
+
+// ── Step 4 (check-in only): Print GRC ─────────────────────────────────────────
+
+@Composable
+private fun Step4PrintGrc(state: WalkInState, vm: StaysViewModel) {
+    LaunchedEffect(Unit) { vm.loadGrcPrinters() }
+    val grc = state.grc
+    // Only guests whose ID was captured in the Guest Info step get a GRC.
+    val idGuests = state.guestEntries.withIndex().filter { it.value.idProofVerified }
+
+    WizardSectionLabel("PRINT GUEST REGISTRATION CARDS")
+    Spacer(Modifier.height(8.dp))
+
+    // Printer dropdown (mirrors the billing print flow)
+    Text("Printer", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
+    Spacer(Modifier.height(4.dp))
+    var printerExpanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(DreamlandForestElevated)
+                .border(1.dp, DreamlandGold.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                .clickable { printerExpanded = true }
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                when {
+                    grc.selectedPrinter.isNotBlank() -> grc.selectedPrinter
+                    grc.availablePrinters.isEmpty() -> "Select target"
+                    else -> "Select Printer"
+                },
+                color = if (grc.selectedPrinter.isBlank()) DreamlandMuted else DreamlandOnDark,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = DreamlandGold)
+        }
+        DropdownMenu(expanded = printerExpanded, onDismissRequest = { printerExpanded = false }) {
+            // Test option — saves the rendered GRC to a PDF file (and opens it) instead of printing.
+            DropdownMenuItem(
+                text = { Text(GRC_SAVE_AS_PDF, color = DreamlandGold, fontWeight = FontWeight.SemiBold) },
+                onClick = { vm.selectGrcPrinter(GRC_SAVE_AS_PDF); printerExpanded = false },
+            )
+            grc.availablePrinters.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p, color = DreamlandOnDark) },
+                    onClick = { vm.selectGrcPrinter(p); printerExpanded = false },
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    if (idGuests.isEmpty()) {
+        Text(
+            "No guest ID captured yet. Capture an ID in the Guest Info step to print a GRC.",
+            color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+        )
+    } else {
+        val isSaveMode = grc.selectedPrinter == GRC_SAVE_AS_PDF
+        idGuests.forEach { (index, entry) ->
+            val phase = grc.statuses[index] ?: GrcPhase.IDLE
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 5.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DreamlandForestElevated)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        entry.name.ifBlank { "Guest ${index + 1}" },
+                        color = DreamlandOnDark, fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val sub = when (phase) {
+                        GrcPhase.WORKING -> if (isSaveMode) "Generating PDF…" else "Generating & printing…"
+                        GrcPhase.DONE -> if (isSaveMode) "PDF saved & opened ✓" else "Sent to printer ✓"
+                        GrcPhase.ERROR -> grc.errors[index] ?: "Failed"
+                        else -> entry.govIdNumber.ifBlank { "ID on file" }
+                    }
+                    Text(
+                        sub,
+                        color = if (phase == GrcPhase.ERROR) Color(0xFFEF5350) else DreamlandMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+                Button(
+                    onClick = { vm.printGrcForGuest(index) },
+                    enabled = phase != GrcPhase.WORKING && grc.selectedPrinter.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = DreamlandGold,
+                        disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    if (phase == GrcPhase.WORKING) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = Color(0xFF0D1F17))
+                    } else {
+                        Icon(
+                            if (phase == GrcPhase.DONE) Icons.Filled.CheckCircle else Icons.Filled.Print,
+                            contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            when {
+                                isSaveMode && phase == GrcPhase.DONE -> "Save again"
+                                isSaveMode -> "Save PDF"
+                                phase == GrcPhase.DONE -> "Reprint"
+                                else -> "Print GRC"
+                            },
+                            color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "Printing the GRC is optional — you can proceed to Confirm. Pick \"$GRC_SAVE_AS_PDF\" to save the form to a file instead of printing.",
+        color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall,
+    )
 }
 
 // ── Step 4: Confirm ───────────────────────────────────────────────────────────

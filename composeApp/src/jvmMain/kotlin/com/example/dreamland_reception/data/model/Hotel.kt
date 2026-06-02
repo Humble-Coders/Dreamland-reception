@@ -36,4 +36,8 @@ data class Hotel(
     val earlyCheckInPrice: Double = 300.0,
     val lateCheckOutAllowed: Boolean = false,
     val lateCheckOutPrice: Double = 200.0,
+
+    // ── GRC (Guest Registration Card) ─────────────────────────────────────────
+    // Editable HTML template printed at check-in. Blank → built-in default is used.
+    val grcTemplateHtml: String = "",
 )
