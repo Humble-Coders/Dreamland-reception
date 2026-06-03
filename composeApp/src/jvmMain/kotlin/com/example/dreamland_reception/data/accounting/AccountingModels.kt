@@ -29,6 +29,9 @@ internal data class CreateCustomerRequest(
     val name: String,
     val phone: String? = null,
     val email: String? = null,
+    // Dreamland's stable guest UID. Humble Ledger create is idempotent on this:
+    // sending the same externalId returns the existing customer (balance intact).
+    val externalId: String? = null,
 )
 
 internal data class CustomerData(
@@ -36,6 +39,7 @@ internal data class CustomerData(
     val accountId: String = "",
     val name: String = "",
     val phone: String? = null,
+    val externalId: String? = null,
     val outstanding: String? = null,
 )
 

@@ -1198,7 +1198,8 @@ class StayBillingViewModel(
         if (bill.id.isBlank()) return
         _state.update { it.copy(accountingStatus = AccountingStatus.InProgress) }
         viewModelScope.launch {
-            accountingRepo.settle(bill, guestPhone)
+            val guestUid = resolveGuestUid(bill.guestName, guestPhone)
+            accountingRepo.settle(bill, guestPhone, guestUid)
                 .onSuccess { r ->
                     if (r.invoiceId.isNotBlank()) {
                         runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
@@ -1241,6 +1242,19 @@ class StayBillingViewModel(
                 ?.takeIf { it.guestName == bill.guestName }?.let { return it.guestPhone }
         }
         return ""
+    }
+
+    /**
+     * Resolves the guest's stable UID — the `users` doc id, keyed by phone — to use
+     * as the Humble Ledger `externalId` (the cross-system identity). Returns the
+     * existing guest's UID, creating the guest record if one doesn't exist yet, or
+     * "" when there's no phone to key on (the ledger then resolves by phone/name).
+     */
+    private suspend fun resolveGuestUid(name: String, phone: String): String {
+        if (phone.isBlank()) return ""
+        return runCatching {
+            userRepo.findIdByPhone(phone) ?: userRepo.createGuestUser(name.ifBlank { phone }, phone)
+        }.getOrElse { "" }
     }
 
     /**

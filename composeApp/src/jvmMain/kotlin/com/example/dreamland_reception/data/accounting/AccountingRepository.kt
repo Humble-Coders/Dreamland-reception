@@ -67,7 +67,7 @@ object AccountingRepository {
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    suspend fun settle(bill: Bill, guestPhone: String): Result<SettleResult> = runCatching {
+    suspend fun settle(bill: Bill, guestPhone: String, guestUid: String = ""): Result<SettleResult> = runCatching {
 
         log("─────────────────────────────────────────")
         log("settle() START — stayId=${bill.stayId}, guest='${bill.guestName}'")
@@ -112,8 +112,8 @@ object AccountingRepository {
             ?: today
 
         // ── 3. Resolve customer (need accountId for ADVANCE_APPLIED) ──────────
-        log("Resolving customer '${bill.guestName}'")
-        val customer       = resolveCustomer(token, bill.guestName, guestPhone)
+        log("Resolving customer '${bill.guestName}' (uid='$guestUid')")
+        val customer       = resolveCustomer(token, bill.guestName, guestPhone, guestUid)
         val customerId     = customer.id
         val customerArId   = customer.accountId   // AR sub-account for ADVANCE_APPLIED credit leg
         log("Customer — id=$customerId, arAccountId=$customerArId")
@@ -277,16 +277,36 @@ object AccountingRepository {
 
     /**
      * Returns the full [CustomerData] (including [CustomerData.accountId] for the AR
-     * sub-account), resolving identity by PHONE first (the canonical guest key),
-     * then falling back to an exact name match, and finally creating a new ledger
-     * customer. Two different guests who happen to share a name get distinct
-     * ledger customers because the server disambiguates the AR sub-account name.
+     * sub-account) for the bill's guest.
+     *
+     * Preferred path: when [guestUid] is present it is sent as the ledger
+     * `externalId`. Humble Ledger's create is idempotent on externalId, so this
+     * returns the SAME ledger customer on every visit (balance carried over) or
+     * creates one the first time — no phone/name guessing, no duplicates.
+     *
+     * Fallback (no UID — e.g. a walk-in with no phone on record): resolve by phone,
+     * then an exact name match, then create. Kept so the flow degrades gracefully.
      */
     private suspend fun resolveCustomer(
         token: String,
         guestName: String,
         guestPhone: String,
+        guestUid: String,
     ): CustomerData {
+        // 0. Stable cross-system UID — the canonical identity. Idempotent on the server.
+        if (guestUid.isNotBlank()) {
+            val c = client.createCustomer(
+                token = token,
+                req   = CreateCustomerRequest(
+                    name       = guestName,
+                    phone      = guestPhone.takeIf { it.isNotBlank() },
+                    externalId = guestUid,
+                ),
+            )
+            log("Resolved customer by UID '$guestUid' — id=${c.id}, arAccountId=${c.accountId}")
+            return c
+        }
+
         // 1. Phone is the unique identity (matches how Firestore keys guests).
         if (guestPhone.isNotBlank()) {
             val byPhone = client.findCustomerByPhone(token, guestPhone)
