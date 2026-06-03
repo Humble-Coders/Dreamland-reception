@@ -45,6 +45,7 @@ data class Bill(
     val transactions: List<PaymentTransaction> = emptyList(),
     val totalPaid: Double = 0.0,
     val advancePayment: Double = 0.0,
+    val advancePaymentMethod: String = "CASH",   // CASH | BANK
     val pendingAmount: Double = 0.0,
     val status: String = "PENDING",   // PENDING | PARTIAL | PAID
     val invoiceUrl: String = "",

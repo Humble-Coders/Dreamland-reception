@@ -117,6 +117,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 private fun Double.fmtAmt(): String = "%.2f".format(this)
+private fun Double.fmtRate(): String = if (this % 1.0 == 0.0) "${this.toInt()}%" else "${"%.2f".format(this)}%"
 
 private val dateFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 private val timeFmt = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
@@ -712,7 +713,7 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onDelete: () 
                 if (item.notes.isNotBlank()) Text(item.notes, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
                 Text("${item.quantity} × ₹${item.unitPrice.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
                 if (item.taxPercentage > 0)
-                    Text("Tax ${item.taxPercentage.toInt()}%", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                    Text("Tax ${item.taxPercentage.fmtRate()}", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
             }
             Text("₹${item.total.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
             if (!readOnly) {
@@ -827,7 +828,7 @@ internal fun BillSummaryCard(
                     taxByRate.forEach { (rate, rateItems) ->
                         val rateAmt = rateItems.sumOf { it.total * rate / 100.0 }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Tax (${rate.toInt()}%)", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Text("Tax (${rate.fmtRate()})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                             Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                         }
                     }
@@ -840,7 +841,7 @@ internal fun BillSummaryCard(
             } else if (hasMultipleRates) {
                 // One editable pill per distinct tax rate
                 taxByRate.forEach { (rate, rateItems) ->
-                    var rateStr by remember(rate) { mutableStateOf("%.0f".format(rate)) }
+                    var rateStr by remember(rate) { mutableStateOf(if (rate % 1.0 == 0.0) "${rate.toInt()}" else "%.2f".format(rate)) }
                     var rateFocused by remember { mutableStateOf(false) }
                         val rateAmt = rateItems.sumOf { it.total * (rateStr.toDoubleOrNull() ?: rate) / 100.0 }
                         Row(
@@ -1003,7 +1004,7 @@ internal fun BillSummaryCard(
             if (readOnly) {
                 if (liveAdvance > 0) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("Advance paid (${bill.advancePaymentMethod})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("₹", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.width(2.dp))
@@ -1027,7 +1028,7 @@ internal fun BillSummaryCard(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Advance paid", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("Advance paid (${bill.advancePaymentMethod})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                         if (!advanceFocused) {
                             Text("✎", color = DreamlandMuted.copy(alpha = 0.35f), fontSize = 9.sp)
                         }
@@ -1746,7 +1747,7 @@ private fun ConfirmPaymentDialogUI(
                                 Text("₹${liveTotalAmount.fmtAmt()}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
                             if (bill.advancePayment > 0)
-                                ConfirmRow("Advance paid", "₹${bill.advancePayment.fmtAmt()}", Color(0xFF4CAF50))
+                                ConfirmRow("Advance paid (${bill?.advancePaymentMethod ?: "CASH"})", "₹${bill.advancePayment.fmtAmt()}", Color(0xFF4CAF50))
                             // Show "Payments received" only when no preview payment fields are populated
                             // (previewCash/Bank already represent the same saved transactions)
                             val hasPreviewPayments = previewCash > 0 || previewBank > 0

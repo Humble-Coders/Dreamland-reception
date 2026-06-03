@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -76,6 +79,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.dreamland_reception.data.model.Booking
+import com.example.dreamland_reception.data.model.RoomInstance
+import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.ui.viewmodel.ActiveStayRow
 import com.example.dreamland_reception.ui.viewmodel.AlertType
 import com.example.dreamland_reception.ui.viewmodel.AvailabilityViewModel
@@ -147,7 +153,13 @@ fun DashboardScreen(
                         .padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    KpiCardsSection(state)
+                    RoomGridSection(
+                        rooms = state.roomInstances,
+                        stays = state.rawActiveStays,
+                        onSetCleaning = vm::setRoomCleaning,
+                        onSetAvailable = vm::setRoomAvailable,
+                    )
+                    TodayBookingsCard(bookings = state.todayBookings)
                     AlertsSection(
                         alerts = state.alerts,
                         onOrdersClick = onNavigateToOrders,
@@ -311,6 +323,143 @@ private fun LiveDot() {
                 .background(Color(0xFF2ECC71).copy(alpha = alpha)),
         )
         Text("LIVE", style = MaterialTheme.typography.labelSmall, color = Color(0xFF2ECC71), letterSpacing = 1.sp)
+    }
+}
+
+// ── Room grid ─────────────────────────────────────────────────────────────────
+
+private fun roomStatusColor(status: String, isOccupied: Boolean): Color = when {
+    isOccupied -> Color(0xFFFF9800)
+    status == "CLEANING" -> Color(0xFF2196F3)
+    status == "MAINTENANCE" -> Color(0xFFEF5350)
+    else -> Color(0xFF4CAF50)
+}
+
+@Composable
+private fun RoomGridSection(
+    rooms: List<RoomInstance>,
+    stays: List<Stay>,
+    onSetCleaning: (String) -> Unit,
+    onSetAvailable: (String) -> Unit,
+) {
+    if (rooms.isEmpty()) return
+    val activeRoomIds = stays.map { it.roomInstanceId }.toSet()
+    val sorted = rooms.sortedBy { r ->
+        when {
+            r.id in activeRoomIds -> 0
+            r.status == "CLEANING" -> 1
+            r.status == "AVAILABLE" -> 2
+            else -> 3
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("ROOMS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 220.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.height(((sorted.size / 3 + 1) * 210).dp.coerceAtLeast(210.dp)),
+        ) {
+            items(sorted) { room ->
+                val stay = stays.find { it.roomInstanceId == room.id }
+                val isOccupied = stay != null
+                RoomCard(room, stay, isOccupied, onSetCleaning, onSetAvailable)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomCard(
+    room: RoomInstance,
+    stay: Stay?,
+    isOccupied: Boolean,
+    onSetCleaning: (String) -> Unit,
+    onSetAvailable: (String) -> Unit,
+) {
+    val statusColor = roomStatusColor(room.status, isOccupied)
+    val dateFmt = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = statusColor.copy(alpha = 0.08f)),
+        modifier = Modifier.fillMaxWidth().border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Header: room number + status badge
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("Room ${room.roomNumber}", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
+                    if (room.categoryName.isNotBlank()) Text(room.categoryName, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                }
+                Box(
+                    Modifier.clip(RoundedCornerShape(4.dp)).background(statusColor.copy(alpha = 0.2f)).padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    val label = when {
+                        isOccupied -> "OCCUPIED"
+                        room.status == "CLEANING" -> "CLEANING"
+                        room.status == "MAINTENANCE" -> "MAINTENANCE"
+                        else -> "AVAILABLE"
+                    }
+                    Text(label, color = statusColor, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+            // Stay details
+            if (stay != null) {
+                Text(stay.guestName, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (stay.guestPhone.isNotBlank()) Text("+91 ${stay.guestPhone}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                Text("Check-out: ${dateFmt.format(stay.expectedCheckOut)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            }
+            // Cleaning / Available toggle
+            if (room.status != "MAINTENANCE") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val cleaningSelected = room.status == "CLEANING" || room.needsCleaning
+                    val availableSelected = room.status == "AVAILABLE" && !room.needsCleaning
+                    listOf("CLEANING" to cleaningSelected, "AVAILABLE" to availableSelected).forEach { (label, selected) ->
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selected) statusColor.copy(alpha = 0.25f) else Color.Transparent)
+                                .border(1.dp, if (selected) statusColor else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                .clickable {
+                                    if (label == "CLEANING") onSetCleaning(room.id)
+                                    else onSetAvailable(room.id)
+                                }
+                                .padding(horizontal = 6.dp, vertical = 5.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(label, color = if (selected) statusColor else DreamlandMuted, fontSize = 10.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Today's Bookings card ─────────────────────────────────────────────────────
+
+@Composable
+private fun TodayBookingsCard(bookings: List<Booking>) {
+    if (bookings.isEmpty()) return
+    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("TODAY'S ARRIVALS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+            androidx.compose.material3.HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
+            bookings.forEach { booking ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(booking.guestName, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(booking.roomCategoryName.ifBlank { "Room" }, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    Text(timeFmt.format(booking.checkIn), color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
     }
 }
 

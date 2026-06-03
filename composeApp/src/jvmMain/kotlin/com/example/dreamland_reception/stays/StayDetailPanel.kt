@@ -65,7 +65,7 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 @Composable
-fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm: StaysViewModel) {
+fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm: StaysViewModel, onNavigateToOrder: (String) -> Unit = {}) {
     val stay = listState.stays.find { it.id == listState.selectedStayId } ?: return
     var selectedTab by remember(stay.id) { mutableStateOf(0) }
 
@@ -189,7 +189,7 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
         } else {
             when (selectedTab) {
                 0 -> BillingTab(detailState.bill)
-                1 -> OrdersTab(detailState.orders, vm, stay.status == "ACTIVE")
+                1 -> OrdersTab(detailState.orders, vm, stay.status == "ACTIVE", onNavigateToOrder)
                 2 -> ComplaintsTab(detailState.complaints, vm, stay.status == "ACTIVE")
             }
         }
@@ -388,7 +388,7 @@ private fun BillRow(label: String, amount: Double) {
 // ── Orders tab ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun OrdersTab(orders: List<Order>, vm: StaysViewModel, canAdd: Boolean) {
+private fun OrdersTab(orders: List<Order>, vm: StaysViewModel, canAdd: Boolean, onNavigateToOrder: (String) -> Unit = {}) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (canAdd) {
             item {
@@ -411,6 +411,7 @@ private fun OrdersTab(orders: List<Order>, vm: StaysViewModel, canAdd: Boolean) 
         }
         items(orders) { order ->
             Card(
+                onClick = { if (order.id.isNotBlank()) onNavigateToOrder(order.id) },
                 colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
                 shape = RoundedCornerShape(10.dp),
             ) {

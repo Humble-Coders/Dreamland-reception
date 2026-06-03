@@ -224,9 +224,6 @@ class StayBillingViewModel(
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
-            // Durable recovery: a finalized bill that never reached the ledger
-            // (failed/lost sync) is retried automatically on load.
-            retryLedgerSync()
         }
     }
 
@@ -269,12 +266,19 @@ class StayBillingViewModel(
                     if (stay.lateCheckOutCharge > 0) add(BillItem(name = "Late Check-out", type = "SERVICE", quantity = 1, unitPrice = stay.lateCheckOutCharge, total = stay.lateCheckOutCharge))
                     for (order in orders) {
                         if (order.totalAmount > 0) {
-                            // Use pre-tax subtotal as BillItem.total so recalculate() can apply tax on top.
-                            // For legacy orders (subtotalAmount=0), fall back to totalAmount with no tax.
-                            val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
-                            val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
-                                order.totalTaxAmount / order.subtotalAmount * 100.0
-                            else 0.0
+                            // Use pre-tax subtotal; fall back to per-item subtotals for legacy orders
+                            val orderBase = when {
+                                order.subtotalAmount > 0 -> order.subtotalAmount
+                                order.items.any { it.subtotal > 0 } -> order.items.sumOf { it.subtotal }
+                                else -> order.totalAmount
+                            }
+                            val orderTax = when {
+                                order.totalTaxAmount > 0 -> order.totalTaxAmount
+                                order.items.any { it.taxAmount > 0 } -> order.items.sumOf { it.taxAmount }
+                                else -> 0.0
+                            }
+                            val effectiveTaxPct = if (orderBase > 0 && orderTax > 0)
+                                orderTax / orderBase * 100.0 else 0.0
                             add(BillItem(
                                 name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
                                 type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
@@ -301,7 +305,8 @@ class StayBillingViewModel(
                     checkInDate = stay.checkInActual, checkOutDate = checkOutDate,
                     items = items, taxEnabled = taxEnabled, taxPercentage = taxPercentage,
                     subtotal = subtotal, taxAmount = taxAmount, totalAmount = total,
-                    advancePayment = advance, pendingAmount = pending, status = status,
+                    advancePayment = advance, advancePaymentMethod = stay.advancePaymentMethod,
+                    pendingAmount = pending, status = status,
                 )
                 bill = if (stay.status == "ACTIVE") {
                     // In-memory preview — id is blank, so edit/payment actions are intentionally disabled
@@ -329,9 +334,6 @@ class StayBillingViewModel(
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState()) }
-            // Durable recovery: a finalized bill that never reached the ledger
-            // (failed/lost sync) is retried automatically on load.
-            retryLedgerSync()
         }
     }
 
@@ -366,22 +368,64 @@ class StayBillingViewModel(
     }
 
     private suspend fun migrateFoodServiceItemTaxRates(bill: Bill): Bill {
-        if (bill.items.none { (it.type == "ORDER" || it.type == "SERVICE") && it.taxPercentage == 0.0 }) return bill
+        // Always recompute ORDER items that have a refId (blended rate may be stale);
+        // for SERVICE items only fix if rate is missing (0)
+        val needsMigration = bill.items.any {
+            (it.type == "ORDER" && it.refId.isNotBlank()) ||
+            (it.type == "SERVICE" && it.taxPercentage == 0.0)
+        }
+        if (!needsMigration) return bill
         val hotelId = bill.hotelId.ifBlank { AppContext.hotelId }
         val foodItems = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
         val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
         val foodTaxByName = foodItems.filter { it.taxPercentage > 0 }.associate { it.name.trim().lowercase() to it.taxPercentage }
         val serviceTaxByName = services.filter { it.taxPercentage > 0 }.associate { it.name.trim().lowercase() to it.taxPercentage }
+
+        // Pre-fetch orders for ORDER items that need migration (avoid suspend inside map lambda)
+        // Pre-fetch all ORDER items with a refId (always recompute their blended rate)
+        val orderRefIds = bill.items.filter { it.type == "ORDER" && it.refId.isNotBlank() }
+            .map { it.refId }.distinct()
+        val fetchedOrders = mutableMapOf<String, com.example.dreamland_reception.data.model.Order>()
+        for (id in orderRefIds) {
+            runCatching { orderRepo.getById(id) }.getOrNull()?.let { fetchedOrders[id] = it }
+        }
+
         var changed = false
         val updatedItems = bill.items.map { item ->
-            if (item.taxPercentage > 0) return@map item
-            val rate = when (item.type) {
-                "ORDER"   -> foodTaxByName[item.name.trim().lowercase()]
+            // For ORDER items with a refId, always recompute; for SERVICE, skip if rate already set
+            if (item.taxPercentage > 0 && !(item.type == "ORDER" && item.refId.isNotBlank())) return@map item
+            val order = if (item.type == "ORDER" && item.refId.isNotBlank()) fetchedOrders[item.refId] else null
+            val rate: Double? = when (item.type) {
+                "ORDER" -> {
+                    foodTaxByName[item.name.trim().lowercase()]
+                        ?: serviceTaxByName[item.name.trim().lowercase()]
+                        ?: if (order != null) {
+                            var taxSum = 0.0; var baseSum = 0.0
+                            for (oi in order.items) {
+                                // Use stored rate first (from when order was placed); catalog as fallback
+                                val r = if (oi.taxPercentage > 0) oi.taxPercentage
+                                        else (foodTaxByName[oi.name.trim().lowercase()]
+                                            ?: serviceTaxByName[oi.name.trim().lowercase()]
+                                            ?: 0.0)
+                                val base = if (oi.subtotal > 0) oi.subtotal else oi.basePrice
+                                taxSum += base * r / 100.0
+                                baseSum += base
+                            }
+                            if (baseSum > 0 && taxSum > 0) taxSum / baseSum * 100.0 else null
+                        } else null
+                }
                 "SERVICE" -> serviceTaxByName[item.name.trim().lowercase()]
-                else      -> null
+                    ?: foodTaxByName[item.name.trim().lowercase()]
+                else -> null
             } ?: return@map item
             changed = true
-            item.copy(taxPercentage = rate)
+            // For ORDER items resolved via order fetch, also correct the pre-tax base total
+            val correctBase = if (order != null) when {
+                order.subtotalAmount > 0 -> order.subtotalAmount
+                order.items.any { it.subtotal > 0 } -> order.items.sumOf { it.subtotal }
+                else -> item.total
+            } else item.total
+            item.copy(taxPercentage = rate!!, total = correctBase, unitPrice = correctBase)
         }
         if (!changed) return bill
         val updatedBill = recalculate(bill.copy(items = updatedItems))

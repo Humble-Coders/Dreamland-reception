@@ -65,6 +65,7 @@ import java.util.Locale
 fun StaysScreen(
     vm: StaysViewModel = DreamlandAppInitializer.getStaysViewModel(),
     onNavigateToBilling: (stayId: String) -> Unit = {},
+    onNavigateToOrder: (orderId: String) -> Unit = {},
 ) {
     val listState by vm.listState.collectAsStateWithLifecycle()
     val fromBookingState by vm.fromBookingState.collectAsStateWithLifecycle()
@@ -105,7 +106,7 @@ fun StaysScreen(
         Box(Modifier.weight(1f).fillMaxHeight()) {
             val selectedId = listState.selectedStayId
             if (selectedId != null) {
-                StayDetailPanel(listState, detailState, vm)
+                StayDetailPanel(listState, detailState, vm, onNavigateToOrder = onNavigateToOrder)
             } else {
                 StayDetailPlaceholder()
             }

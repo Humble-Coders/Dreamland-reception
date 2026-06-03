@@ -169,6 +169,7 @@ data class WalkInState(
     val children: Int = 0,
     val breakfast: Boolean = false,
     val advancePayment: String = "",
+    val advancePaymentMethod: String = "CASH",
     // All categories from Firestore (unfiltered — used when no checkout date)
     val categories: List<Room> = emptyList(),
     // Categories passing Steps 5-6 (set once checkout date + guests are known)
@@ -818,6 +819,7 @@ class StaysViewModel(
     }
     fun onWalkInBreakfast(v: Boolean) = _walkInState.update { it.copy(breakfast = v) }
     fun onWalkInAdvancePayment(v: String) = _walkInState.update { it.copy(advancePayment = v.filter { c -> c.isDigit() || c == '.' }) }
+    fun onWalkInAdvancePaymentMethod(method: String) = _walkInState.update { it.copy(advancePaymentMethod = method) }
 
     fun onGuestName(index: Int, name: String) = _walkInState.update { ws ->
         val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(name = name) }
@@ -1345,7 +1347,7 @@ class StaysViewModel(
                 } else {
                     val inst = (s.selectableInstances + s.cleaningInstances).find { it.id == instanceId }
                     val newDetails = if (inst != null) s.selectedInstanceDetails + (instanceId to inst) else s.selectedInstanceDetails
-                    val newAssignment = s.roomGuestAssignment + (instanceId to (s.roomGuestAssignment[instanceId] ?: RoomGuestAssignment(guestIndices = setOf(0))))
+                    val newAssignment = s.roomGuestAssignment + (instanceId to (s.roomGuestAssignment[instanceId] ?: RoomGuestAssignment()))
                     val newInstanceToBookingId = if (s.isGroupCheckIn) {
                         val instCatId = inst?.categoryId ?: s.selectedCategoryId
                         val alreadyMapped = s.instanceToBookingId.values.toSet()
@@ -1383,7 +1385,7 @@ class StaysViewModel(
             } else {
                 val inst = (s.selectableInstances + s.cleaningInstances).find { it.id == instanceId }
                 val newDetails = if (inst != null) s.selectedInstanceDetails + (instanceId to inst) else s.selectedInstanceDetails
-                val newAssignment = s.roomGuestAssignment + (instanceId to (s.roomGuestAssignment[instanceId] ?: RoomGuestAssignment(guestIndices = setOf(0))))
+                val newAssignment = s.roomGuestAssignment + (instanceId to (s.roomGuestAssignment[instanceId] ?: RoomGuestAssignment()))
                 s.copy(
                     selectedInstanceIds = s.selectedInstanceIds + instanceId,
                     selectedInstanceDetails = newDetails,
@@ -1396,7 +1398,22 @@ class StaysViewModel(
     fun dismissGroupDeviation() = _walkInState.update { it.copy(groupChangeConfirmDialog = null) }
 
     fun onRoomGuestAssignment(instanceId: String, assignment: RoomGuestAssignment) =
-        _walkInState.update { it.copy(roomGuestAssignment = it.roomGuestAssignment + (instanceId to assignment)) }
+        _walkInState.update { ws ->
+            val current = ws.roomGuestAssignment[instanceId] ?: RoomGuestAssignment()
+            val newlyAdded = assignment.guestIndices - current.guestIndices
+            val updatedMap = ws.roomGuestAssignment.toMutableMap()
+            // Rule 1: exclusive assignment — remove newly-checked guest from all other rooms
+            if (newlyAdded.isNotEmpty()) {
+                for ((otherId, other) in updatedMap) {
+                    if (otherId == instanceId) continue
+                    val cleaned = other.guestIndices - newlyAdded
+                    val cleanedPrimary = if (other.primaryIndex in newlyAdded) null else other.primaryIndex
+                    updatedMap[otherId] = other.copy(guestIndices = cleaned, primaryIndex = cleanedPrimary)
+                }
+            }
+            updatedMap[instanceId] = assignment
+            ws.copy(roomGuestAssignment = updatedMap)
+        }
 
     // ── Check-in mismatch confirmation ────────────────────────────────────────
 
@@ -1704,6 +1721,7 @@ class StaysViewModel(
                         earlyCheckIn = isEarlyCheckIn && roomIndex == 0,
                         earlyCheckInCharge = earlyCharge,
                         advancePaidAmount = (linkedBooking?.advancePaidAmount ?: 0.0) + advancePerRoom,
+                        advancePaymentMethod = ws.advancePaymentMethod,
                         createdAt = Date(),
                         updatedAt = Date(),
                         guests = guestRecords,
@@ -1834,7 +1852,7 @@ class StaysViewModel(
                     }
                 }
             }
-            val initialAssignments = preSelected.associateWith { RoomGuestAssignment(guestIndices = setOf(0)) }
+            val initialAssignments = preSelected.associateWith { RoomGuestAssignment() }
             val categoryAvailability = instsByCat.mapValues { (_, v) -> v.selectable.size }
 
             val primaryCatId = primaryBooking.roomCategoryId

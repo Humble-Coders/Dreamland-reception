@@ -158,6 +158,7 @@ fun DreamlandApp() {
     var selectedTab by remember { mutableStateOf(MainTab.Dashboard) }
     var pendingBillingStayId by remember { mutableStateOf("") }
     var pendingBillingBillId by remember { mutableStateOf("") }
+    var pendingOrderId by remember { mutableStateOf("") }
     var isSidebarExpanded by remember { mutableStateOf(true) }
     var isSidebarVisible by remember { mutableStateOf(true) }
 
@@ -245,10 +246,16 @@ fun DreamlandApp() {
                             onCheckIn = { booking -> staysVm.prefillFromBooking(booking) },
                             onCheckInAll = { group -> staysVm.prefillGroupBooking(group) },
                         )
-                        MainTab.Stays -> StaysScreen(onNavigateToBilling = { stayId ->
-                            pendingBillingStayId = stayId
-                            selectedTab = MainTab.Billing
-                        })
+                        MainTab.Stays -> StaysScreen(
+                            onNavigateToBilling = { stayId ->
+                                pendingBillingStayId = stayId
+                                selectedTab = MainTab.Billing
+                            },
+                            onNavigateToOrder = { orderId ->
+                                pendingOrderId = orderId
+                                selectedTab = MainTab.Orders
+                            },
+                        )
                         MainTab.Billing -> when {
                             pendingBillingStayId.isNotBlank() -> StayBillingScreen(
                                 stayId = pendingBillingStayId,
@@ -263,7 +270,9 @@ fun DreamlandApp() {
                                 onOpenBillById = { billId -> pendingBillingBillId = billId },
                             )
                         }
-                        MainTab.Orders -> OrdersScreen()
+                        MainTab.Orders -> OrdersScreen(
+                            initialOrderId = pendingOrderId.also { pendingOrderId = "" },
+                        )
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()
                         MainTab.Reports -> UsersScreen()

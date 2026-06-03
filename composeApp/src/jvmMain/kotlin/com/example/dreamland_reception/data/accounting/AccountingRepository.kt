@@ -139,7 +139,7 @@ object AccountingRepository {
                     description = "Advance received — Room ${bill.roomNumber} (${bill.guestName})",
                     date        = checkInDate,
                     entries     = listOf(
-                        RawEntryInput(account = "Cash", type = "DEBIT",  amount = advanceRounded),
+                        RawEntryInput(account = if (bill.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "DEBIT", amount = advanceRounded),
                         RawEntryInput(accountId = advanceLiabilityId, type = "CREDIT", amount = advanceRounded),
                     ),
                 ),

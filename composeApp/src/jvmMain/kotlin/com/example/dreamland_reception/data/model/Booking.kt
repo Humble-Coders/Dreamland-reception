@@ -46,6 +46,7 @@ data class Booking(
     val sourceId: String = "",              // bookingSources document id (empty for legacy records)
     val totalAmount: Double = 0.0,
     val advancePaidAmount: Double = 0.0,
+    val advancePaymentMethod: String = "CASH",   // CASH | BANK
     val notes: String = "",
     val groupBookingId: String = "",
     val createdAt: Date = Date(),

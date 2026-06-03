@@ -41,6 +41,7 @@ data class Stay(
     val earlyCheckInCharge: Double = 0.0,
     val lateCheckOutCharge: Double = 0.0,
     val advancePaidAmount: Double = 0.0,
+    val advancePaymentMethod: String = "CASH",   // CASH | BANK
     val totalBilled: Double = 0.0,
     val createdAt: Date = Date(),
     val updatedAt: Date = Date(),

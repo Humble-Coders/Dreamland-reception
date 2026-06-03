@@ -40,6 +40,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,10 +65,18 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 @Composable
-fun OrdersScreen(vm: OrdersViewModel = DreamlandAppInitializer.getOrdersViewModel()) {
+fun OrdersScreen(
+    vm: OrdersViewModel = DreamlandAppInitializer.getOrdersViewModel(),
+    initialOrderId: String = "",
+) {
     val screenState by vm.screenState.collectAsStateWithLifecycle()
     val createDialog by vm.createOrderDialog.collectAsStateWithLifecycle()
     val assignDialog by vm.assignStaffDialog.collectAsStateWithLifecycle()
+
+    // Pre-select order when navigated from stays screen
+    LaunchedEffect(initialOrderId) {
+        if (initialOrderId.isNotBlank()) vm.selectOrder(initialOrderId)
+    }
 
     val selectedOrder = screenState.orders.find { it.id == screenState.selectedOrderId }
 
@@ -216,7 +225,15 @@ private fun OrderListItem(order: Order, isSelected: Boolean, onClick: () -> Unit
             if (preview.isNotBlank()) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(preview, color = DreamlandOnDark, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (order.totalAmount > 0) Text("₹${order.totalAmount.toLong()}", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    if (order.totalAmount > 0) {
+                        val taxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
+                            order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
+                        val taxStr = if (taxPct > 0) {
+                            val label = if (taxPct % 1.0 == 0.0) "${taxPct.toInt()}%" else "${"%.2f".format(taxPct)}%"
+                            " (+$label)"
+                        } else ""
+                        Text("₹${"%.2f".format(order.totalAmount)}$taxStr", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
             if (order.assignedToName.isNotBlank()) {
@@ -262,7 +279,15 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
             order.items.forEach { item ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("${item.name} ×${item.quantity}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    if (item.total > 0) Text("₹${item.total.toLong()}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    if (item.total > 0) Text("₹${"%.2f".format(item.total)}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                if (item.taxAmount > 0) {
+                    Row(Modifier.fillMaxWidth().padding(start = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}%"
+                                        else "${"%.2f".format(item.taxPercentage)}%"
+                        Text("Tax $rateLabel", color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                        Text("+₹${"%.2f".format(item.taxAmount)}", color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }
@@ -271,9 +296,22 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
             Spacer(Modifier.height(8.dp))
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.08f))
             Spacer(Modifier.height(6.dp))
+            if (order.totalTaxAmount > 0) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Subtotal", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    Text("₹${"%.2f".format(order.subtotalAmount)}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                val effectiveTaxPct = if (order.subtotalAmount > 0) order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
+                val taxLabel = if (effectiveTaxPct % 1.0 == 0.0) "Tax (${effectiveTaxPct.toInt()}%)" else "Tax (${"%.2f".format(effectiveTaxPct)}%)"
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(taxLabel, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    Text("+₹${"%.2f".format(order.totalTaxAmount)}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(4.dp))
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                Text("₹${order.totalAmount.toLong()}", color = DreamlandGold, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                Text("₹${"%.2f".format(order.totalAmount)}", color = DreamlandGold, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
             }
         }
 

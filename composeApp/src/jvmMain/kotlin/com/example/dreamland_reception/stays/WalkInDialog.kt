@@ -105,6 +105,17 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 
     var currentStep by remember { mutableStateOf(1) }
 
+    // Step 3 validation: all rooms filled, all guests assigned to exactly one room
+    val step3Valid = if (currentStep == 3) {
+        val assignedIndices = state.roomGuestAssignment.values.flatMap { it.guestIndices }.toSet()
+        val allGuestIndices = state.guestEntries.indices.toSet()
+        state.selectedInstanceIds.isNotEmpty() &&
+            state.selectedInstanceIds.all { id ->
+                state.roomGuestAssignment[id]?.guestIndices?.isNotEmpty() == true
+            } &&
+            allGuestIndices.all { it in assignedIndices }
+    } else true
+
     // The GRC-print step exists only for actual check-ins (not "Add Booking" mode), and is the
     // LAST step so the advance amount entered on Confirm is reflected on the card.
     val showGrcStep = !state.isBookingMode
@@ -207,14 +218,37 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 }
 
                 if (currentStep < totalSteps) {
-                    Button(
-                        onClick = { currentStep++ },
-                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text("Next", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.width(4.dp))
-                        Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(18.dp))
+                    Column(horizontalAlignment = Alignment.End) {
+                        // Hint when step 3 validation fails
+                        if (currentStep == 3 && !step3Valid) {
+                            val assignedIdx = state.roomGuestAssignment.values.flatMap { it.guestIndices }.toSet()
+                            val unassigned = state.guestEntries.indices.count { it !in assignedIdx }
+                            val emptyRooms = state.selectedInstanceIds.count {
+                                state.roomGuestAssignment[it]?.guestIndices?.isEmpty() != false
+                            }
+                            val hint = when {
+                                emptyRooms > 0 && unassigned > 0 -> "$emptyRooms room(s) empty · $unassigned guest(s) unassigned"
+                                emptyRooms > 0 -> "$emptyRooms room(s) have no guests"
+                                unassigned > 0 -> "$unassigned guest(s) not assigned to any room"
+                                else -> ""
+                            }
+                            if (hint.isNotEmpty()) Text(hint, color = Color(0xFFEF5350),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(bottom = 4.dp))
+                        }
+                        Button(
+                            onClick = { currentStep++ },
+                            enabled = step3Valid,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DreamlandGold,
+                                disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Next", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(4.dp))
+                            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(18.dp))
+                        }
                     }
                 } else {
                     // Final (Confirm) step: submit — require ALL guests to have ID verified
@@ -1006,6 +1040,20 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
             cursorColor = DreamlandGold,
         ),
     )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("CASH", "BANK").forEach { method ->
+            val selected = state.advancePaymentMethod == method
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                    .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .clickable { vm.onWalkInAdvancePaymentMethod(method) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 13.sp) }
+        }
+    }
     val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
     if (advance > 0 || bookingAdvance > 0) {
         val roomTotal = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
@@ -1245,7 +1293,25 @@ private fun GuestWizardCard(
             // Row 1: Full Name + Phone
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DreamlandTextField(modifier = fieldMod.weight(1f), value = entry.name, onValueChange = onNameChange, label = if (isPrimary) "Full Name *" else "Full Name")
-                DreamlandTextField(modifier = fieldMod.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone", keyboardType = KeyboardType.Phone)
+                OutlinedTextField(
+                    value = entry.phone,
+                    onValueChange = { v ->
+                        val digits = v.filter(Char::isDigit).take(10)
+                        onPhoneChange(digits)
+                    },
+                    label = { Text("Phone", color = DreamlandMuted, fontSize = 13.sp) },
+                    prefix = { Text("+91 ", color = DreamlandMuted, fontSize = 13.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    isError = entry.phone.isNotBlank() && entry.phone.length != 10,
+                    modifier = fieldMod.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                        cursorColor = DreamlandGold,
+                        errorBorderColor = Color(0xFFEF5350),
+                    ),
+                )
             }
 
             // Row 2: Gender + DOB + Age + Govt ID No. (CenterVertically aligns all to the same midpoint)
@@ -1650,7 +1716,21 @@ internal fun GuestEntryRow(
             if (isPrimary) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     DreamlandTextField(modifier = Modifier.weight(1f), value = entry.name, onValueChange = onNameChange, label = "Full Name *")
-                    DreamlandTextField(modifier = Modifier.weight(1f), value = entry.phone, onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) }, label = "Phone Number", keyboardType = KeyboardType.Phone)
+                    OutlinedTextField(
+                        value = entry.phone,
+                        onValueChange = { onPhoneChange(it.filter(Char::isDigit).take(10)) },
+                        label = { Text("Phone", color = DreamlandMuted, fontSize = 13.sp) },
+                        prefix = { Text("+91 ", color = DreamlandMuted, fontSize = 13.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        isError = entry.phone.isNotBlank() && entry.phone.length != 10,
+                        modifier = Modifier.weight(1f),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                            cursorColor = DreamlandGold, errorBorderColor = Color(0xFFEF5350),
+                        ),
+                    )
                 }
             } else {
                 DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = entry.name, onValueChange = onNameChange, label = "Full Name")

@@ -29,6 +29,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -87,6 +88,7 @@ fun AddBookingDialog(
     var children by remember { mutableStateOf(0) }
     var totalAmountText by remember { mutableStateOf("") }
     var advancePaidText by remember { mutableStateOf("") }
+    var advancePaymentMethod by remember { mutableStateOf("CASH") }
     var breakfastIncluded by remember { mutableStateOf(false) }
     var sourceText by remember { mutableStateOf("") }
     var sourceDropdownExpanded by remember { mutableStateOf(false) }
@@ -148,6 +150,7 @@ fun AddBookingDialog(
             children          = children,
             totalAmount       = finalTotal,
             advancePaidAmount = advancePaidText.toDoubleOrNull() ?: 0.0,
+            advancePaymentMethod = advancePaymentMethod,
             source            = sourceText,
             notes             = notesText,
             breakfastIncluded = breakfastIncluded,
@@ -194,7 +197,21 @@ fun AddBookingDialog(
                 Spacer(Modifier.height(10.dp))
                 DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = guestName, onValueChange = { guestName = it }, label = "Guest Name *")
                 Spacer(Modifier.height(8.dp))
-                DreamlandTextField(modifier = Modifier.fillMaxWidth(), value = guestPhone, onValueChange = { guestPhone = it.filter(Char::isDigit).take(10) }, label = "Phone", keyboardType = KeyboardType.Phone)
+                OutlinedTextField(
+                    value = guestPhone,
+                    onValueChange = { guestPhone = it.filter(Char::isDigit).take(10) },
+                    label = { Text("Phone", color = DreamlandMuted, fontSize = 13.sp) },
+                    prefix = { Text("+91 ", color = DreamlandMuted, fontSize = 13.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    isError = guestPhone.isNotBlank() && guestPhone.length != 10,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                        cursorColor = DreamlandGold, errorBorderColor = Color(0xFFEF5350),
+                    ),
+                )
 
                 Spacer(Modifier.height(20.dp))
 
@@ -326,6 +343,20 @@ fun AddBookingDialog(
                         label = "Advance Paid (₹)",
                         keyboardType = KeyboardType.Decimal,
                     )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("CASH", "BANK").forEach { method ->
+                        val selected = advancePaymentMethod == method
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                                .clickable { advancePaymentMethod = method }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) { Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 13.sp) }
+                    }
                 }
 
                 Spacer(Modifier.height(20.dp))

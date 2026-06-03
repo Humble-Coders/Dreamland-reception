@@ -4,13 +4,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.Complaint
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.repository.BillRepository
+import com.example.dreamland_reception.data.repository.BookingRepository
 import com.example.dreamland_reception.data.repository.ComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillRepository
+import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
 import com.example.dreamland_reception.data.repository.FirestoreRoomInstanceRepository
@@ -89,6 +92,10 @@ data class DashboardState(
     val alerts: List<DashboardAlert> = emptyList(),
     // Active stays snapshot
     val activeStays: List<ActiveStayRow> = emptyList(),
+    // Raw data for room grid
+    val roomInstances: List<RoomInstance> = emptyList(),
+    val rawActiveStays: List<Stay> = emptyList(),
+    val todayBookings: List<Booking> = emptyList(),
     // Trends
     val trendPoints: List<DayTrendPoint> = emptyList(),
 )
@@ -101,6 +108,7 @@ class DashboardViewModel(
     private val complaintRepo: ComplaintRepository = FirestoreComplaintRepository,
     private val roomInstanceRepo: RoomInstanceRepository = FirestoreRoomInstanceRepository,
     private val billRepo: BillRepository = FirestoreBillRepository,
+    private val bookingRepo: BookingRepository = FirestoreBookingRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(DashboardState())
@@ -160,6 +168,7 @@ class DashboardViewModel(
         staysJob = viewModelScope.launch {
             stayRepo.listenActive(hotelId).collect { stays ->
                 _stays.value = stays
+                _state.update { it.copy(rawActiveStays = stays) }
                 recomputeHotelInvoices()
                 recompute(date, isToday = true)
             }
@@ -185,6 +194,7 @@ class DashboardViewModel(
                 }
                 prevNeedsCleaningCount = newCount
                 _rooms.value = rooms
+                _state.update { it.copy(roomInstances = rooms) }
                 recompute(date, isToday = true)
             }
         }
@@ -197,6 +207,20 @@ class DashboardViewModel(
                     recompute(date, isToday = true)
                 }
                 .onFailure { e -> _state.update { it.copy(error = e.message) } }
+        }
+        // Today's bookings (arrivals expected today)
+        viewModelScope.launch {
+            runCatching { bookingRepo.getAllByHotel(AppContext.hotelId) }
+                .onSuccess { bookings: List<com.example.dreamland_reception.data.model.Booking> ->
+                    val today = Calendar.getInstance()
+                    val todayBookings = bookings.filter { b ->
+                        val cal = Calendar.getInstance().apply { time = b.checkIn }
+                        cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
+                        cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) &&
+                        b.status == "CONFIRMED"
+                    }
+                    _state.update { it.copy(todayBookings = todayBookings) }
+                }
         }
     }
 
@@ -394,5 +418,22 @@ class DashboardViewModel(
         val calB = Calendar.getInstance().apply { time = b }
         return calA.get(Calendar.YEAR) == calB.get(Calendar.YEAR) &&
             calA.get(Calendar.DAY_OF_YEAR) == calB.get(Calendar.DAY_OF_YEAR)
+    }
+
+    // ── Room status actions ───────────────────────────────────────────────────
+
+    fun setRoomCleaning(roomId: String) {
+        viewModelScope.launch {
+            runCatching { roomInstanceRepo.updateStatus(roomId, "CLEANING") }
+        }
+    }
+
+    fun setRoomAvailable(roomId: String) {
+        viewModelScope.launch {
+            runCatching {
+                roomInstanceRepo.updateStatus(roomId, "AVAILABLE")
+                roomInstanceRepo.markNeedsCleaning(roomId, false)
+            }
+        }
     }
 }

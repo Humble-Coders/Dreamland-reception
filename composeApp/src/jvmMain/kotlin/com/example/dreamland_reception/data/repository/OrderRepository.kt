@@ -12,6 +12,7 @@ import java.util.Date
 
 interface OrderRepository {
     suspend fun getAll(): List<Order>
+    suspend fun getById(orderId: String): Order?
     suspend fun getPending(): List<Order>
     suspend fun getByStay(stayId: String): List<Order>
     suspend fun getByHotel(hotelId: String): List<Order>
@@ -29,6 +30,10 @@ object FirestoreOrderRepository : OrderRepository {
     }
 
     private val col get() = FirestoreRepositorySupport.get().collection("orders")
+
+    override suspend fun getById(orderId: String): Order? = withContext(Dispatchers.IO) {
+        col.document(orderId).get().get().toOrder()
+    }
 
     override suspend fun getAll(): List<Order> = withContext(Dispatchers.IO) {
         // Sort client-side so legacy docs (which used `orderedAt`) are not dropped by an
