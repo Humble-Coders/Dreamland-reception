@@ -1645,9 +1645,14 @@ class StaysViewModel(
                 // account holder (the first room that resolved to a real user).
                 val groupAccountHolderUid = ws.selectedInstanceIds
                     .firstNotNullOfOrNull { roomOwnUid[it]?.takeIf { u -> u.isNotBlank() } } ?: ""
-                // Mark every resolved account checked in (idempotent; new docs already are).
-                roomOwnUid.values.filter { it.isNotBlank() }.toSet()
-                    .forEach { uid -> runCatching { userRepo.markCheckedIn(uid, true) } }
+                // Create/find user docs for ALL guests with name + phone (not just room owners).
+                // resolveUid() dedupes by phone via phoneToUid, so room owners aren't duplicated.
+                ws.guestEntries.forEach { entry ->
+                    val phone = normalizePhoneE164(entry.phone) ?: return@forEach
+                    runCatching { resolveUid(entry.name.trim().ifBlank { "Guest" }, phone) }
+                }
+                // Mark ALL resolved user accounts checked in (covers extra guests too).
+                phoneToUid.values.forEach { uid -> runCatching { userRepo.markCheckedIn(uid, true) } }
 
                 val firstStayId = ws.selectedInstanceIds.mapIndexed { roomIndex, instanceId ->
                     val roomInstance = instanceRepo.getById(instanceId)
@@ -2341,6 +2346,7 @@ class StaysViewModel(
             taxAmount = taxAmount,
             totalAmount = total,
             advancePayment = totalAdvance,
+            advancePaymentMethod = primary.advancePaymentMethod,
             pendingAmount = pending,
             status = status,
             createdAt = checkoutTime,
