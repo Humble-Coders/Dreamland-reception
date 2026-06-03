@@ -23,6 +23,7 @@ interface BillRepository {
     suspend fun updateTaxDiscount(id: String, taxEnabled: Boolean, taxPercentage: Double, discountType: String, discountValue: Double, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
     suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
     suspend fun updateGuestName(id: String, name: String)
+    suspend fun updateGuestPhone(id: String, phone: String)
     suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String)
     suspend fun finalizeTransaction(
         id: String, items: List<BillItem>,
@@ -161,6 +162,7 @@ object FirestoreBillRepository : BillRepository {
             stayId = getString("stayId") ?: "",
             stayIds = stayIdsList,
             guestName = getString("guestName") ?: "",
+            guestPhone = getString("guestPhone") ?: "",
             roomNumber = getString("roomNumber") ?: "",
             roomNumbers = roomNumbersList,
             checkInDate = getTimestamp("checkInDate")?.toDate(),
@@ -220,6 +222,10 @@ object FirestoreBillRepository : BillRepository {
 
     override suspend fun updateGuestName(id: String, name: String) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("guestName" to name, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateGuestPhone(id: String, phone: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("guestPhone" to phone, "updatedAt" to Date())).get(); Unit
     }
 
     override suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String) = withContext(Dispatchers.IO) {
@@ -294,6 +300,7 @@ object FirestoreBillRepository : BillRepository {
         "stayId" to stayId,
         "stayIds" to stayIds,
         "guestName" to guestName,
+        "guestPhone" to guestPhone,
         "roomNumber" to roomNumber,
         "roomNumbers" to roomNumbers,
         "checkInDate" to checkInDate,

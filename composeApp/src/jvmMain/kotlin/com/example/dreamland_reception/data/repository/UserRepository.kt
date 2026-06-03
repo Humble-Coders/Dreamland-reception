@@ -13,6 +13,8 @@ interface UserRepository {
     suspend fun markCheckedIn(userId: String, checkedIn: Boolean)
     /** Returns the doc id of the user whose `phoneNumber` exactly matches, or null. */
     suspend fun findIdByPhone(phoneNumber: String): String?
+    /** Returns the display name of the user whose `phoneNumber` exactly matches, or null. */
+    suspend fun findNameByPhone(phoneNumber: String): String?
     /** Creates a reception-owned guest user (auto id stored in `uid`, empty `fireAuthId`). Returns the id. */
     suspend fun createGuestUser(displayName: String, phoneNumber: String): String
 }
@@ -42,6 +44,14 @@ object FirestoreUserRepository : UserRepository {
         if (phoneNumber.isBlank()) return@withContext null
         col.whereEqualTo("phoneNumber", phoneNumber).limit(1).get().get()
             .documents.firstOrNull()?.id
+    }
+
+    override suspend fun findNameByPhone(phoneNumber: String): String? = withContext(Dispatchers.IO) {
+        if (phoneNumber.isBlank()) return@withContext null
+        val doc = col.whereEqualTo("phoneNumber", phoneNumber).limit(1).get().get()
+            .documents.firstOrNull() ?: return@withContext null
+        doc.getString("displayName")?.ifBlank { null }
+            ?: doc.getString("name")?.ifBlank { null }
     }
 
     override suspend fun createGuestUser(displayName: String, phoneNumber: String): String = withContext(Dispatchers.IO) {

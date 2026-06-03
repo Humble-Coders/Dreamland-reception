@@ -36,6 +36,7 @@ import java.awt.image.BufferedImage
 import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.UUID
+import com.example.dreamland_reception.util.normalizePhoneE164
 
 // ── Accounting status ─────────────────────────────────────────────────────────
 
@@ -157,6 +158,7 @@ data class StayBillingState(
     val stay: Stay? = null,
     val bill: Bill? = null,
     val billGuestName: String = "",  // editable guest name for the bill header
+    val billGuestPhone: String = "",  // editable guest phone for the bill header
     val pendingGuestNameOverride: String = "",  // set before load(); applied on bill load then cleared
     val editableTaxPct: String = "",         // inline-editable tax percentage in summary
     val editableAdvancePaid: String = "",    // inline-editable advance paid in summary
@@ -211,12 +213,13 @@ class StayBillingViewModel(
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: ""
+            val guestPhone = bill?.guestPhone?.ifBlank { null } ?: ""
             val hotelId = AppContext.hotelId
             val instances = runCatching { instanceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val allRooms = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val foods = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val svcs = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
-            _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
+            _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone, pendingGuestNameOverride = "",
                 editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
@@ -321,12 +324,13 @@ class StayBillingViewModel(
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: stay?.guestName ?: ""
+            val guestPhone2 = bill?.guestPhone?.ifBlank { null } ?: stay?.guestPhone ?: ""
             val hotelId2 = AppContext.hotelId
             val instances2 = runCatching { instanceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val allRooms2 = runCatching { roomRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val foods2 = runCatching { foodRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val svcs2 = runCatching { serviceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
-            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, pendingGuestNameOverride = "",
+            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone2, pendingGuestNameOverride = "",
                 editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
@@ -934,6 +938,8 @@ class StayBillingViewModel(
 
     fun onBillGuestName(v: String) = _state.update { it.copy(billGuestName = v) }
 
+    fun onBillGuestPhone(v: String) = _state.update { it.copy(billGuestPhone = v.filter { c -> c.isDigit() }.take(10)) }
+
     fun saveTaxRateForGroup(oldRate: Double, newRate: Double) {
         val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
         val updatedItems = bill.items.map { item ->
@@ -989,6 +995,16 @@ class StayBillingViewModel(
         viewModelScope.launch {
             runCatching { billRepo.updateGuestName(billId, name) }
                 .onSuccess { _state.update { s -> s.copy(bill = s.bill?.copy(guestName = name)) } }
+        }
+    }
+
+    fun saveBillGuestPhone() {
+        val phone = _state.value.billGuestPhone.trim()
+        val billId = _state.value.bill?.id ?: return
+        if (billId.isBlank()) return
+        viewModelScope.launch {
+            runCatching { billRepo.updateGuestPhone(billId, phone) }
+                .onSuccess { _state.update { s -> s.copy(bill = s.bill?.copy(guestPhone = phone)) } }
         }
     }
 
@@ -1154,25 +1170,27 @@ class StayBillingViewModel(
             // primary stay by bill.stayId to get the correct phone so the accounting system
             // and invoice Lambda create the record under the right customer name.
             val loadedStay = _state.value.stay
-            val guestPhone: String = if (loadedStay?.guestName == settledBill.guestName) {
-                loadedStay.guestPhone
-            } else {
-                var found: String? = null
-                if (settledBill.stayId.isNotBlank()) {
-                    try {
-                        val s = stayRepo.getById(settledBill.stayId)
-                        if (s?.guestName == settledBill.guestName) found = s.guestPhone
-                    } catch (_: Exception) {}
-                }
-                if (found == null) {
-                    for (id in settledBill.stayIds) {
+            val guestPhone: String = settledBill.guestPhone.ifBlank {
+                if (loadedStay?.guestName == settledBill.guestName) {
+                    loadedStay.guestPhone
+                } else {
+                    var found: String? = null
+                    if (settledBill.stayId.isNotBlank()) {
                         try {
-                            val s = stayRepo.getById(id)
-                            if (s?.guestName == settledBill.guestName) { found = s.guestPhone; break }
+                            val s = stayRepo.getById(settledBill.stayId)
+                            if (s?.guestName == settledBill.guestName) found = s.guestPhone
                         } catch (_: Exception) {}
                     }
+                    if (found == null) {
+                        for (id in settledBill.stayIds) {
+                            try {
+                                val s = stayRepo.getById(id)
+                                if (s?.guestName == settledBill.guestName) { found = s.guestPhone; break }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                    found ?: ""
                 }
-                found ?: ""
             }
             // Durable ledger sync — persists success/failure on the bill so an
             // unsynced bill can be retried later (on reload or via the Retry
@@ -1199,7 +1217,14 @@ class StayBillingViewModel(
         _state.update { it.copy(accountingStatus = AccountingStatus.InProgress) }
         viewModelScope.launch {
             val guestUid = resolveGuestUid(bill.guestName, guestPhone)
-            accountingRepo.settle(bill, guestPhone, guestUid)
+            // Use the authoritative display name from the users collection for accounting,
+            // so the ledger record matches the registered guest identity.
+            val normalizedPhone = normalizePhoneE164(guestPhone) ?: guestPhone
+            val accountingName = if (normalizedPhone.isNotBlank()) {
+                runCatching { userRepo.findNameByPhone(normalizedPhone) }.getOrNull()
+            } else null
+            val billForAccounting = if (!accountingName.isNullOrBlank()) bill.copy(guestName = accountingName) else bill
+            accountingRepo.settle(billForAccounting, guestPhone, guestUid)
                 .onSuccess { r ->
                     if (r.invoiceId.isNotBlank()) {
                         runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
@@ -1232,6 +1257,7 @@ class StayBillingViewModel(
      * the bill to find the one whose name matches.
      */
     private suspend fun resolveGuestPhone(bill: Bill, loadedStay: Stay?): String {
+        if (bill.guestPhone.isNotBlank()) return bill.guestPhone
         if (loadedStay != null && loadedStay.guestName == bill.guestName) return loadedStay.guestPhone
         if (bill.stayId.isNotBlank()) {
             runCatching { stayRepo.getById(bill.stayId) }.getOrNull()
@@ -1252,8 +1278,9 @@ class StayBillingViewModel(
      */
     private suspend fun resolveGuestUid(name: String, phone: String): String {
         if (phone.isBlank()) return ""
+        val normalized = normalizePhoneE164(phone) ?: phone
         return runCatching {
-            userRepo.findIdByPhone(phone) ?: userRepo.createGuestUser(name.ifBlank { phone }, phone)
+            userRepo.findIdByPhone(normalized) ?: userRepo.createGuestUser(name.ifBlank { normalized }, normalized)
         }.getOrElse { "" }
     }
 
@@ -1316,25 +1343,27 @@ class StayBillingViewModel(
             val bill = _state.value.bill ?: return
             val loadedStay = _state.value.stay
             viewModelScope.launch {
-                val guestPhone: String = if (loadedStay?.guestName == bill.guestName) {
-                    loadedStay.guestPhone
-                } else {
-                    var found: String? = null
-                    if (bill.stayId.isNotBlank()) {
-                        try {
-                            val s = stayRepo.getById(bill.stayId)
-                            if (s?.guestName == bill.guestName) found = s.guestPhone
-                        } catch (_: Exception) {}
-                    }
-                    if (found == null) {
-                        for (id in bill.stayIds) {
+                val guestPhone: String = bill.guestPhone.ifBlank {
+                    if (loadedStay?.guestName == bill.guestName) {
+                        loadedStay.guestPhone
+                    } else {
+                        var found: String? = null
+                        if (bill.stayId.isNotBlank()) {
                             try {
-                                val s = stayRepo.getById(id)
-                                if (s?.guestName == bill.guestName) { found = s.guestPhone; break }
+                                val s = stayRepo.getById(bill.stayId)
+                                if (s?.guestName == bill.guestName) found = s.guestPhone
                             } catch (_: Exception) {}
                         }
+                        if (found == null) {
+                            for (id in bill.stayIds) {
+                                try {
+                                    val s = stayRepo.getById(id)
+                                    if (s?.guestName == bill.guestName) { found = s.guestPhone; break }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        found ?: ""
                     }
-                    found ?: ""
                 }
                 generateInvoicePdf(bill, guestPhone)
             }

@@ -188,6 +188,30 @@ fun StayBillingScreen(
                         Icon(Icons.Filled.Person, contentDescription = "Choose guest", tint = DreamlandGold.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
                     }
                 }
+                // Editable phone number row
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("+91 ", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    BasicTextField(
+                        value = state.billGuestPhone,
+                        onValueChange = vm::onBillGuestPhone,
+                        singleLine = true,
+                        cursorBrush = SolidColor(DreamlandGold),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandMuted),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { vm.saveBillGuestPhone() }),
+                        modifier = Modifier
+                            .widthIn(min = 60.dp)
+                            .onFocusChanged { if (!it.isFocused) vm.saveBillGuestPhone() },
+                        decorationBox = { inner ->
+                            Box {
+                                if (state.billGuestPhone.isEmpty()) {
+                                    Text("Phone", color = DreamlandMuted.copy(alpha = 0.4f), style = MaterialTheme.typography.bodySmall)
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                }
                 if (roomLabel.isNotBlank()) Text(roomLabel, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
             }
             state.bill?.let { bill ->
