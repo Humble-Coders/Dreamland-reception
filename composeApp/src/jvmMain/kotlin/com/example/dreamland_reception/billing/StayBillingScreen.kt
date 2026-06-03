@@ -487,9 +487,10 @@ fun StayBillingScreen(
                             else -> Unit
                         }
 
+                        val invoiceUrl = state.bill?.invoiceUrl ?: ""
                         Button(
-                            onClick = { vm.openInvoicePdf() },
-                            enabled = state.bill?.status == "PAID" && !state.invoicePdf.isGenerating,
+                            onClick = { openInBrowser(invoiceUrl) },
+                            enabled = invoiceUrl.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
@@ -498,15 +499,9 @@ fun StayBillingScreen(
                                 disabledContainerColor = DreamlandMuted.copy(alpha = 0.3f),
                             ),
                         ) {
-                            if (state.invoicePdf.isGenerating) {
-                                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = DreamlandForest)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Generating…", fontWeight = FontWeight.SemiBold, color = DreamlandForest)
-                            } else {
-                                Icon(Icons.Filled.Receipt, contentDescription = null, modifier = Modifier.size(18.dp), tint = DreamlandForest)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Generate Invoice (PDF)", fontWeight = FontWeight.SemiBold, color = DreamlandForest)
-                            }
+                            Icon(Icons.Filled.Receipt, contentDescription = null, modifier = Modifier.size(18.dp), tint = DreamlandForest)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Generate Invoice (PDF)", fontWeight = FontWeight.SemiBold, color = DreamlandForest)
                         }
                     }
                 }
