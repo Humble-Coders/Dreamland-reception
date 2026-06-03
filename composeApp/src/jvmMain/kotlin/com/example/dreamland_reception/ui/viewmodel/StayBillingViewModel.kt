@@ -265,10 +265,20 @@ class StayBillingViewModel(
                     if (stay.earlyCheckInCharge > 0) add(BillItem(name = "Early Check-in", type = "SERVICE", quantity = 1, unitPrice = stay.earlyCheckInCharge, total = stay.earlyCheckInCharge))
                     if (stay.lateCheckOutCharge > 0) add(BillItem(name = "Late Check-out", type = "SERVICE", quantity = 1, unitPrice = stay.lateCheckOutCharge, total = stay.lateCheckOutCharge))
                     for (order in orders) {
-                        if (order.totalAmount > 0) add(BillItem(
-                            name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
-                            type = "ORDER", quantity = 1, unitPrice = order.totalAmount, total = order.totalAmount, refId = order.id, notes = order.notes,
-                        ))
+                        if (order.totalAmount > 0) {
+                            // Use pre-tax subtotal as BillItem.total so recalculate() can apply tax on top.
+                            // For legacy orders (subtotalAmount=0), fall back to totalAmount with no tax.
+                            val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
+                            val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
+                                order.totalTaxAmount / order.subtotalAmount * 100.0
+                            else 0.0
+                            add(BillItem(
+                                name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
+                                type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
+                                taxPercentage = effectiveTaxPct,
+                                refId = order.id, notes = order.notes,
+                            ))
+                        }
                     }
                 }
                 val advance = stay.advancePaidAmount
