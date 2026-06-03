@@ -170,88 +170,113 @@ object AccountingRepository {
         log("SALE posted — invoiceId=$invoiceId, invoiceNo=${saleResponse.invoice.invoiceNumber}, " +
             "invoiceTotal=$invoiceTotal (our computed=$total)")
 
+        // How much of THIS invoice still needs settling. The advance, then each
+        // checkout tender, is applied against this; anything beyond it is posted
+        // as a payment-on-account (no invoiceId) that reduces the customer's
+        // overall AR — i.e. it clears a balance carried over from an earlier stay,
+        // or leaves a credit if the guest overpaid. This is what lets a guest pay
+        // more than this bill (to also settle older dues) without the server
+        // rejecting it as an invoice overpayment.
+        var invoiceRemaining = invoiceTotal
+
         // ── 7. ADVANCE APPLIED — settle the advance against the invoice ───────
         // Posted through the payments endpoint with paymentAccountId = Advance
-        // Liability. The ledger effect is identical to a raw ADVANCE_APPLIED
-        // journal (DR Advance Liability / CR customer AR), but routing it through
-        // /payments also records an InvoicePayment, so invoice.amountPaid includes
-        // the advance and the invoice can reach PAID. A raw journal entry would
-        // leave the invoice stranded at PARTIALLY_PAID with a phantom receivable
-        // equal to the advance. Idempotent on the same sourceId.
+        // Liability. The ledger effect is a raw ADVANCE_APPLIED journal (DR Advance
+        // Liability / CR customer AR), but routing it through /payments also records
+        // an InvoicePayment so the invoice can reach PAID. The part exceeding the
+        // bill (advance > total) becomes customer credit. Idempotent on the sourceId.
         if (hasAdvance && advanceLiabilityId != null) {
-            log("Applying advance via payment — amount=$advanceRounded, " +
-                "invoiceId=$invoiceId, sourceId=stay_${bill.stayId}_advance_applied")
-            client.postPayment(
-                token = token,
-                req   = PostPaymentRequest(
-                    customerId       = customerId,
-                    amount           = advanceRounded,
-                    method           = "CASH",            // ignored: paymentAccountId overrides it
-                    paymentAccountId = advanceLiabilityId,
-                    invoiceId        = invoiceId,
-                    description      = "Advance applied — invoice ${saleResponse.invoice.invoiceNumber}",
-                    date             = today,
-                    appId            = APP_ID,
-                    sourceId         = "stay_${bill.stayId}_advance_applied",
-                ),
-            )
+            val src       = "stay_${bill.stayId}_advance_applied"
+            val toInvoice = roundAmount(minOf(advanceRounded, invoiceRemaining).coerceAtLeast(0.0))
+            val toAccount = roundAmount(advanceRounded - toInvoice)
+            if (toInvoice > 0.0) {
+                log("Applying advance to invoice — amount=$toInvoice, invoiceId=$invoiceId, sourceId=$src")
+                client.postPayment(
+                    token = token,
+                    req   = PostPaymentRequest(
+                        customerId       = customerId,
+                        amount           = toInvoice,
+                        method           = "CASH",            // ignored: paymentAccountId overrides it
+                        paymentAccountId = advanceLiabilityId,
+                        invoiceId        = invoiceId,
+                        description      = "Advance applied — invoice ${saleResponse.invoice.invoiceNumber}",
+                        date             = today,
+                        appId            = APP_ID,
+                        sourceId         = src,
+                    ),
+                )
+                invoiceRemaining = roundAmount(invoiceRemaining - toInvoice)
+            }
+            if (toAccount > 0.0) {
+                // Advance exceeds this bill — the surplus reduces overall AR (credit).
+                log("Advance surplus to account — amount=$toAccount, sourceId=${src}_acct")
+                client.postPayment(
+                    token = token,
+                    req   = PostPaymentRequest(
+                        customerId       = customerId,
+                        amount           = toAccount,
+                        method           = "CASH",
+                        paymentAccountId = advanceLiabilityId,
+                        invoiceId        = null,
+                        description      = "Advance surplus (credit) — ${saleResponse.invoice.invoiceNumber}",
+                        date             = today,
+                        appId            = APP_ID,
+                        sourceId         = "${src}_acct",
+                    ),
+                )
+            }
             log("Advance applied OK")
         }
 
-        // ── 8. PAYMENT — one per checkout PaymentTransaction (only remaining) ──
-        // Remaining AR after ADVANCE_APPLIED = invoiceTotal - advance.
-        // Penny-adjust the last payment so sum equals the remaining exactly.
-        val checkoutPayments = bill.transactions.map { txn ->
-            PaymentEntry(
-                amount      = roundAmount(txn.amount),
-                method      = if (txn.method == "CASH") "CASH" else "BANK",
-                sourceId    = "stay_${bill.stayId}_txn_${txn.id}",
-                description = "Payment via ${txn.method}",
-            )
-        }.toMutableList()
+        // ── 8. CHECKOUT PAYMENTS — settle the invoice first, then clear prior dues ──
+        // Each tender is split: the part that fits the invoice's remaining is posted
+        // against it (so it can reach PAID); any overflow is posted with no invoiceId,
+        // reducing the customer's overall AR (clears a carried-over balance, or leaves
+        // a credit). Deterministic sourceIds keep both legs idempotent on retry.
+        log("Checkout: invoiceRemaining=$invoiceRemaining, tenders=" +
+            bill.transactions.joinToString { "${it.method}:${roundAmount(it.amount)}" })
 
-        if (checkoutPayments.isNotEmpty()) {
-            val remainingAr = roundAmount(invoiceTotal - advanceRounded)
-            val checkoutSum = roundAmount(checkoutPayments.sumOf { it.amount })
-            val diff        = roundAmount(remainingAr - checkoutSum)
-            log("Checkout payments: remainingAR=$remainingAr, checkoutSum=$checkoutSum, diff=$diff")
-            when {
-                diff == 0.0 -> log("Payments match remainingAR exactly — no adjustment needed")
-                Math.abs(diff) <= 0.01 -> {
-                    // Pure floating-point rounding error — absorb into last payment
-                    val last     = checkoutPayments.last()
-                    val adjusted = roundAmount(last.amount + diff)
-                    checkoutPayments[checkoutPayments.lastIndex] = last.copy(amount = adjusted)
-                    log("Penny adjustment (rounding error) → '${last.sourceId}': ${last.amount} → $adjusted")
-                }
-                else -> {
-                    // Genuine partial payment — post amounts as-is, leave AR outstanding
-                    log("Partial payment detected (diff=$diff > 0.01) — posting actual amounts, " +
-                        "${if (diff > 0) "₹$diff remains outstanding" else "₹${Math.abs(diff)} overpaid"}")
-                }
+        bill.transactions.forEach { txn ->
+            val amount = roundAmount(txn.amount)
+            if (amount <= 0.0) return@forEach
+            val method    = if (txn.method == "CASH") "CASH" else "BANK"
+            val toInvoice = roundAmount(minOf(amount, invoiceRemaining).coerceAtLeast(0.0))
+            val toAccount = roundAmount(amount - toInvoice)
+            val base      = "stay_${bill.stayId}_txn_${txn.id}"
+
+            if (toInvoice > 0.0) {
+                log("Posting PAYMENT (invoice) — amount=$toInvoice, method=$method, sourceId=$base")
+                client.postPayment(
+                    token = token,
+                    req   = PostPaymentRequest(
+                        customerId  = customerId,
+                        amount      = toInvoice,
+                        method      = method,
+                        invoiceId   = invoiceId,
+                        description = "Payment via ${txn.method}",
+                        date        = today,
+                        appId       = APP_ID,
+                        sourceId    = base,
+                    ),
+                )
+                invoiceRemaining = roundAmount(invoiceRemaining - toInvoice)
             }
-        }
-
-        log("Checkout payment entries (${checkoutPayments.size}): " +
-            checkoutPayments.joinToString { "${it.sourceId}=${it.amount}(${it.method})" })
-
-        checkoutPayments.forEachIndexed { i, entry ->
-            log("Posting PAYMENT[$i] — amount=${entry.amount}, method=${entry.method}, " +
-                "invoiceId=$invoiceId, sourceId=${entry.sourceId}")
-            client.postPayment(
-                token = token,
-                req   = PostPaymentRequest(
-                    customerId  = customerId,
-                    amount      = entry.amount,
-                    method      = entry.method,
-                    invoiceId   = invoiceId,
-                    description = entry.description,
-                    date        = today,
-                    appId       = APP_ID,
-                    sourceId    = entry.sourceId,
-                ),
-            )
-            log("PAYMENT[$i] posted OK")
+            if (toAccount > 0.0) {
+                log("Posting PAYMENT (on account) — amount=$toAccount, method=$method, sourceId=${base}_acct")
+                client.postPayment(
+                    token = token,
+                    req   = PostPaymentRequest(
+                        customerId  = customerId,
+                        amount      = toAccount,
+                        method      = method,
+                        invoiceId   = null,
+                        description = "Payment via ${txn.method} (prior balance)",
+                        date        = today,
+                        appId       = APP_ID,
+                        sourceId    = "${base}_acct",
+                    ),
+                )
+            }
         }
 
         log("settle() COMPLETE — stayId=${bill.stayId}, invoiceId=$invoiceId")
@@ -375,11 +400,4 @@ object AccountingRepository {
     }
 
     private fun log(msg: String) = println("[Accounting] $msg")
-
-    private data class PaymentEntry(
-        val amount: Double,
-        val method: String,
-        val sourceId: String,
-        val description: String,
-    )
 }
