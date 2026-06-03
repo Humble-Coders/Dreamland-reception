@@ -73,7 +73,11 @@ internal data class SaleResponseData(
 internal data class PostPaymentRequest(
     val customerId: String,
     val amount: Double,
-    val method: String,          // "CASH" | "BANK"
+    val method: String,          // "CASH" | "BANK" — ignored when paymentAccountId is set
+    // Overrides [method] with an explicit account to debit. Used to apply a guest
+    // advance against the invoice by debiting the Advance Liability account, which
+    // also records an InvoicePayment so the invoice can reach PAID.
+    val paymentAccountId: String? = null,
     val invoiceId: String? = null,
     val description: String? = null,
     val date: String,            // "YYYY-MM-DD"

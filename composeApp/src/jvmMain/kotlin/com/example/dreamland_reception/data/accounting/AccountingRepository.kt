@@ -16,22 +16,24 @@ import java.util.Locale
  *
  *   1. ADVANCE  (via POST /api/v1/transactions, postingType = ADVANCE)
  *      DR  Cash                        advanceAmount   ← cash was received at check-in
- *      CR  Guest Advances Received     advanceAmount   ← recorded as liability
+ *      CR  Advance Liability           advanceAmount   ← recorded as liability
  *
  *   2. SALE  (via POST /api/v1/sales, at checkout)
  *      DR  Accounts Receivable (AR)    total
  *      CR  Sales Revenue               subtotal
  *      CR  GST Payable                 tax              (when taxRate > 0)
  *
- *   3. ADVANCE_APPLIED  (via POST /api/v1/transactions, postingType = ADVANCE_APPLIED)
- *      DR  Guest Advances Received     advanceAmount   ← liability cleared
+ *   3. ADVANCE APPLIED  (via POST /api/v1/payments, paymentAccountId = Advance Liability)
+ *      DR  Advance Liability           advanceAmount   ← liability cleared
  *      CR  AR (customer sub-account)   advanceAmount   ← AR reduced by advance
+ *      Routed through /payments (not a raw journal) so it records an
+ *      InvoicePayment and the invoice can reach PAID.
  *
  *   4. PAYMENT  (via POST /api/v1/payments, one per checkout PaymentTransaction)
  *      DR  Cash | Bank                 txn.amount
  *      CR  AR (customer sub-account)   txn.amount
  *
- * The sum of ADVANCE_APPLIED + all PAYMENTs equals the invoice total exactly,
+ * The advance payment + all checkout PAYMENTs equal the invoice total exactly,
  * enforced by a penny adjustment on the last checkout payment.
  *
  * ## Idempotency
@@ -168,26 +170,32 @@ object AccountingRepository {
         log("SALE posted — invoiceId=$invoiceId, invoiceNo=${saleResponse.invoice.invoiceNumber}, " +
             "invoiceTotal=$invoiceTotal (our computed=$total)")
 
-        // ── 7. ADVANCE_APPLIED — DR Advance Liability / CR Customer AR ────────
-        // Clears the advance liability and reduces the customer's AR balance.
+        // ── 7. ADVANCE APPLIED — settle the advance against the invoice ───────
+        // Posted through the payments endpoint with paymentAccountId = Advance
+        // Liability. The ledger effect is identical to a raw ADVANCE_APPLIED
+        // journal (DR Advance Liability / CR customer AR), but routing it through
+        // /payments also records an InvoicePayment, so invoice.amountPaid includes
+        // the advance and the invoice can reach PAID. A raw journal entry would
+        // leave the invoice stranded at PARTIALLY_PAID with a phantom receivable
+        // equal to the advance. Idempotent on the same sourceId.
         if (hasAdvance && advanceLiabilityId != null) {
-            log("Posting ADVANCE_APPLIED — amount=$advanceRounded, " +
-                "sourceId=stay_${bill.stayId}_advance_applied")
-            client.postRawTransaction(
+            log("Applying advance via payment — amount=$advanceRounded, " +
+                "invoiceId=$invoiceId, sourceId=stay_${bill.stayId}_advance_applied")
+            client.postPayment(
                 token = token,
-                req   = RawTransactionRequest(
-                    appId       = APP_ID,
-                    sourceId    = "stay_${bill.stayId}_advance_applied",
-                    postingType = "ADVANCE_APPLIED",
-                    description = "Advance applied — invoice ${saleResponse.invoice.invoiceNumber}",
-                    date        = today,
-                    entries     = listOf(
-                        RawEntryInput(accountId = advanceLiabilityId, type = "DEBIT",  amount = advanceRounded),
-                        RawEntryInput(accountId = customerArId,       type = "CREDIT", amount = advanceRounded),
-                    ),
+                req   = PostPaymentRequest(
+                    customerId       = customerId,
+                    amount           = advanceRounded,
+                    method           = "CASH",            // ignored: paymentAccountId overrides it
+                    paymentAccountId = advanceLiabilityId,
+                    invoiceId        = invoiceId,
+                    description      = "Advance applied — invoice ${saleResponse.invoice.invoiceNumber}",
+                    date             = today,
+                    appId            = APP_ID,
+                    sourceId         = "stay_${bill.stayId}_advance_applied",
                 ),
             )
-            log("ADVANCE_APPLIED posted OK")
+            log("Advance applied OK")
         }
 
         // ── 8. PAYMENT — one per checkout PaymentTransaction (only remaining) ──
