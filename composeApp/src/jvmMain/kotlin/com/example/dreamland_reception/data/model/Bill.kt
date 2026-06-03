@@ -29,6 +29,7 @@ data class Bill(
     val stayId: String = "",             // primary stay ID (used for single and group bills)
     val stayIds: List<String> = emptyList(), // all stay IDs for group bills
     val guestName: String = "",
+    val guestPhone: String = "",
     val roomNumber: String = "",         // "22" or "22, 23, 24" for group
     val roomNumbers: List<String> = emptyList(), // ["22", "23", "24"] for group bills
     val checkInDate: Date? = null,

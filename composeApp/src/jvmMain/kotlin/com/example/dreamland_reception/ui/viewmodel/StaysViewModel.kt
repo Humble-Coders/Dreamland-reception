@@ -2335,6 +2335,7 @@ class StaysViewModel(
             stayId = primary.id,
             stayIds = stays.map { it.id },
             guestName = primary.guestName,
+            guestPhone = primary.guestPhone,
             roomNumber = allRoomNumbers.joinToString(", "),
             roomNumbers = allRoomNumbers,
             checkInDate = primary.checkInActual,
