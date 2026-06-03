@@ -26,7 +26,8 @@ data class Stay(
     val roomNumber: String = "",
     val roomCategoryId: String = "",
     val roomCategoryName: String = "",
-    val checkInActual: Date = Date(),
+    val checkInActual: Date = Date(),            // normalized check-in date (date-only, for night math)
+    val trueCheckIn: Date? = null,               // actual system time when "Check-in Guest" was clicked
     val expectedCheckOut: Date = Date(),
     val checkOutActual: Date? = null,
     val status: String = "ACTIVE",   // ACTIVE | COMPLETED

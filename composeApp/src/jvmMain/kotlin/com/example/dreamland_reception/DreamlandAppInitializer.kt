@@ -104,6 +104,7 @@ object DreamlandAppInitializer {
                 FirestoreServiceRepository.initialize(fs)
                 FirestoreFoodItemRepository.initialize(fs)
                 FirestoreComplaintTypeRepository.initialize(fs)
+                com.example.dreamland_reception.data.repository.FirestorePurposeTypeRepository.initialize(fs)
                 FirestoreBookingSourceRepository.initialize(fs)
                 FirestoreUserRepository.initialize(fs)
             }.onSuccess {

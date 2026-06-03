@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.window.PopupProperties
 import com.example.dreamland_reception.DreamlandForestElevated
 import com.example.dreamland_reception.DreamlandForestSurface
@@ -104,15 +105,16 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 
     var currentStep by remember { mutableStateOf(1) }
 
-    // The GRC-print step exists only for actual check-ins (not "Add Booking" mode).
+    // The GRC-print step exists only for actual check-ins (not "Add Booking" mode), and is the
+    // LAST step so the advance amount entered on Confirm is reflected on the card.
     val showGrcStep = !state.isBookingMode
     val stepLabels = if (showGrcStep)
-        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Print\nGRC", "Confirm")
+        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm", "Print\nGRC")
     else
         listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm")
     val totalSteps = stepLabels.size
-    val confirmStep = totalSteps          // last step is always Confirm
-    val grcStep = if (showGrcStep) 4 else -1
+    val confirmStep = 4
+    val grcStep = if (showGrcStep) 5 else -1
 
     Dialog(
         onDismissRequest = vm::closeWalkIn,
@@ -561,6 +563,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
 
 @Composable
 private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
+    LaunchedEffect(Unit) { vm.loadPurposeTypes() }
     // Auto-dismiss scanner message after 3s
     LaunchedEffect(state.scannerMessage) {
         if (state.scannerMessage != null) {
@@ -608,10 +611,14 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
                 onPhoneChange = { vm.onGuestPhone(index, it) },
                 onIdProofChange = { vm.onGuestIdProof(index, it) },
                 onGenderChange = { vm.onGuestGender(index, it) },
+                onIdTypeChange = { vm.onGuestIdType(index, it) },
                 onGovIdChange = { vm.onGuestGovIdNumber(index, it) },
                 onAddressChange = { vm.onGuestAddress(index, it) },
                 onDobChange = { vm.onGuestDob(index, it) },
                 onAgeChange = { vm.onGuestAge(index, it) },
+                purposeOptions = state.purposeOptions,
+                onPurposeChange = { vm.onGuestPurpose(index, it) },
+                onAddPurpose = { vm.addPurposeType(index, it) },
                 onScannerClick = { vm.fillGuestFromScanner(index) },
                 onRemove = if (index > 0) { { vm.removeGuest(index) } } else null,
             )
@@ -1170,10 +1177,14 @@ private fun GuestWizardCard(
     onPhoneChange: (String) -> Unit,
     onIdProofChange: (Boolean) -> Unit,
     onGenderChange: (String) -> Unit,
+    onIdTypeChange: (String) -> Unit,
     onGovIdChange: (String) -> Unit,
     onAddressChange: (String) -> Unit,
     onDobChange: (String) -> Unit,
     onAgeChange: (String) -> Unit,
+    purposeOptions: List<String>,
+    onPurposeChange: (String) -> Unit,
+    onAddPurpose: (String) -> Unit,
     onScannerClick: () -> Unit,
     onRemove: (() -> Unit)? = null,
 ) {
@@ -1243,6 +1254,24 @@ private fun GuestWizardCard(
                 DobPickerField(modifier = Modifier.weight(1.2f), dob = entry.dob, onDobChange = onDobChange)
                 DreamlandTextField(modifier = fieldMod.weight(0.6f), value = entry.age?.toString() ?: "", onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) }, label = "Age", keyboardType = KeyboardType.Number)
                 DreamlandTextField(modifier = fieldMod.weight(1.4f), value = entry.govIdNumber, onValueChange = onGovIdChange, label = "Govt ID No.")
+            }
+
+            // Row 2b: ID Type + Purpose of Visit
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                DreamlandDropdown(
+                    modifier = Modifier.weight(1f),
+                    label = "ID Type",
+                    selectedText = entry.idType.ifBlank { "Select" },
+                    options = ID_TYPE_OPTIONS.map { it to it },
+                    onSelected = onIdTypeChange,
+                )
+                PurposeAutocompleteField(
+                    modifier = Modifier.weight(1.4f),
+                    value = entry.purpose,
+                    options = purposeOptions,
+                    onValueChange = onPurposeChange,
+                    onAdd = onAddPurpose,
+                )
             }
 
             // Row 3: Address + ID image buttons
@@ -1811,6 +1840,59 @@ private fun BookingSourceDropdown(
 internal fun SectionLabel(text: String) {
     Text(text, style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 1.sp)
     HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f), modifier = Modifier.padding(top = 4.dp))
+}
+
+private val ID_TYPE_OPTIONS = listOf("Aadhaar", "PAN", "Passport", "Driving Licence", "Voter ID", "Other")
+
+/** Free-text "Purpose of Visit" field with type-to-filter suggestions from purposeType + an Add option. */
+@Composable
+private fun PurposeAutocompleteField(
+    modifier: Modifier = Modifier,
+    value: String,
+    options: List<String>,
+    onValueChange: (String) -> Unit,
+    onAdd: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val query = value.trim()
+    val matches = options.filter { it.contains(query, ignoreCase = true) }.take(6)
+    val showAdd = query.isNotEmpty() && options.none { it.equals(query, ignoreCase = true) }
+    Column(modifier) {
+        Text("Purpose of Visit", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { onValueChange(it); expanded = true },
+                singleLine = true,
+                placeholder = { Text("e.g. Business, Tourism", color = DreamlandMuted, fontSize = 13.sp) },
+                modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) expanded = true },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                    cursorColor = DreamlandGold,
+                ),
+            )
+            DropdownMenu(
+                expanded = expanded && (matches.isNotEmpty() || showAdd),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = false),
+            ) {
+                matches.forEach { p ->
+                    DropdownMenuItem(
+                        text = { Text(p, color = DreamlandOnDark) },
+                        onClick = { onValueChange(p); expanded = false },
+                    )
+                }
+                if (showAdd) {
+                    DropdownMenuItem(
+                        text = { Text("Add \"$query\"", color = DreamlandGold, fontWeight = FontWeight.SemiBold) },
+                        onClick = { onAdd(query); expanded = false },
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

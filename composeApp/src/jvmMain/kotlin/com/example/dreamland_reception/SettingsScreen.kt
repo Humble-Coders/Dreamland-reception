@@ -198,9 +198,27 @@ fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsVi
                             Text("GRC FORM TEMPLATE", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
                             Text(
                                 "HTML printed as the Guest Registration Card at check-in. Use placeholders like " +
-                                    "{{guestName}}, {{idNumber}}, {{roomNumber}}, {{checkIn}}, {{checkOut}}, {{hotelName}} and {{idImages}}.",
+                                    "{{guestName}}, {{idNumber}}, {{roomNumber}}, {{roomCategory}}, {{checkIn}}, {{checkOut}}, " +
+                                    "{{hotelName}}, {{logoImg}} and {{idImages}}.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = DreamlandMuted,
+                            )
+                            OutlinedTextField(
+                                value = state.grcLogoDraft,
+                                onValueChange = vm::onGrcLogoChanged,
+                                label = { Text("Logo URL (shown in GRC header)") },
+                                placeholder = { Text("https://…/logo.png") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = DreamlandOnDark,
+                                    unfocusedTextColor = DreamlandOnDark,
+                                    focusedBorderColor = DreamlandGold,
+                                    unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                                    focusedLabelColor = DreamlandGold,
+                                    unfocusedLabelColor = DreamlandMuted,
+                                    cursorColor = DreamlandOnDark,
+                                ),
                             )
                             OutlinedTextField(
                                 value = state.grcTemplateDraft,

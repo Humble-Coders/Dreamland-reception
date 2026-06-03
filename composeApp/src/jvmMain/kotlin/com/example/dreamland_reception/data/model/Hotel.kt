@@ -14,6 +14,7 @@ data class Hotel(
     val city: String = "",
     val country: String = "",
     val contactPhone: String = "",
+    val contactEmail: String = "",
     val currency: String = "INR",
     val contactInfo: String = "",
     val isActive: Boolean = true,
@@ -40,4 +41,6 @@ data class Hotel(
     // ── GRC (Guest Registration Card) ─────────────────────────────────────────
     // Editable HTML template printed at check-in. Blank → built-in default is used.
     val grcTemplateHtml: String = "",
+    // Logo image URL shown in the GRC header (embedded as base64 at print time).
+    val grcLogoUrl: String = "",
 )

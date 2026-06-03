@@ -93,7 +93,9 @@ data class GuestEntry(
     val phone: String = "",
     val idProofVerified: Boolean = false,
     val gender: String = "",
+    val idType: String = "",        // e.g. Aadhaar | PAN | Passport | Driving Licence | Voter ID
     val govIdNumber: String = "",
+    val purpose: String = "",       // purpose of visit (from purposeType, free-text allowed)
     val address: String = "",
     val dob: String = "",
     val age: Int? = null,
@@ -204,6 +206,7 @@ data class WalkInState(
     val cachedActiveStays: List<com.example.dreamland_reception.data.model.Stay> = emptyList(),
     val scannerMessage: String? = null,
     val grc: GrcStepState = GrcStepState(),
+    val purposeOptions: List<String> = emptyList(),   // from purposeType collection
 )
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
@@ -372,6 +375,7 @@ class StaysViewModel(
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
     private val userRepo: com.example.dreamland_reception.data.repository.UserRepository = com.example.dreamland_reception.data.repository.FirestoreUserRepository,
     private val scannerRepo: ScannerRepository = FirestoreScannerRepository,
+    private val purposeRepo: com.example.dreamland_reception.data.repository.PurposeTypeRepository = com.example.dreamland_reception.data.repository.FirestorePurposeTypeRepository,
 ) : ViewModel() {
 
     private val _listState = MutableStateFlow(StaysListState(isLoading = true))
@@ -836,7 +840,34 @@ class StaysViewModel(
     }
 
     fun onGuestGender(index: Int, v: String) = updateGuestEntry(index) { it.copy(gender = v) }
+    fun onGuestIdType(index: Int, v: String) = updateGuestEntry(index) { it.copy(idType = v) }
     fun onGuestGovIdNumber(index: Int, v: String) = updateGuestEntry(index) { it.copy(govIdNumber = v) }
+    fun onGuestPurpose(index: Int, v: String) = updateGuestEntry(index) { it.copy(purpose = v) }
+
+    /** Loads the purpose-of-visit options from `purposeType` (call when the Guest Info step opens). */
+    fun loadPurposeTypes() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = runCatching { purposeRepo.getByHotel(AppContext.hotelId).map { it.name } }
+                .getOrElse { return@launch }
+            _walkInState.update { it.copy(purposeOptions = names) }
+        }
+    }
+
+    /** Adds a new purpose to `purposeType`, then sets it on the given guest. */
+    fun addPurposeType(index: Int, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return
+        onGuestPurpose(index, trimmed)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { purposeRepo.add(AppContext.hotelId, trimmed) }
+                .onSuccess {
+                    _walkInState.update { ws ->
+                        if (ws.purposeOptions.any { it.equals(trimmed, true) }) ws
+                        else ws.copy(purposeOptions = (ws.purposeOptions + trimmed).sortedBy { it.lowercase() })
+                    }
+                }
+        }
+    }
     fun onGuestAddress(index: Int, v: String) = updateGuestEntry(index) { it.copy(address = v) }
     fun onGuestAge(index: Int, v: String) = updateGuestEntry(index) { it.copy(age = v.filter(Char::isDigit).toIntOrNull()) }
     fun onGuestDob(index: Int, v: String) {
@@ -923,7 +954,7 @@ class StaysViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
-                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcData(ws, entry, hotel))
+                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcData(ws, index, entry, hotel))
                 if (printer == GRC_SAVE_AS_PDF) {
                     val safe = entry.name.ifBlank { "guest" }.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').ifBlank { "guest" }
                     val file = java.io.File(System.getProperty("java.io.tmpdir"), "GRC-$safe-${System.currentTimeMillis()}.pdf")
@@ -945,14 +976,23 @@ class StaysViewModel(
 
     private fun buildGrcData(
         ws: WalkInState,
+        guestIndex: Int,
         entry: GuestEntry,
         hotel: com.example.dreamland_reception.data.model.Hotel?,
     ): GrcData {
-        val fmt = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
-        val rooms = ws.selectedInstanceIds.mapNotNull { ws.selectedInstanceDetails[it]?.roomNumber }
-            .filter { it.isNotBlank() }
-        val categories = ws.selectedInstanceIds.mapNotNull { ws.selectedInstanceDetails[it]?.categoryName }
-            .filter { it.isNotBlank() }.distinct()
+        val dateFmt = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
+        val dateTimeFmt = java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.getDefault())
+
+        // Rooms this guest is actually assigned to (fall back to all selected rooms if unassigned).
+        val assignedIds = ws.roomGuestAssignment.filterValues { guestIndex in it.guestIndices }.keys
+        val instanceIds = assignedIds.ifEmpty { ws.selectedInstanceIds }
+        val rooms = instanceIds.mapNotNull { ws.selectedInstanceDetails[it]?.roomNumber?.takeIf { n -> n.isNotBlank() } }
+        val categories = instanceIds.mapNotNull { id ->
+            val inst = ws.selectedInstanceDetails[id]
+            inst?.categoryName?.takeIf { it.isNotBlank() }
+                ?: inst?.categoryId?.let { cid -> ws.categories.find { it.id == cid }?.type?.takeIf { t -> t.isNotBlank() } }
+                ?: ws.selectedCategoryName.takeIf { it.isNotBlank() }
+        }.distinct()
         val nights = ws.expectedCheckOut?.let { co ->
             java.util.concurrent.TimeUnit.MILLISECONDS.toDays(co.time - ws.checkInTime.time).coerceAtLeast(1)
         }
@@ -961,25 +1001,30 @@ class StaysViewModel(
             hotel?.city?.takeIf { it.isNotBlank() },
         ).joinToString(", ")
         return GrcData(
+            logoUrl = hotel?.grcLogoUrl?.takeIf { it.isNotBlank() } ?: GrcRenderer.DEFAULT_LOGO_URL,
             hotelName = hotel?.name?.takeIf { it.isNotBlank() } ?: AppContext.hotelName,
             hotelAddress = hotelAddress,
-            hotelContact = hotel?.contactPhone ?: "",
+            hotelPhone = hotel?.contactPhone ?: "",
+            hotelEmail = hotel?.contactEmail ?: "",
             folioNo = (rooms.firstOrNull()?.let { "$it-" } ?: "") +
                 java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(Date()),
-            date = fmt.format(Date()),
+            date = dateFmt.format(Date()),
             guestName = entry.name.trim(),
             guestPhone = entry.phone.trim(),
             gender = entry.gender,
             dob = entry.dob,
+            idType = entry.idType,
             idNumber = entry.govIdNumber,
+            purpose = entry.purpose,
+            // Nationality is evidenced by the attached government ID (domestic guests).
+            nationality = "As per Government ID (attached below)",
             address = entry.address,
             roomNumber = rooms.joinToString(", "),
-            roomCategory = categories.joinToString(", "),
-            checkIn = fmt.format(ws.checkInTime),
-            checkOut = ws.expectedCheckOut?.let { fmt.format(it) } ?: "",
+            roomCategory = categories.joinToString(", ").ifBlank { ws.selectedCategoryName },
+            // Actual system time of registration (matches the trueCheckIn stored at submit).
+            checkIn = dateTimeFmt.format(Date()),
+            checkOut = ws.expectedCheckOut?.let { dateFmt.format(it) } ?: "",
             nights = nights?.toString() ?: "",
-            adults = ws.adults.toString(),
-            children = ws.children.toString(),
             advance = ws.advancePayment.ifBlank { "0" },
             idImageUrls = listOfNotNull(
                 entry.govIdPicture1.takeIf { it.isNotBlank() },
@@ -1516,6 +1561,8 @@ class StaysViewModel(
                 val advancePerRoom = if (roomCount > 0) advance / roomCount else 0.0
                 // Shared ID linking all rooms in a multi-room walk-in; empty for single-room stays
                 val walkInGroupId = if (roomCount > 1) UUID.randomUUID().toString() else ""
+                // Actual system time of check-in (single value shared across all rooms in this submit).
+                val trueCheckInNow = Date()
 
                 // ── Resolve guest user accounts (users collection) ────────────────
                 // One user doc per phone (deduped). Existing docs (matched on the normalized
@@ -1619,10 +1666,14 @@ class StaysViewModel(
                         roomCategoryId = catId,
                         roomCategoryName = catName,
                         checkInActual = now,
+                        trueCheckIn = trueCheckInNow,
                         expectedCheckOut = checkOutNormalized,
                         status = "ACTIVE",
-                        adults = ws.adults,
-                        children = ws.children,
+                        // Actual occupancy of THIS room: adults = guests assigned to it (not the
+                        // group total). Children have no per-room assignment, so attribute the
+                        // group's children to the primary room to avoid duplicating them everywhere.
+                        adults = guestRecords.size,
+                        children = if (roomIndex == 0) ws.children else 0,
                         breakfast = ws.breakfast,
                         earlyCheckIn = isEarlyCheckIn && roomIndex == 0,
                         earlyCheckInCharge = earlyCharge,

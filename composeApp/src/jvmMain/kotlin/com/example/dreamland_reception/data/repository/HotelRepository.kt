@@ -9,8 +9,8 @@ interface HotelRepository {
     suspend fun getAll(): List<Hotel>
     suspend fun getById(id: String): Hotel?
     suspend fun update(hotel: Hotel)
-    /** Field-level update of just the GRC template — avoids the full-document overwrite in [update]. */
-    suspend fun updateGrcTemplate(hotelId: String, html: String)
+    /** Field-level update of the GRC template + logo — avoids the full-document overwrite in [update]. */
+    suspend fun updateGrcConfig(hotelId: String, html: String, logoUrl: String)
 }
 
 object FirestoreHotelRepository : HotelRepository {
@@ -31,8 +31,8 @@ object FirestoreHotelRepository : HotelRepository {
         col.document(hotel.id).set(hotel.toMap()).get(); Unit
     }
 
-    override suspend fun updateGrcTemplate(hotelId: String, html: String) = withContext(Dispatchers.IO) {
-        col.document(hotelId).update("grcTemplateHtml", html).get(); Unit
+    override suspend fun updateGrcConfig(hotelId: String, html: String, logoUrl: String) = withContext(Dispatchers.IO) {
+        col.document(hotelId).update(mapOf("grcTemplateHtml" to html, "grcLogoUrl" to logoUrl)).get(); Unit
     }
 
     private fun com.google.cloud.firestore.DocumentSnapshot.toHotel() = runCatching {
@@ -44,6 +44,7 @@ object FirestoreHotelRepository : HotelRepository {
             city = getString("city") ?: "",
             country = getString("country") ?: "",
             contactPhone = getString("contactPhone") ?: "",
+            contactEmail = getString("contactEmail") ?: "",
             currency = getString("currency") ?: "INR",
             contactInfo = getString("contactInfo") ?: "",
             isActive = getString("status") == "active",
@@ -64,6 +65,7 @@ object FirestoreHotelRepository : HotelRepository {
             lateCheckOutAllowed = getBoolean("lateCheckOutAllowed") ?: false,
             lateCheckOutPrice = getDouble("lateCheckOutPrice") ?: 200.0,
             grcTemplateHtml = getString("grcTemplateHtml") ?: "",
+            grcLogoUrl = getString("grcLogoUrl") ?: "",
         )
     }.getOrNull()
 
@@ -73,6 +75,7 @@ object FirestoreHotelRepository : HotelRepository {
         "city" to city,
         "country" to country,
         "contactPhone" to contactPhone,
+        "contactEmail" to contactEmail,
         "currency" to currency,
         "contactInfo" to contactInfo,
         "status" to if (isActive) "active" else "inactive",
@@ -90,5 +93,6 @@ object FirestoreHotelRepository : HotelRepository {
         "lateCheckOutAllowed" to lateCheckOutAllowed,
         "lateCheckOutPrice" to lateCheckOutPrice,
         "grcTemplateHtml" to grcTemplateHtml,
+        "grcLogoUrl" to grcLogoUrl,
     )
 }

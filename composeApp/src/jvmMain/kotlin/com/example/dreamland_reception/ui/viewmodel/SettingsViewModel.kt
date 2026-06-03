@@ -87,6 +87,7 @@ data class SettingsUiState(
 
     // GRC (Guest Registration Card) template editor
     val grcTemplateDraft: String = "",
+    val grcLogoDraft: String = "",
     val grcSaving: Boolean = false,
     val grcSaved: Boolean = false,
 )
@@ -142,6 +143,7 @@ class SettingsViewModel(
                     foodItems = food,
                     complaintTypes = complaints,
                     grcTemplateDraft = hotel?.grcTemplateHtml ?: "",
+                    grcLogoDraft = hotel?.grcLogoUrl ?: "",
                     grcSaved = false,
                     isLoadingData = false,
                 )
@@ -172,6 +174,8 @@ class SettingsViewModel(
 
     fun onGrcTemplateChanged(v: String) = _state.update { it.copy(grcTemplateDraft = v, grcSaved = false) }
 
+    fun onGrcLogoChanged(v: String) = _state.update { it.copy(grcLogoDraft = v, grcSaved = false) }
+
     fun resetGrcTemplateToDefault() = _state.update {
         it.copy(grcTemplateDraft = com.example.dreamland_reception.grc.GrcRenderer.DEFAULT_TEMPLATE, grcSaved = false)
     }
@@ -180,11 +184,15 @@ class SettingsViewModel(
         val hotelId = _state.value.selectedHotelId
         if (hotelId.isBlank()) return
         val html = _state.value.grcTemplateDraft
+        val logo = _state.value.grcLogoDraft.trim()
         _state.update { it.copy(grcSaving = true, grcSaved = false) }
         launchWithGlobalLoading {
-            runCatching { hotelRepo.updateGrcTemplate(hotelId, html) }
+            runCatching { hotelRepo.updateGrcConfig(hotelId, html, logo) }
                 .onSuccess {
-                    _state.update { s -> s.copy(grcSaving = false, grcSaved = true, selectedHotel = s.selectedHotel?.copy(grcTemplateHtml = html)) }
+                    _state.update { s -> s.copy(
+                        grcSaving = false, grcSaved = true,
+                        selectedHotel = s.selectedHotel?.copy(grcTemplateHtml = html, grcLogoUrl = logo),
+                    ) }
                 }
                 .onFailure { e -> _state.update { it.copy(grcSaving = false, error = e.message) } }
         }
