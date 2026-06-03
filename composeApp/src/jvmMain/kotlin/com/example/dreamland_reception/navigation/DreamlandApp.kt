@@ -237,10 +237,14 @@ fun DreamlandApp() {
                                 DreamlandAppInitializer.getStaysViewModel().openWalkIn()
                                 selectedTab = MainTab.Stays
                             },
-                            onNavigateToBookings = { selectedTab = MainTab.RoomsAndBookings },
+                            onAddBooking = { DreamlandAppInitializer.getStaysViewModel().openWalkInAsBooking() },
                             onNavigateToOrders = { selectedTab = MainTab.Orders },
                             onNavigateToComplaints = { selectedTab = MainTab.Complaints },
                             onNavigateToStaff = { selectedTab = MainTab.Staff },
+                            onRoomClick = { roomId ->
+                                DreamlandAppInitializer.getRoomsAndBookingsViewModel().selectRoom(roomId)
+                                selectedTab = MainTab.RoomsAndBookings
+                            },
                         )
                         MainTab.RoomsAndBookings -> RoomsAndBookingsScreen(
                             onCheckIn = { booking -> staysVm.prefillFromBooking(booking) },

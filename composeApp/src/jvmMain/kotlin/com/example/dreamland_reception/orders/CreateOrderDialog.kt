@@ -3,7 +3,6 @@ package com.example.dreamland_reception.orders
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,9 +38,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -58,10 +59,9 @@ import com.example.dreamland_reception.DreamlandOnDark
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.settings.AddFoodDialogUI
 import com.example.dreamland_reception.settings.AddServiceDialogUI
-import com.example.dreamland_reception.stays.AutocompleteItemField
 import com.example.dreamland_reception.stays.DreamlandTextField
-import com.example.dreamland_reception.stays.FlowRow
 import com.example.dreamland_reception.stays.SectionLabel
+import com.example.dreamland_reception.ui.viewmodel.CatalogItem
 import com.example.dreamland_reception.ui.viewmodel.CreateOrderDialogState
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
 import com.example.dreamland_reception.ui.viewmodel.SettingsViewModel
@@ -178,66 +178,16 @@ fun CreateOrderDialog(
                                     }
                                 }
                             }
-                            // Per-item category pills (single scrollable line)
-                            if (state.categories.isNotEmpty()) {
-                                Spacer(Modifier.height(6.dp))
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                ) {
-                                    state.categories.forEach { cat ->
-                                        val isSelected = item.category == cat
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .border(
-                                                    1.dp,
-                                                    if (isSelected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f),
-                                                    RoundedCornerShape(8.dp),
-                                                )
-                                                .background(if (isSelected) DreamlandGold.copy(alpha = 0.15f) else DreamlandForestSurface)
-                                                .clickable { vm.onCreateOrderItemCategory(index, cat) }
-                                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                                        ) {
-                                            Text(
-                                                cat,
-                                                color = if (isSelected) DreamlandGold else DreamlandMuted,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
                             Spacer(Modifier.height(6.dp))
 
-                            val isServiceCategory = item.category == "Services"
-                            AutocompleteItemField(
+                            // Combined food + service combobox — opens on focus, filters as you type.
+                            OrderItemNameField(
                                 value = item.name,
-                                suggestions = item.suggestions,
-                                showSuggestions = item.showSuggestions,
+                                catalog = state.catalogItems,
                                 onValueChange = { vm.onCreateOrderItemName(index, it) },
-                                onSuggestionSelected = { vm.selectCreateOrderItemSuggestion(index, it) },
-                                onDismiss = { vm.dismissCreateOrderItemSuggestions(index) },
+                                onSelect = { vm.selectCreateOrderItemSuggestion(index, it) },
+                                onAddNew = { typedName -> settingsVm.openAddFood(typedName) },
                                 modifier = Modifier.fillMaxWidth(),
-                                onAddNew = { typedName ->
-                                    if (isServiceCategory) {
-                                        settingsVm.openAddService(typedName)
-                                    } else {
-                                        settingsVm.openAddFood(typedName)
-                                    }
-                                },
-                                addNewLabel = if (isServiceCategory) "Add as new service" else "Add as new food item",
-                                allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
-                                onToggleItemAvailability = { catalogItem ->
-                                    if (catalogItem.category == "Services") {
-                                        settingsVm.toggleService(catalogItem.id, true)
-                                    } else {
-                                        settingsVm.toggleFoodItem(catalogItem.id, true)
-                                    }
-                                    vm.refreshCreateOrderCatalog()
-                                },
                             )
 
                             Spacer(Modifier.height(8.dp))
@@ -356,8 +306,12 @@ private fun StayAutocompleteField(
     onSelect: (String) -> Unit,
 ) {
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     var fieldWidthDp by remember { mutableStateOf(0.dp) }
-    val showDropdown = query.isNotBlank() && suggestions.isNotEmpty() && !isSelected
+    var focused by remember { mutableStateOf(false) }
+    // Open as soon as the field is focused (even when empty), filter as the user types,
+    // and close when focus leaves.
+    val showDropdown = focused && suggestions.isNotEmpty()
 
     Box {
         OutlinedTextField(
@@ -365,9 +319,9 @@ private fun StayAutocompleteField(
             onValueChange = onQueryChange,
             label = { Text("Search by room or guest name…", color = DreamlandMuted, fontSize = 13.sp) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().onSizeChanged {
-                fieldWidthDp = with(density) { it.width.toDp() }
-            },
+            modifier = Modifier.fillMaxWidth()
+                .onSizeChanged { fieldWidthDp = with(density) { it.width.toDp() } }
+                .onFocusChanged { focused = it.isFocused },
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = DreamlandOnDark,
                 unfocusedTextColor = DreamlandOnDark,
@@ -410,12 +364,93 @@ private fun StayAutocompleteField(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     },
-                    onClick = { onSelect(id) },
+                    onClick = { onSelect(id); focusManager.clearFocus() },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 if (i < suggestions.lastIndex) {
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
                 }
+            }
+        }
+    }
+}
+
+// ── Item name combobox (combined food + services) ─────────────────────────────
+
+@Composable
+private fun OrderItemNameField(
+    value: String,
+    catalog: List<CatalogItem>,
+    onValueChange: (String) -> Unit,
+    onSelect: (CatalogItem) -> Unit,
+    onAddNew: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
+    var fieldWidthDp by remember { mutableStateOf(0.dp) }
+    var focused by remember { mutableStateOf(false) }
+
+    val trimmed = value.trim()
+    // Combined catalog (food + services), available only, filtered by the typed name (all when blank).
+    val matches = catalog.filter {
+        it.isAvailable && (trimmed.isBlank() || it.name.contains(trimmed, ignoreCase = true))
+    }
+    val showAddNew = trimmed.isNotBlank() && catalog.none { it.name.equals(trimmed, ignoreCase = true) }
+    val showDropdown = focused && (matches.isNotEmpty() || showAddNew)
+
+    Box(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text("Item Name *", color = DreamlandMuted, fontSize = 13.sp) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+                .onSizeChanged { fieldWidthDp = with(density) { it.width.toDp() } }
+                .onFocusChanged { focused = it.isFocused },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = DreamlandOnDark,
+                unfocusedTextColor = DreamlandOnDark,
+                focusedBorderColor = DreamlandGold,
+                unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                cursorColor = DreamlandGold,
+            ),
+        )
+        DropdownMenu(
+            expanded = showDropdown,
+            onDismissRequest = { /* closes on focus loss */ },
+            properties = PopupProperties(focusable = false),
+            modifier = Modifier
+                .width(fieldWidthDp)
+                .heightIn(max = 260.dp)
+                .background(DreamlandForestElevated),
+        ) {
+            matches.forEachIndexed { i, item ->
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(item.name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
+                            if (item.category.isNotBlank()) {
+                                Text(item.category, color = DreamlandMuted, fontSize = 10.sp)
+                            }
+                        }
+                    },
+                    onClick = { onSelect(item); focusManager.clearFocus() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (i < matches.lastIndex) HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
+            }
+            if (showAddNew) {
+                if (matches.isNotEmpty()) HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
+                DropdownMenuItem(
+                    text = { Text("Add \"$trimmed\" as new item", color = DreamlandGold, fontWeight = FontWeight.SemiBold) },
+                    onClick = { onAddNew(trimmed); focusManager.clearFocus() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }

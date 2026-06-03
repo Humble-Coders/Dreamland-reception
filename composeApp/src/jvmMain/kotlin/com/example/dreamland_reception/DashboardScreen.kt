@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,9 +26,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachMoney
 import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Feedback
@@ -104,10 +103,11 @@ import java.util.Locale
 fun DashboardScreen(
     vm: DashboardViewModel = DreamlandAppInitializer.getDashboardViewModel(),
     onNewWalkIn: () -> Unit = {},
-    onNavigateToBookings: () -> Unit = {},
+    onAddBooking: () -> Unit = {},
     onNavigateToOrders: () -> Unit = {},
     onNavigateToComplaints: () -> Unit = {},
     onNavigateToStaff: () -> Unit = {},
+    onRoomClick: (String) -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     var showDatePicker by remember { mutableStateOf(false) }
@@ -118,7 +118,7 @@ fun DashboardScreen(
             state = state,
             onDateChipClick = { showDatePicker = true },
             onNewWalkIn = onNewWalkIn,
-            onNavigateToBookings = onNavigateToBookings,
+            onAddBooking = onAddBooking,
         )
 
         // Error banner
@@ -158,6 +158,7 @@ fun DashboardScreen(
                         stays = state.rawActiveStays,
                         onSetCleaning = vm::setRoomCleaning,
                         onSetAvailable = vm::setRoomAvailable,
+                        onRoomClick = onRoomClick,
                     )
                     TodayBookingsCard(bookings = state.todayBookings)
                     AlertsSection(
@@ -218,7 +219,7 @@ private fun DashboardHeader(
     state: DashboardState,
     onDateChipClick: () -> Unit,
     onNewWalkIn: () -> Unit,
-    onNavigateToBookings: () -> Unit,
+    onAddBooking: () -> Unit,
 ) {
     val dateFmt = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
     Surface(
@@ -291,16 +292,14 @@ private fun DashboardHeader(
                     Text("Walk-in", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 }
 
-                // Bookings button
+                // Add Booking button — same action as on the Rooms & Bookings screen.
                 OutlinedButton(
-                    onClick = onNavigateToBookings,
+                    onClick = onAddBooking,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold),
                     shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGoldDeep),
                     modifier = Modifier.height(36.dp),
                 ) {
-                    Icon(Icons.Filled.Hotel, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Bookings", color = DreamlandGold, fontSize = 13.sp)
+                    Text("+ Add Booking", color = DreamlandGold, style = MaterialTheme.typography.labelLarge)
                 }
             }
         }
@@ -329,10 +328,10 @@ private fun LiveDot() {
 // ── Room grid ─────────────────────────────────────────────────────────────────
 
 private fun roomStatusColor(status: String, isOccupied: Boolean): Color = when {
-    isOccupied -> Color(0xFFFF9800)
-    status == "CLEANING" -> Color(0xFF2196F3)
-    status == "MAINTENANCE" -> Color(0xFFEF5350)
-    else -> Color(0xFF4CAF50)
+    isOccupied -> Color(0xFFEF5350)            // occupied — red
+    status == "CLEANING" -> Color(0xFF2196F3)  // cleaning — blue
+    status == "MAINTENANCE" -> Color(0xFFF39C12) // maintenance — amber (kept distinct from occupied red)
+    else -> Color(0xFF4CAF50)                  // available — green
 }
 
 @Composable
@@ -341,29 +340,39 @@ private fun RoomGridSection(
     stays: List<Stay>,
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onRoomClick: (String) -> Unit,
 ) {
     if (rooms.isEmpty()) return
-    val activeRoomIds = stays.map { it.roomInstanceId }.toSet()
-    val sorted = rooms.sortedBy { r ->
-        when {
-            r.id in activeRoomIds -> 0
-            r.status == "CLEANING" -> 1
-            r.status == "AVAILABLE" -> 2
-            else -> 3
-        }
+    // Always ascending by room number (numeric-aware: 2 < 10 < 101), falling back to text.
+    val sorted = remember(rooms) {
+        rooms.sortedWith(compareBy({ it.roomNumber.trim().toIntOrNull() ?: Int.MAX_VALUE }, { it.roomNumber }))
     }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("ROOMS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 220.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.height(((sorted.size / 3 + 1) * 210).dp.coerceAtLeast(210.dp)),
-        ) {
-            items(sorted) { room ->
-                val stay = stays.find { it.roomInstanceId == room.id }
-                val isOccupied = stay != null
-                RoomCard(room, stay, isOccupied, onSetCleaning, onSetAvailable)
+        // Manual responsive grid (the parent is a verticalScroll Column, so a LazyVerticalGrid
+        // would need a fragile fixed height). Equal-width tiles via weight + fixed height.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val gap = 18.dp
+            val cols = ((maxWidth.value + gap.value) / (240f + gap.value)).toInt().coerceIn(1, 5)
+            Column(verticalArrangement = Arrangement.spacedBy(gap)) {
+                sorted.chunked(cols).forEach { rowRooms ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        rowRooms.forEach { room ->
+                            val stay = stays.find { it.roomInstanceId == room.id }
+                            RoomCard(
+                                room = room,
+                                stay = stay,
+                                isOccupied = stay != null,
+                                onSetCleaning = onSetCleaning,
+                                onSetAvailable = onSetAvailable,
+                                onClick = { onRoomClick(room.id) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        // Keep tile widths equal when the last row isn't full.
+                        repeat(cols - rowRooms.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
             }
         }
     }
@@ -376,64 +385,106 @@ private fun RoomCard(
     isOccupied: Boolean,
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val statusColor = roomStatusColor(room.status, isOccupied)
     val dateFmt = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = statusColor.copy(alpha = 0.08f)),
-        modifier = Modifier.fillMaxWidth().border(1.dp, statusColor.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+    val statusLabel = when {
+        isOccupied -> "OCCUPIED"
+        room.status == "CLEANING" -> "CLEANING"
+        room.status == "MAINTENANCE" -> "MAINTENANCE"
+        else -> "AVAILABLE"
+    }
+    // Room type from whatever's available: the instance's category, else the active stay's category.
+    val roomType = room.categoryName.ifBlank { stay?.roomCategoryName.orEmpty() }
+    Column(
+        modifier = modifier
+            .height(156.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(DreamlandForestElevated)
+            .border(1.dp, statusColor.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            // Header: room number + status badge
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column {
-                    Text("Room ${room.roomNumber}", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge)
-                    if (room.categoryName.isNotBlank()) Text(room.categoryName, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                }
-                Box(
-                    Modifier.clip(RoundedCornerShape(4.dp)).background(statusColor.copy(alpha = 0.2f)).padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    val label = when {
-                        isOccupied -> "OCCUPIED"
-                        room.status == "CLEANING" -> "CLEANING"
-                        room.status == "MAINTENANCE" -> "MAINTENANCE"
-                        else -> "AVAILABLE"
-                    }
-                    Text(label, color = statusColor, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        // Header: room number + type chip + status pill
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f)) {
+                Text("Room ${room.roomNumber}", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (roomType.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    RoomTypeChip(roomType)
                 }
             }
-            // Stay details
-            if (stay != null) {
-                Text(stay.guestName, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (stay.guestPhone.isNotBlank()) Text("+91 ${stay.guestPhone}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                Text("Check-out: ${dateFmt.format(stay.expectedCheckOut)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            Spacer(Modifier.width(8.dp))
+            RoomStatusPill(statusLabel, statusColor)
+        }
+
+        Spacer(Modifier.height(10.dp))
+
+        when {
+            // Occupied — guest summary. No housekeeping toggle: an occupied room can't be set to cleaning here.
+            isOccupied && stay != null -> {
+                Text(stay.guestName.ifBlank { "Guest" }, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (stay.guestPhone.isNotBlank()) {
+                    Text("+91 ${stay.guestPhone}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                }
+                Spacer(Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Icon(Icons.Filled.Schedule, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(13.dp))
+                    Text("Check-out · ${dateFmt.format(stay.expectedCheckOut)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            // Cleaning / Available toggle
-            if (room.status != "MAINTENANCE") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val cleaningSelected = room.status == "CLEANING" || room.needsCleaning
-                    val availableSelected = room.status == "AVAILABLE" && !room.needsCleaning
-                    listOf("CLEANING" to cleaningSelected, "AVAILABLE" to availableSelected).forEach { (label, selected) ->
-                        Box(
-                            Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (selected) statusColor.copy(alpha = 0.25f) else Color.Transparent)
-                                .border(1.dp, if (selected) statusColor else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                                .clickable {
-                                    if (label == "CLEANING") onSetCleaning(room.id)
-                                    else onSetAvailable(room.id)
-                                }
-                                .padding(horizontal = 6.dp, vertical = 5.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(label, color = if (selected) statusColor else DreamlandMuted, fontSize = 10.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
-                        }
-                    }
+            room.status == "MAINTENANCE" -> {
+                Spacer(Modifier.weight(1f))
+                Text("Under maintenance", color = statusColor, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+            }
+            // Vacant — housekeeping toggle.
+            else -> {
+                Spacer(Modifier.weight(1f))
+                val cleaningSelected = room.status == "CLEANING" || room.needsCleaning
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RoomToggleChip("Available", !cleaningSelected, Color(0xFF4CAF50), Modifier.weight(1f)) { onSetAvailable(room.id) }
+                    RoomToggleChip("Cleaning", cleaningSelected, Color(0xFF2196F3), Modifier.weight(1f)) { onSetCleaning(room.id) }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RoomTypeChip(type: String) {
+    Box(
+        Modifier.clip(RoundedCornerShape(6.dp)).background(DreamlandGold.copy(alpha = 0.12f)).padding(horizontal = 7.dp, vertical = 2.dp),
+    ) {
+        Text(type, color = DreamlandGold, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun RoomStatusPill(label: String, color: Color) {
+    Row(
+        modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(color.copy(alpha = 0.15f)).padding(horizontal = 9.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+        Text(label, color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+    }
+}
+
+@Composable
+private fun RoomToggleChip(label: String, selected: Boolean, accent: Color, modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier = modifier
+            .height(30.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) accent.copy(alpha = 0.18f) else Color.Transparent)
+            .border(1.dp, if (selected) accent else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (selected) accent else DreamlandMuted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
     }
 }
 

@@ -249,6 +249,7 @@ private fun OrderListItem(order: Order, isSelected: Boolean, onClick: () -> Unit
 @Composable
 private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
     var showConfirm by remember(order.id) { mutableStateOf(false) }
+    var showDeleteConfirm by remember(order.id) { mutableStateOf(false) }
     val accentColor = when (order.status) { "NEW" -> Color(0xFFFFC107); "ASSIGNED" -> Color(0xFF4CAF50); else -> DreamlandMuted }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(28.dp)) {
@@ -373,6 +374,17 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
                 }
             }
         }
+
+        // Delete — available for any status; removes the order document permanently.
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth().height(42.dp),
+            border = BorderStroke(1.dp, Color(0xFFEF5350).copy(alpha = 0.6f)),
+            shape = RoundedCornerShape(10.dp),
+        ) {
+            Text("Delete Order", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold)
+        }
     }
 
     if (showConfirm) {
@@ -392,6 +404,27 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
                 }
             },
             dismissButton = { TextButton(onClick = { showConfirm = false }) { Text("Cancel", color = DreamlandMuted) } },
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            containerColor = DreamlandForestElevated,
+            title = { Text("Delete Order?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("This permanently deletes the order. This action cannot be undone.", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    Text("Room ${order.roomNumber}  ·  ${order.guestName}", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    order.items.forEach { item -> Text("• ${item.name} ×${item.quantity}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showDeleteConfirm = false; vm.deleteOrder(order.id) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)), shape = RoundedCornerShape(8.dp)) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = DreamlandMuted) } },
         )
     }
 }

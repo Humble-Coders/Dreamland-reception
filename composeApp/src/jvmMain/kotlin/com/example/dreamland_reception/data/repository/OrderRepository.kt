@@ -19,6 +19,7 @@ interface OrderRepository {
     suspend fun add(order: Order): String
     suspend fun updateStatus(id: String, status: String)
     suspend fun updateAssignment(id: String, staffId: String, staffName: String)
+    suspend fun delete(id: String)
     fun listenByHotel(hotelId: String): Flow<List<Order>>
     fun listenByStay(stayId: String): Flow<List<Order>>
 }
@@ -74,6 +75,10 @@ object FirestoreOrderRepository : OrderRepository {
                 "status" to "ASSIGNED",
             )).get(); Unit
         }
+
+    override suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+        col.document(id).delete().get(); Unit
+    }
 
     override fun listenByHotel(hotelId: String): Flow<List<Order>> = callbackFlow {
         val registration = col.whereEqualTo("hotelId", hotelId)

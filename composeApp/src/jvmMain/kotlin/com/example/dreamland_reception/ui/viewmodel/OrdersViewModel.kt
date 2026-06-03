@@ -203,6 +203,15 @@ class OrdersViewModel(
         }
     }
 
+    /** Permanently deletes the order document. Clears the selection on success; the live listener refreshes the list. */
+    fun deleteOrder(orderId: String) {
+        launchWithGlobalLoading {
+            runCatching { orderRepo.delete(orderId) }
+                .onSuccess { _screenState.update { it.copy(selectedOrderId = null, error = null) } }
+                .onFailure { e -> _screenState.update { it.copy(error = e.message ?: "Failed to delete order") } }
+        }
+    }
+
     // ── Create Order dialog ───────────────────────────────────────────────────
 
     fun openCreateOrder() {
@@ -319,6 +328,7 @@ class OrdersViewModel(
             it[index] = it[index].copy(
                 itemId = suggestion.id,
                 taxPercentage = suggestion.taxPercentage,
+                category = suggestion.category,
                 name = suggestion.name,
                 price = if (suggestion.price > 0) suggestion.price.toLong().toString() else "",
                 suggestions = emptyList(),
