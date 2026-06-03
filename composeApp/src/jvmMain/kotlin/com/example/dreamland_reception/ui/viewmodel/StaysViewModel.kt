@@ -589,11 +589,16 @@ class StaysViewModel(
                     unitPrice = stay.lateCheckOutCharge, total = stay.lateCheckOutCharge,
                 ))
                 for (order in orders) {
-                    if (order.totalAmount > 0) add(com.example.dreamland_reception.data.model.BillItem(
-                        name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
-                        type = "ORDER", quantity = 1, unitPrice = order.totalAmount,
-                        total = order.totalAmount, refId = order.id,
-                    ))
+                    if (order.totalAmount > 0) {
+                        val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
+                        val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
+                            order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
+                        add(com.example.dreamland_reception.data.model.BillItem(
+                            name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
+                            type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
+                            taxPercentage = effectiveTaxPct, refId = order.id,
+                        ))
+                    }
                 }
             }
             val subtotal = items.sumOf { it.total }
@@ -1932,9 +1937,11 @@ class StaysViewModel(
         val stay = _listState.value.stays.find { it.id == stayId } ?: return
         launchWithGlobalLoading {
             val hotelId = AppContext.hotelId
-            val orders = runCatching { orderRepo.getByStay(stayId) }.getOrElse { emptyList() }
-            val ordersTotal = orders.sumOf { it.totalAmount }
-            val pendingOrders = orders.filter { it.status != "COMPLETED" }
+            val primaryOrders = runCatching { orderRepo.getByStay(stayId) }.getOrElse { emptyList() }
+            // Will be expanded below to include all group stays' orders once groupStays is resolved
+            var orders = primaryOrders
+            var ordersTotal = orders.sumOf { it.totalAmount }
+            var pendingOrders = orders.filter { it.status != "COMPLETED" }
             val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
 
             // Room price from rooms collection (source of truth)
@@ -2050,6 +2057,17 @@ class StaysViewModel(
                     }
                     groupBills = bills
                 }
+            }
+
+            // Fetch orders for ALL group stays so pending orders covers every checked-out room
+            if (groupStays.size > 1) {
+                val allGroupOrders = groupStays.flatMap { gs ->
+                    if (gs.id == stayId) primaryOrders
+                    else runCatching { orderRepo.getByStay(gs.id) }.getOrElse { emptyList() }
+                }
+                orders = allGroupOrders
+                ordersTotal = allGroupOrders.sumOf { it.totalAmount }
+                pendingOrders = allGroupOrders.filter { it.status != "COMPLETED" }
             }
 
             _checkOutState.value = CheckOutState(
@@ -2241,10 +2259,16 @@ class StaysViewModel(
                 type = "SERVICE", quantity = 1, unitPrice = lateCheckoutCharge, total = lateCheckoutCharge,
             ))
             for (order in orders) {
-                if (order.totalAmount > 0) allItems.add(BillItem(
-                    name = "$prefix${order.items.joinToString(", ") { it.name }.ifBlank { "Order" }}",
-                    type = "ORDER", quantity = 1, unitPrice = order.totalAmount, total = order.totalAmount, refId = order.id,
-                ))
+                if (order.totalAmount > 0) {
+                    val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
+                    val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
+                        order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
+                    allItems.add(BillItem(
+                        name = "$prefix${order.items.joinToString(", ") { it.name }.ifBlank { "Order" }}",
+                        type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
+                        taxPercentage = effectiveTaxPct, refId = order.id,
+                    ))
+                }
             }
             totalAdvance += stay.advancePaidAmount
         }
