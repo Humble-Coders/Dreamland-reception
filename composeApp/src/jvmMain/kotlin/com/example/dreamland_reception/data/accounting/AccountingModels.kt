@@ -47,8 +47,9 @@ internal data class CustomerListEnvelope(
 
 internal data class PostSaleRequest(
     val customerId: String,
-    val amount: Double,
-    val taxRate: Double,
+    val amount: Double,          // net revenue (subtotal − discount), ex-tax
+    val taxRate: Double,         // effective rate — display metadata only
+    val taxAmount: Double,       // exact tax; authoritative on the server
     val description: String,
     val date: String,            // "YYYY-MM-DD"
     val appId: String,

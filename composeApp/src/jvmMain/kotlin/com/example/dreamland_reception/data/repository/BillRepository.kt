@@ -30,6 +30,9 @@ interface BillRepository {
         transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String,
     )
     suspend fun updateInvoiceUrl(id: String, url: String)
+    suspend fun markLedgerSynced(id: String, invoiceId: String, invoiceNumber: String)
+    suspend fun markLedgerSyncFailed(id: String, error: String)
+    suspend fun getUnsyncedFinalizedByHotel(hotelId: String): List<Bill>
 }
 
 object FirestoreBillRepository : BillRepository {
@@ -177,6 +180,10 @@ object FirestoreBillRepository : BillRepository {
             pendingAmount = getDouble("pendingAmount") ?: 0.0,
             status = getString("status") ?: "PENDING",
             invoiceUrl = getString("invoiceUrl") ?: "",
+            ledgerSynced = getBoolean("ledgerSynced") ?: false,
+            ledgerSyncError = getString("ledgerSyncError") ?: "",
+            ledgerInvoiceId = getString("ledgerInvoiceId") ?: "",
+            ledgerInvoiceNumber = getString("ledgerInvoiceNumber") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
             updatedAt = getTimestamp("updatedAt")?.toDate() ?: Date(),
         )
@@ -252,6 +259,35 @@ object FirestoreBillRepository : BillRepository {
         col.document(id).update(mapOf("invoiceUrl" to url, "updatedAt" to Date())).get(); Unit
     }
 
+    override suspend fun markLedgerSynced(id: String, invoiceId: String, invoiceNumber: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "ledgerSynced" to true,
+            "ledgerSyncError" to "",
+            "ledgerInvoiceId" to invoiceId,
+            "ledgerInvoiceNumber" to invoiceNumber,
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
+    override suspend fun markLedgerSyncFailed(id: String, error: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "ledgerSynced" to false,
+            "ledgerSyncError" to error.take(500),
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
+    override suspend fun getUnsyncedFinalizedByHotel(hotelId: String): List<Bill> = withContext(Dispatchers.IO) {
+        // Finalized bills (have payment activity) that never synced to the ledger.
+        // Re-running settle() for these is safe — sourceIds are deterministic, so
+        // Humble Ledger dedupes any leg that already landed.
+        col.whereEqualTo("hotelId", hotelId)
+            .whereEqualTo("ledgerSynced", false)
+            .get().get()
+            .documents.mapNotNull { it.toBill() }
+            .filter { it.id.isNotBlank() && it.status != "PENDING" }
+    }
+
     private fun Bill.toMap() = mapOf(
         "hotelId" to hotelId,
         "stayId" to stayId,
@@ -276,6 +312,10 @@ object FirestoreBillRepository : BillRepository {
         "pendingAmount" to pendingAmount,
         "status" to status,
         "invoiceUrl" to invoiceUrl,
+        "ledgerSynced" to ledgerSynced,
+        "ledgerSyncError" to ledgerSyncError,
+        "ledgerInvoiceId" to ledgerInvoiceId,
+        "ledgerInvoiceNumber" to ledgerInvoiceNumber,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt,
     )

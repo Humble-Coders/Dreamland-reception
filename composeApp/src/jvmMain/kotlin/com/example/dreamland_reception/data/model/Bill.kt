@@ -48,6 +48,14 @@ data class Bill(
     val pendingAmount: Double = 0.0,
     val status: String = "PENDING",   // PENDING | PARTIAL | PAID
     val invoiceUrl: String = "",
+    // ── Humble Ledger sync state (durable, survives app restarts) ──────────────
+    // ledgerSynced flips to true only after the full double-entry settlement
+    // succeeds. Unsynced finalized bills are retried on load. ledgerInvoiceNumber
+    // is the authoritative accounting invoice number printed on the PDF.
+    val ledgerSynced: Boolean = false,
+    val ledgerSyncError: String = "",
+    val ledgerInvoiceId: String = "",
+    val ledgerInvoiceNumber: String = "",
     val createdAt: Date = Date(),
     val updatedAt: Date = Date(),
 )

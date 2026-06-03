@@ -50,12 +50,22 @@ object AccountingRepository {
     @Volatile
     private var advanceLiabilityAccountId: String? = null
 
-    private const val ADVANCE_ACCOUNT_NAME = "Guest Advances Received"
+    // Canonical Humble Ledger advance account. NOTE: the old name
+    // "Guest Advances Received" is a deprecated alias that the ledger's
+    // chart-of-accounts standardizer archives/deletes — using it would break
+    // future advance postings. Always use the canonical name.
+    private const val ADVANCE_ACCOUNT_NAME = "Advance Liability"
     private const val APP_ID = "dreamland"
+
+    /** Outcome of a successful settlement — carries the ledger invoice identity. */
+    data class SettleResult(
+        val invoiceId: String,
+        val invoiceNumber: String,
+    )
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    suspend fun settle(bill: Bill, guestPhone: String): Result<Unit> = runCatching {
+    suspend fun settle(bill: Bill, guestPhone: String): Result<SettleResult> = runCatching {
 
         log("─────────────────────────────────────────")
         log("settle() START — stayId=${bill.stayId}, guest='${bill.guestName}'")
@@ -65,21 +75,29 @@ object AccountingRepository {
 
         if (!AccountingConfig.isConfigured()) {
             log("SKIP — not configured. Set email + password in ~/.dreamland/accounting.json")
-            return@runCatching
+            // Sentinel: blank invoiceId signals "skipped, not synced" so the caller
+            // neither marks the bill synced nor surfaces a false failure.
+            return@runCatching SettleResult(invoiceId = "", invoiceNumber = "")
         }
 
         // ── 1. Rounded monetary values — single source of truth ───────────────
-        // Use bill.taxAmount (pre-computed by recalculate() from per-item rates) as the
-        // authoritative tax value. Derive an effective rate for APIs that need a rate parameter.
+        // The ledger records REVENUE NET OF DISCOUNT and the EXACT tax amount.
+        //   netRevenue = subtotal − discount   → CR Sales Revenue
+        //   tax        = bill.taxAmount        → CR GST Payable (sent verbatim)
+        //   total      = netRevenue + tax      → DR Accounts Receivable
+        // This makes the ledger total equal the bill total the guest actually pays,
+        // so payments reconcile exactly (no discount drift, no rate-rounding drift).
         val subtotal       = roundAmount(bill.subtotal)
+        val discount       = roundAmount(bill.discountAmount)
         val tax            = roundAmount(if (bill.taxEnabled) bill.taxAmount else 0.0)
-        // Round to 4 decimal places so invoice displays clean rates (e.g. 6.53% not 6.5275049115...%)
-        val taxRate        = if (bill.taxEnabled && subtotal > 0.0) Math.round(tax / subtotal * 10000.0) / 10000.0 else 0.0
-        val total          = roundAmount(subtotal + tax)
+        val netRevenue     = roundAmount((subtotal - discount).coerceAtLeast(0.0))
+        // Effective rate is display metadata only — the server uses `tax` verbatim.
+        val taxRate        = if (bill.taxEnabled && netRevenue > 0.0) Math.round(tax / netRevenue * 10000.0) / 10000.0 else 0.0
+        val total          = roundAmount(netRevenue + tax)
         val advanceRounded = roundAmount(bill.advancePayment)
         val hasAdvance     = advanceRounded > 0.01
 
-        log("FINAL VALUES → subtotal=$subtotal, tax=$tax, total=$total, taxRate=$taxRate")
+        log("FINAL VALUES → subtotal=$subtotal, discount=$discount, netRevenue=$netRevenue, tax=$tax, total=$total, taxRate=$taxRate")
         log("Advance → $advanceRounded (hasAdvance=$hasAdvance)")
 
         // ── 2. Authenticate ───────────────────────────────────────────────────
@@ -98,14 +116,14 @@ object AccountingRepository {
         val customerArId   = customer.accountId   // AR sub-account for ADVANCE_APPLIED credit leg
         log("Customer — id=$customerId, arAccountId=$customerArId")
 
-        // ── 4. Ensure "Guest Advances Received" liability account exists ───────
+        // ── 4. Ensure the canonical "Advance Liability" account exists ─────────
         val advanceLiabilityId: String? = if (hasAdvance) {
             val id = ensureAdvanceLiabilityAccount(token)
             log("Advance liability account id=$id")
             id
         } else null
 
-        // ── 5. ADVANCE — DR Cash / CR Guest Advances Received ─────────────────
+        // ── 5. ADVANCE — DR Cash / CR Advance Liability ───────────────────────
         // Posted with the check-in date because cash was received at check-in.
         if (hasAdvance && advanceLiabilityId != null) {
             log("Posting ADVANCE — amount=$advanceRounded, date=$checkInDate, " +
@@ -136,8 +154,9 @@ object AccountingRepository {
             token = token,
             req   = PostSaleRequest(
                 customerId  = customerId,
-                amount      = subtotal,
+                amount      = netRevenue,
                 taxRate     = taxRate,
+                taxAmount   = tax,
                 description = saleDescription,
                 date        = today,
                 appId       = APP_ID,
@@ -149,7 +168,7 @@ object AccountingRepository {
         log("SALE posted — invoiceId=$invoiceId, invoiceNo=${saleResponse.invoice.invoiceNumber}, " +
             "invoiceTotal=$invoiceTotal (our computed=$total)")
 
-        // ── 7. ADVANCE_APPLIED — DR Guest Advances Received / CR Customer AR ──
+        // ── 7. ADVANCE_APPLIED — DR Advance Liability / CR Customer AR ────────
         // Clears the advance liability and reduces the customer's AR balance.
         if (hasAdvance && advanceLiabilityId != null) {
             log("Posting ADVANCE_APPLIED — amount=$advanceRounded, " +
@@ -230,6 +249,8 @@ object AccountingRepository {
         log("settle() COMPLETE — stayId=${bill.stayId}, invoiceId=$invoiceId")
         log("─────────────────────────────────────────")
 
+        SettleResult(invoiceId = invoiceId, invoiceNumber = saleResponse.invoice.invoiceNumber)
+
     }.also { result ->
         result.onFailure { e ->
             log("settle() FAILED — ${e::class.simpleName}: ${e.message}")
@@ -248,21 +269,39 @@ object AccountingRepository {
 
     /**
      * Returns the full [CustomerData] (including [CustomerData.accountId] for the AR
-     * sub-account) for [guestName], creating a new ledger customer if none is found.
+     * sub-account), resolving identity by PHONE first (the canonical guest key),
+     * then falling back to an exact name match, and finally creating a new ledger
+     * customer. Two different guests who happen to share a name get distinct
+     * ledger customers because the server disambiguates the AR sub-account name.
      */
     private suspend fun resolveCustomer(
         token: String,
         guestName: String,
         guestPhone: String,
     ): CustomerData {
-        val results  = client.searchCustomers(token, guestName)
-        log("Customer search '$guestName' → ${results.size} result(s): ${results.map { it.name }}")
-        val existing = results.firstOrNull { it.name.equals(guestName, ignoreCase = true) }
-        if (existing != null) {
-            log("Found existing customer — id=${existing.id}, arAccountId=${existing.accountId}")
-            return existing
+        // 1. Phone is the unique identity (matches how Firestore keys guests).
+        if (guestPhone.isNotBlank()) {
+            val byPhone = client.findCustomerByPhone(token, guestPhone)
+            if (byPhone != null) {
+                log("Found customer by phone '$guestPhone' — id=${byPhone.id}, arAccountId=${byPhone.accountId}")
+                return byPhone
+            }
         }
-        log("No match — creating new customer '$guestName'")
+
+        // 2. Fallback: exact name match (legacy guests created before phone was sent).
+        //    Only reuse when there is no phone to key on, to avoid merging two
+        //    different same-named guests.
+        if (guestPhone.isBlank()) {
+            val results  = client.searchCustomers(token, guestName)
+            log("Customer search '$guestName' → ${results.size} result(s): ${results.map { it.name }}")
+            val existing = results.firstOrNull { it.name.equals(guestName, ignoreCase = true) }
+            if (existing != null) {
+                log("Found existing customer by name — id=${existing.id}, arAccountId=${existing.accountId}")
+                return existing
+            }
+        }
+
+        log("No match — creating new customer '$guestName' (phone='$guestPhone')")
         val created = client.createCustomer(
             token = token,
             req   = CreateCustomerRequest(

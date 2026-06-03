@@ -111,6 +111,23 @@ internal object AccountingApiClient {
     // ── Customer endpoints ────────────────────────────────────────────────────
 
     /**
+     * Exact phone lookup — the canonical guest identity (Dreamland keys guests by
+     * phone). Returns the matching ledger customer or null. Returns null on any
+     * non-fatal error rather than throwing.
+     */
+    suspend fun findCustomerByPhone(token: String, phone: String): CustomerData? =
+        withContext(Dispatchers.IO) {
+            if (phone.isBlank()) return@withContext null
+            val encoded = URLEncoder.encode(phone, "UTF-8")
+            val raw = get(path = "/api/v1/customers?phone=$encoded&limit=1", token = token)
+            runCatching {
+                val type = object : TypeToken<ApiEnvelope<List<CustomerData>>>() {}.type
+                val env: ApiEnvelope<List<CustomerData>> = gson.fromJson(raw, type)
+                env.data?.firstOrNull()
+            }.getOrNull()
+        }
+
+    /**
      * Searches for customers whose name contains [name] (server-side substring match).
      * Returns an empty list on any non-fatal error rather than throwing.
      */

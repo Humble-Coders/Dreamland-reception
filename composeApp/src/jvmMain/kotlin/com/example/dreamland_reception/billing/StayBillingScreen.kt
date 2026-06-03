@@ -466,6 +466,22 @@ fun StayBillingScreen(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = DreamlandMuted,
                                 )
+                                Text(
+                                    "It will also retry automatically next time this bill is opened.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = DreamlandMuted,
+                                )
+                                TextButton(
+                                    onClick = { vm.retryLedgerSync() },
+                                    contentPadding = PaddingValues(horizontal = 0.dp),
+                                ) {
+                                    Text(
+                                        "Retry sync now",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = DreamlandGold,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
                             }
                             else -> Unit
                         }

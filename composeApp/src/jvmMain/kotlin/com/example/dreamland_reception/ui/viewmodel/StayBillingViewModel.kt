@@ -224,6 +224,9 @@ class StayBillingViewModel(
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
+            // Durable recovery: a finalized bill that never reached the ledger
+            // (failed/lost sync) is retried automatically on load.
+            retryLedgerSync()
         }
     }
 
@@ -326,6 +329,9 @@ class StayBillingViewModel(
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState()) }
+            // Durable recovery: a finalized bill that never reached the ledger
+            // (failed/lost sync) is retried automatically on load.
+            retryLedgerSync()
         }
     }
 
@@ -1124,16 +1130,88 @@ class StayBillingViewModel(
                 }
                 found ?: ""
             }
-            viewModelScope.launch {
-                accountingRepo.settle(settledBill, guestPhone)
-                    .onSuccess { _state.update { it.copy(accountingStatus = AccountingStatus.Synced) } }
-                    .onFailure { e ->
-                        _state.update { it.copy(accountingStatus = AccountingStatus.Failed(e.message ?: "Accounting sync failed")) }
-                    }
-            }
+            // Durable ledger sync — persists success/failure on the bill so an
+            // unsynced bill can be retried later (on reload or via the Retry
+            // button). Runs in its own coroutine so the guest's bill is never
+            // blocked on accounting.
+            syncLedger(settledBill, guestPhone)
 
             // Generate the branded invoice PDF and open it in the in-app viewer.
             generateInvoicePdf(settledBill, guestPhone)
+        }
+    }
+
+    // ── Ledger sync (durable) ──────────────────────────────────────────────────
+
+    /**
+     * Posts the double-entry settlement to Humble Ledger and persists the outcome
+     * on the bill document. On success the ledger invoice number is stored (and
+     * used on the printed bill). On failure the error is persisted so the bill can
+     * be retried later — safe because every posting uses a deterministic sourceId,
+     * so the ledger dedupes anything that already landed.
+     */
+    private fun syncLedger(bill: Bill, guestPhone: String) {
+        if (bill.id.isBlank()) return
+        _state.update { it.copy(accountingStatus = AccountingStatus.InProgress) }
+        viewModelScope.launch {
+            accountingRepo.settle(bill, guestPhone)
+                .onSuccess { r ->
+                    if (r.invoiceId.isNotBlank()) {
+                        runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
+                        _state.update { s ->
+                            s.copy(
+                                bill = s.bill?.takeIf { it.id == bill.id }?.copy(
+                                    ledgerSynced = true,
+                                    ledgerInvoiceId = r.invoiceId,
+                                    ledgerInvoiceNumber = r.invoiceNumber,
+                                    ledgerSyncError = "",
+                                ) ?: s.bill,
+                                accountingStatus = AccountingStatus.Synced,
+                            )
+                        }
+                    } else {
+                        // Accounting not configured — treat as a no-op, not a failure.
+                        _state.update { it.copy(accountingStatus = AccountingStatus.Idle) }
+                    }
+                }
+                .onFailure { e ->
+                    runCatching { billRepo.markLedgerSyncFailed(bill.id, e.message ?: "sync failed") }
+                    _state.update { it.copy(accountingStatus = AccountingStatus.Failed(e.message ?: "Accounting sync failed")) }
+                }
+        }
+    }
+
+    /**
+     * Resolves the correct phone for the bill's guest. For group bills the loaded
+     * stay may belong to a different guest, so we fall back to the stay(s) backing
+     * the bill to find the one whose name matches.
+     */
+    private suspend fun resolveGuestPhone(bill: Bill, loadedStay: Stay?): String {
+        if (loadedStay != null && loadedStay.guestName == bill.guestName) return loadedStay.guestPhone
+        if (bill.stayId.isNotBlank()) {
+            runCatching { stayRepo.getById(bill.stayId) }.getOrNull()
+                ?.takeIf { it.guestName == bill.guestName }?.let { return it.guestPhone }
+        }
+        for (id in bill.stayIds) {
+            runCatching { stayRepo.getById(id) }.getOrNull()
+                ?.takeIf { it.guestName == bill.guestName }?.let { return it.guestPhone }
+        }
+        return ""
+    }
+
+    /**
+     * Retries the ledger sync for a finalized-but-unsynced bill. Called on load
+     * (durable recovery after a failed/lost sync) and by the manual Retry button.
+     * No-op for in-memory previews, already-synced bills, and not-yet-finalized
+     * (PENDING) bills.
+     */
+    fun retryLedgerSync() {
+        val bill = _state.value.bill ?: return
+        if (bill.id.isBlank() || bill.ledgerSynced || bill.status == "PENDING") return
+        val loadedStay = _state.value.stay
+        viewModelScope.launch {
+            val phone = resolveGuestPhone(bill, loadedStay)
+            syncLedger(bill, phone)
         }
     }
 
