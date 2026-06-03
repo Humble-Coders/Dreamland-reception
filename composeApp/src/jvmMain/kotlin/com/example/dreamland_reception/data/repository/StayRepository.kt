@@ -164,6 +164,7 @@ object FirestoreStayRepository : StayRepository {
                         address = it["address"] as? String ?: "",
                         dob = it["dob"] as? String ?: "",
                         age = (it["age"] as? Number)?.toInt() ?: 0,
+                        grcNumber = it["grcNumber"] as? String ?: "",
                     )
                 }
             } ?: emptyList(),
@@ -202,7 +203,7 @@ object FirestoreStayRepository : StayRepository {
         "guests" to guests.map { g ->
             mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified,
                 "gender" to g.gender, "govIdNumber" to g.govIdNumber, "govIdPictures" to g.govIdPictures,
-                "address" to g.address, "dob" to g.dob, "age" to g.age)
+                "address" to g.address, "dob" to g.dob, "age" to g.age, "grcNumber" to g.grcNumber)
         },
         "groupStayId" to groupStayId,
     )

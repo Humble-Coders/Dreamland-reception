@@ -12,6 +12,7 @@ data class GuestRecord(
     val address: String = "",
     val dob: String = "",
     val age: Int = 0,
+    val grcNumber: String = "",                      // GRC serial issued for this guest (blank if not printed)
 )
 
 data class Stay(

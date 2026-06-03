@@ -146,6 +146,7 @@ data class GrcStepState(
     val selectedPrinter: String = "",
     val statuses: Map<Int, GrcPhase> = emptyMap(),   // guestEntry index -> phase
     val errors: Map<Int, String> = emptyMap(),       // guestEntry index -> error message
+    val numbers: Map<Int, String> = emptyMap(),      // guestEntry index -> issued GRC number (allocated at print)
 )
 
 data class WalkInState(
@@ -376,6 +377,7 @@ class StaysViewModel(
     private val userRepo: com.example.dreamland_reception.data.repository.UserRepository = com.example.dreamland_reception.data.repository.FirestoreUserRepository,
     private val scannerRepo: ScannerRepository = FirestoreScannerRepository,
     private val purposeRepo: com.example.dreamland_reception.data.repository.PurposeTypeRepository = com.example.dreamland_reception.data.repository.FirestorePurposeTypeRepository,
+    private val counterRepo: com.example.dreamland_reception.data.repository.CounterRepository = com.example.dreamland_reception.data.repository.FirestoreCounterRepository,
 ) : ViewModel() {
 
     private val _listState = MutableStateFlow(StaysListState(isLoading = true))
@@ -954,7 +956,11 @@ class StaysViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
-                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcData(ws, index, entry, hotel))
+                // Allocate a GRC number once per guest (reused on reprint); persisted at check-in.
+                val grcNumber = _walkInState.value.grc.numbers[index] ?: allocateGrcNumber().also { n ->
+                    _walkInState.update { it.copy(grc = it.grc.copy(numbers = it.grc.numbers + (index to n))) }
+                }
+                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcData(ws, index, entry, hotel, grcNumber))
                 if (printer == GRC_SAVE_AS_PDF) {
                     val safe = entry.name.ifBlank { "guest" }.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').ifBlank { "guest" }
                     val file = java.io.File(System.getProperty("java.io.tmpdir"), "GRC-$safe-${System.currentTimeMillis()}.pdf")
@@ -974,11 +980,27 @@ class StaysViewModel(
         }
     }
 
+    /** Allocates the next financial-year GRC serial for the current hotel, e.g. `GRC/2026-27/0042`. */
+    private suspend fun allocateGrcNumber(): String {
+        val fy = currentFinancialYear()
+        val seq = runCatching { counterRepo.next(AppContext.hotelId, "grcSeq_$fy") }.getOrElse { System.currentTimeMillis() % 100000 }
+        return "GRC/%s/%04d".format(fy, seq)
+    }
+
+    /** Indian financial year (Apr–Mar) for [date], formatted like `2026-27`. */
+    private fun currentFinancialYear(date: Date = Date()): String {
+        val cal = Calendar.getInstance().apply { time = date }
+        val year = cal.get(Calendar.YEAR)
+        val startYear = if (cal.get(Calendar.MONTH) >= Calendar.APRIL) year else year - 1
+        return "%d-%02d".format(startYear, (startYear + 1) % 100)
+    }
+
     private fun buildGrcData(
         ws: WalkInState,
         guestIndex: Int,
         entry: GuestEntry,
         hotel: com.example.dreamland_reception.data.model.Hotel?,
+        grcNumber: String,
     ): GrcData {
         val dateFmt = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
         val dateTimeFmt = java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.getDefault())
@@ -1006,8 +1028,7 @@ class StaysViewModel(
             hotelAddress = hotelAddress,
             hotelPhone = hotel?.contactPhone ?: "",
             hotelEmail = hotel?.contactEmail ?: "",
-            folioNo = (rooms.firstOrNull()?.let { "$it-" } ?: "") +
-                java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).format(Date()),
+            folioNo = grcNumber,
             date = dateFmt.format(Date()),
             guestName = entry.name.trim(),
             guestPhone = entry.phone.trim(),
@@ -1634,11 +1655,11 @@ class StaysViewModel(
                         assignment.guestIndices.filter { it != primaryIdx }.sorted()
                     val guestRecords = orderedIndices.mapNotNull { idx ->
                         ws.guestEntries.getOrNull(idx)?.let { e ->
-                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0)
+                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0, grcNumber = ws.grc.numbers[idx] ?: "")
                         }
                     }.ifEmpty {
                         ws.guestEntries.take(1).map { e ->
-                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().ifBlank { primaryPhone }, idProofVerified = e.idProofVerified)
+                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().ifBlank { primaryPhone }, idProofVerified = e.idProofVerified, grcNumber = ws.grc.numbers[0] ?: "")
                         }
                     }
                     val primaryGuest = guestRecords.firstOrNull() ?: GuestRecord()
