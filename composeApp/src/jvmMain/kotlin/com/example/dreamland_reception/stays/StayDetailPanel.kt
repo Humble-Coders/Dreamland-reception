@@ -334,7 +334,16 @@ private fun BillingTab(bill: Bill?) {
                     if (serviceCharges > 0) BillRow("Service Charges", serviceCharges)
                     if (orderCharges > 0) BillRow("Orders", orderCharges)
                     if (customCharges > 0) BillRow("Other", customCharges)
-                    if (bill.taxAmount > 0) BillRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
+                    // Show per-rate tax rows (same logic as BillSummaryCard)
+                    val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
+                    if (taxByRate.isNotEmpty()) {
+                        taxByRate.forEach { (rate, items) ->
+                            val rateAmt = items.sumOf { it.total * rate / 100.0 }
+                            if (rateAmt > 0) BillRow("Tax (${rate.toInt()}%)", rateAmt)
+                        }
+                    } else if (bill.taxAmount > 0) {
+                        BillRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
+                    }
                     if (bill.discountAmount > 0) BillRow("Discount", -bill.discountAmount)
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.3f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
