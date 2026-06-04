@@ -720,7 +720,8 @@ class StaysViewModel(
                 val checkIn = ws.checkInTime.toMidnightUtc()
                 val checkOut = ws.expectedCheckOut.toMidnightUtc()
                 val primary = ws.guestEntries.firstOrNull() ?: GuestEntry()
-                val primaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
+                val rawPrimaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
+                val primaryPhone = normalizePhoneE164(rawPrimaryPhone) ?: rawPrimaryPhone
                 val advance = ws.advancePayment.toDoubleOrNull() ?: 0.0
                 val nights = java.time.temporal.ChronoUnit.DAYS.between(checkIn.toInstant(), checkOut.toInstant()).coerceAtLeast(1)
                 val sourceName = ws.source.trim()
@@ -748,15 +749,11 @@ class StaysViewModel(
 
                     // Specific instances for this category
                     val specificIds = ws.selectedInstanceIds.filter { ws.selectedInstanceDetails[it]?.categoryId == catId }
-                    val allGuestDetails = ws.guestEntries
-                        .filter { it.name.isNotBlank() || it.phone.isNotBlank() }
-                        .map { GuestDetail(name = it.name.trim(), phone = it.phone.trim(), idProofVerified = it.idProofVerified, gender = it.gender, govIdNumber = it.govIdNumber, address = it.address, dob = it.dob, age = it.age ?: 0) }
                     specificIds.forEach { instanceId ->
                         val inst = ws.selectedInstanceDetails[instanceId]
                         bookingRepo.add(Booking(
                             hotelId = AppContext.hotelId, hotelName = AppContext.hotelName,
                             guestName = primaryName, guestPhone = primaryPhone,
-                            allGuestDetails = allGuestDetails,
                             roomCategoryId = catId, roomCategoryName = catName,
                             roomInstanceId = instanceId, roomNumber = inst?.roomNumber ?: "",
                             checkIn = checkIn, checkOut = checkOut,
@@ -774,7 +771,6 @@ class StaysViewModel(
                         bookingRepo.add(Booking(
                             hotelId = AppContext.hotelId, hotelName = AppContext.hotelName,
                             guestName = primaryName, guestPhone = primaryPhone,
-                            allGuestDetails = allGuestDetails,
                             roomCategoryId = catId, roomCategoryName = catName,
                             roomInstanceId = "", roomNumber = "",
                             checkIn = checkIn, checkOut = checkOut,
@@ -1587,7 +1583,8 @@ class StaysViewModel(
                 val now = checkInNorm
                 val primary = ws.guestEntries.firstOrNull() ?: GuestEntry()
                 val primaryName = primary.name.trim().ifBlank { ws.guestName.trim() }
-                val primaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
+                val rawPrimaryPhone = primary.phone.trim().ifBlank { ws.guestPhone.trim() }
+                val primaryPhone = normalizePhoneE164(rawPrimaryPhone) ?: rawPrimaryPhone
                 val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
                 val isEarlyCheckIn = if (hotel != null && hotel.earlyCheckInAllowed) {
                     val parts = hotel.checkInTime.split(":")
@@ -1682,11 +1679,11 @@ class StaysViewModel(
                         assignment.guestIndices.filter { it != primaryIdx }.sorted()
                     val guestRecords = orderedIndices.mapNotNull { idx ->
                         ws.guestEntries.getOrNull(idx)?.let { e ->
-                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0, grcNumber = ws.grc.numbers[idx] ?: "")
+                            GuestRecord(name = e.name.trim(), phone = e.phone.trim().let { normalizePhoneE164(it) ?: it }, idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0, grcNumber = ws.grc.numbers[idx] ?: "")
                         }
                     }.ifEmpty {
                         ws.guestEntries.take(1).map { e ->
-                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().ifBlank { primaryPhone }, idProofVerified = e.idProofVerified, grcNumber = ws.grc.numbers[0] ?: "")
+                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().let { normalizePhoneE164(it) ?: it }.ifBlank { primaryPhone }, idProofVerified = e.idProofVerified, grcNumber = ws.grc.numbers[0] ?: "")
                         }
                     }
                     val primaryGuest = guestRecords.firstOrNull() ?: GuestRecord()
