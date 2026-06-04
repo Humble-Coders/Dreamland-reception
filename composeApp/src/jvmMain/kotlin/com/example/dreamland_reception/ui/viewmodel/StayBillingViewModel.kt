@@ -1326,7 +1326,10 @@ class StayBillingViewModel(
                 }
                 url to HumbleBillEngine.renderPdfPages(url)
             }.onSuccess { (url, pages) ->
-                _state.update { it.copy(invoicePdf = it.invoicePdf.copy(isGenerating = false, url = url, pages = pages)) }
+                _state.update { it.copy(
+                    invoicePdf = it.invoicePdf.copy(isGenerating = false, url = url, pages = pages),
+                    bill = it.bill?.copy(invoiceUrl = url),
+                ) }
             }.onFailure { e ->
                 _state.update { it.copy(invoicePdf = it.invoicePdf.copy(isGenerating = false, error = e.message ?: "Failed to generate invoice")) }
             }
@@ -1336,37 +1339,32 @@ class StayBillingViewModel(
     fun closeInvoicePdf() = _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(show = false)) }
 
     fun openInvoicePdf() {
-        val ipd = _state.value.invoicePdf
-        if (ipd.url.isNotBlank() && ipd.pages.isNotEmpty()) {
-            _state.update { s -> s.copy(invoicePdf = s.invoicePdf.copy(show = true)) }
-        } else {
-            val bill = _state.value.bill ?: return
-            val loadedStay = _state.value.stay
-            viewModelScope.launch {
-                val guestPhone: String = bill.guestPhone.ifBlank {
-                    if (loadedStay?.guestName == bill.guestName) {
-                        loadedStay.guestPhone
-                    } else {
-                        var found: String? = null
-                        if (bill.stayId.isNotBlank()) {
+        val bill = _state.value.bill ?: return
+        val loadedStay = _state.value.stay
+        viewModelScope.launch {
+            val guestPhone: String = bill.guestPhone.ifBlank {
+                if (loadedStay?.guestName == bill.guestName) {
+                    loadedStay.guestPhone
+                } else {
+                    var found: String? = null
+                    if (bill.stayId.isNotBlank()) {
+                        try {
+                            val s = stayRepo.getById(bill.stayId)
+                            if (s?.guestName == bill.guestName) found = s.guestPhone
+                        } catch (_: Exception) {}
+                    }
+                    if (found == null) {
+                        for (id in bill.stayIds) {
                             try {
-                                val s = stayRepo.getById(bill.stayId)
-                                if (s?.guestName == bill.guestName) found = s.guestPhone
+                                val s = stayRepo.getById(id)
+                                if (s?.guestName == bill.guestName) { found = s.guestPhone; break }
                             } catch (_: Exception) {}
                         }
-                        if (found == null) {
-                            for (id in bill.stayIds) {
-                                try {
-                                    val s = stayRepo.getById(id)
-                                    if (s?.guestName == bill.guestName) { found = s.guestPhone; break }
-                                } catch (_: Exception) {}
-                            }
-                        }
-                        found ?: ""
                     }
+                    found ?: ""
                 }
-                generateInvoicePdf(bill, guestPhone)
             }
+            generateInvoicePdf(bill, guestPhone)
         }
     }
 

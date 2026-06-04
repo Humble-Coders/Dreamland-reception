@@ -511,10 +511,9 @@ fun StayBillingScreen(
                             else -> Unit
                         }
 
-                        val invoiceUrl = state.bill?.invoiceUrl ?: ""
                         Button(
-                            onClick = { openInBrowser(invoiceUrl) },
-                            enabled = invoiceUrl.isNotBlank(),
+                            onClick = { vm.openInvoicePdf() },
+                            enabled = state.bill != null,
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
