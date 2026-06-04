@@ -127,6 +127,51 @@ internal data class RawTransactionRequest(
     val entries: List<RawEntryInput>,
 )
 
+// ── Vendors (Accounts Payable side) ───────────────────────────────────────────
+
+internal data class CreateVendorRequest(
+    val name: String,
+    val phone: String? = null,
+    val email: String? = null,
+    // Firestore vendors/{id} — the stable cross-system key. Humble Ledger create is
+    // idempotent on this: same externalId returns the same ledger vendor.
+    val externalId: String? = null,
+)
+
+internal data class VendorData(
+    val id: String = "",
+    val accountId: String = "",
+    val name: String = "",
+    val externalId: String? = null,
+    val payable: String? = null,        // positive = we owe them
+    val currentBalance: Double? = null, // same value as a number
+    val balanceType: String? = null,    // PAYABLE | CREDIT | SETTLED
+)
+
+// Purchase/bill from a vendor: DR expense / CR vendor AP.
+internal data class PostPurchaseRequest(
+    val vendorId: String,
+    val amount: Double,          // subtotal (ex-tax)
+    val taxRate: Double = 0.0,
+    val taxAmount: Double? = null,
+    val expenseAccountId: String,
+    val description: String,
+    val date: String,            // "YYYY-MM-DD"
+    val appId: String,
+    val sourceId: String,
+)
+
+// Pay a vendor: DR vendor AP / CR Cash|Bank.
+internal data class PostVendorPaymentRequest(
+    val vendorId: String,
+    val amount: Double,
+    val method: String,          // "CASH" | "BANK"
+    val description: String? = null,
+    val date: String,            // "YYYY-MM-DD"
+    val appId: String,
+    val sourceId: String,
+)
+
 // ── Generic API envelope ──────────────────────────────────────────────────────
 
 /**

@@ -188,6 +188,41 @@ internal object AccountingApiClient {
             Unit
         }
 
+    // ── Vendors & Purchases (Accounts Payable) ────────────────────────────────
+
+    /** Create-or-return a vendor (idempotent on externalId). Returns the ledger vendor. */
+    suspend fun createVendor(token: String, req: CreateVendorRequest): VendorData =
+        withContext(Dispatchers.IO) {
+            post<VendorData>(path = "/api/v1/vendors", body = req, token = token)
+        }
+
+    /** Look up a ledger vendor (incl. its current balance) by externalId. Null if none. */
+    suspend fun getVendorByExternalId(token: String, externalId: String): VendorData? =
+        withContext(Dispatchers.IO) {
+            if (externalId.isBlank()) return@withContext null
+            val encoded = URLEncoder.encode(externalId, "UTF-8")
+            val raw = get(path = "/api/v1/vendors?externalId=$encoded&limit=1", token = token)
+            runCatching {
+                val type = object : TypeToken<ApiEnvelope<List<VendorData>>>() {}.type
+                val env: ApiEnvelope<List<VendorData>> = gson.fromJson(raw, type)
+                env.data?.firstOrNull()
+            }.getOrNull()
+        }
+
+    /** Record a purchase/bill from a vendor (DR expense / CR vendor AP). */
+    suspend fun postPurchase(token: String, req: PostPurchaseRequest) =
+        withContext(Dispatchers.IO) {
+            post<Map<*, *>>(path = "/api/v1/purchases", body = req, token = token)
+            Unit
+        }
+
+    /** Pay a vendor (DR vendor AP / CR Cash|Bank). */
+    suspend fun postVendorPayment(token: String, req: PostVendorPaymentRequest) =
+        withContext(Dispatchers.IO) {
+            post<Map<*, *>>(path = "/api/v1/vendor-payments", body = req, token = token)
+            Unit
+        }
+
     // ── HTTP primitives ───────────────────────────────────────────────────────
 
     /**
