@@ -40,6 +40,7 @@ import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.DreamlandAppInitializer
 import com.example.dreamland_reception.util.localTodayUtcMidnight
 import com.example.dreamland_reception.util.normalizePhoneE164
+import com.example.dreamland_reception.util.toNationalPhone
 import com.example.dreamland_reception.util.toLocalDayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
 import com.example.dreamland_reception.grc.GrcData
@@ -829,12 +830,32 @@ class StaysViewModel(
             guestName = if (index == 0) name else ws.guestName,
         )
     }
-    fun onGuestPhone(index: Int, phone: String) = _walkInState.update { ws ->
-        val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(phone = phone) }
-        ws.copy(
-            guestEntries = updated,
-            guestPhone = if (index == 0) phone else ws.guestPhone,
-        )
+    fun onGuestPhone(index: Int, phone: String) {
+        _walkInState.update { ws ->
+            val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(phone = phone) }
+            ws.copy(
+                guestEntries = updated,
+                guestPhone = if (index == 0) phone else ws.guestPhone,
+            )
+        }
+        // When the primary guest's phone is fully entered, auto-fetch their registered
+        // name from the users collection (if any) to pre-fill the Full Name field.
+        if (index == 0 && phone.length == 10) {
+            viewModelScope.launch {
+                val normalized = normalizePhoneE164(phone) ?: return@launch
+                val name = runCatching { userRepo.findNameByPhone(normalized) }.getOrNull()
+                if (!name.isNullOrBlank()) {
+                    _walkInState.update { ws ->
+                        // Ignore stale results if the phone changed while the lookup was in flight.
+                        if (ws.guestEntries.firstOrNull()?.phone == phone) {
+                            val updated = ws.guestEntries.toMutableList()
+                            updated[0] = updated[0].copy(name = name)
+                            ws.copy(guestEntries = updated, guestName = name)
+                        } else ws
+                    }
+                }
+            }
+        }
     }
     fun onGuestIdProof(index: Int, verified: Boolean) = _walkInState.update { ws ->
         val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(idProofVerified = verified) }
@@ -1848,7 +1869,7 @@ class StaysViewModel(
             val preSelected = mutableSetOf<String>()
             val instanceDetails = mutableMapOf<String, RoomInstance>()
             val instanceToBooking = mutableMapOf<String, String>()
-            val primaryGuest = GuestEntry(name = primaryBooking.guestName, phone = primaryBooking.guestPhone)
+            val primaryGuest = GuestEntry(name = primaryBooking.guestName, phone = toNationalPhone(primaryBooking.guestPhone))
             for (booking in group) {
                 if (booking.roomInstanceId.isNotBlank()) {
                     val inst = instsByCat[booking.roomCategoryId]?.selectable?.find { it.id == booking.roomInstanceId }
@@ -1934,14 +1955,14 @@ class StaysViewModel(
             val entries = if (booking.allGuestDetails.isNotEmpty()) {
                 // Restore all guest entries saved at booking time; pad to adults count if needed
                 val fromBooking = booking.allGuestDetails.map { g ->
-                    GuestEntry(name = g.name, phone = g.phone, idProofVerified = g.idProofVerified, gender = g.gender, govIdNumber = g.govIdNumber, address = g.address, dob = g.dob, age = g.age.takeIf { it > 0 })
+                    GuestEntry(name = g.name, phone = toNationalPhone(g.phone), idProofVerified = g.idProofVerified, gender = g.gender, govIdNumber = g.govIdNumber, address = g.address, dob = g.dob, age = g.age.takeIf { it > 0 })
                 }
                 val needed = booking.adults.coerceAtLeast(1)
                 if (fromBooking.size >= needed) fromBooking.take(needed)
                 else fromBooking + List(needed - fromBooking.size) { GuestEntry() }
             } else {
                 List(booking.adults.coerceAtLeast(1)) { i ->
-                    if (i == 0) GuestEntry(name = booking.guestName, phone = booking.guestPhone)
+                    if (i == 0) GuestEntry(name = booking.guestName, phone = toNationalPhone(booking.guestPhone))
                     else GuestEntry()
                 }
             }

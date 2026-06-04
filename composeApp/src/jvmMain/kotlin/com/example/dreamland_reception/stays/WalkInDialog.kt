@@ -642,11 +642,23 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
         Spacer(Modifier.height(4.dp))
     }
 
+    // Phone-first gate: the primary guest's phone (10 digits) unlocks every other field.
+    val firstPhoneComplete = state.guestEntries.firstOrNull()?.phone?.length == 10
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!firstPhoneComplete) {
+            Text(
+                "Enter the primary guest's phone number to continue.",
+                color = DreamlandGold.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         state.guestEntries.forEachIndexed { index, guest ->
             GuestWizardCard(
                 index = index,
                 entry = guest,
+                phoneEnabled = (index == 0) || firstPhoneComplete,
+                fieldsEnabled = firstPhoneComplete,
                 onNameChange = { vm.onGuestName(index, it) },
                 onPhoneChange = { vm.onGuestPhone(index, it) },
                 onIdProofChange = { vm.onGuestIdProof(index, it) },
@@ -666,11 +678,12 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
 
         OutlinedButton(
             onClick = vm::addGuest,
+            enabled = firstPhoneComplete,
             shape = RoundedCornerShape(10.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.5f)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = if (firstPhoneComplete) 0.5f else 0.2f)),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("+ Add Guest", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+            Text("+ Add Guest", color = DreamlandGold.copy(alpha = if (firstPhoneComplete) 1f else 0.4f), fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -1230,6 +1243,8 @@ private fun RowScope.LabeledCell(label: String, field: @Composable RowScope.() -
 private fun GuestWizardCard(
     index: Int,
     entry: GuestEntry,
+    phoneEnabled: Boolean = true,
+    fieldsEnabled: Boolean = true,
     onNameChange: (String) -> Unit,
     onPhoneChange: (String) -> Unit,
     onIdProofChange: (Boolean) -> Unit,
@@ -1276,12 +1291,13 @@ private fun GuestWizardCard(
                 Text("Guest ${index + 1}", color = DreamlandGold, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 OutlinedButton(
                     onClick = onScannerClick,
+                    enabled = fieldsEnabled,
                     shape = RoundedCornerShape(6.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.6f)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = if (fieldsEnabled) 0.6f else 0.2f)),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     modifier = Modifier.height(28.dp),
                 ) {
-                    Text("Use Scanner", color = DreamlandGold, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Use Scanner", color = DreamlandGold.copy(alpha = if (fieldsEnabled) 1f else 0.4f), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
                 if (onRemove != null) {
                     TextButton(onClick = onRemove, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
@@ -1293,14 +1309,8 @@ private fun GuestWizardCard(
             // Clean 2-column grid: each cell = fixed-width label + field, columns align across rows.
             val rowGap = Arrangement.spacedBy(24.dp)
 
-            // Full Name | Phone
+            // Phone | Gender
             Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
-                LabeledCell(if (isPrimary) "Full Name *" else "Full Name") {
-                    CompactField(
-                        value = entry.name, onValueChange = onNameChange,
-                        placeholder = "Enter name", colors = compactColors, modifier = Modifier.weight(1f),
-                    )
-                }
                 LabeledCell("Phone") {
                     CompactField(
                         value = entry.phone,
@@ -1308,50 +1318,56 @@ private fun GuestWizardCard(
                         placeholder = "00000 00000", prefix = "+91 ",
                         keyboardType = KeyboardType.Phone,
                         isError = entry.phone.isNotBlank() && entry.phone.length != 10,
-                        colors = compactColors, modifier = Modifier.weight(1f),
+                        colors = compactColors, enabled = phoneEnabled, modifier = Modifier.weight(1f),
                     )
                 }
-            }
-
-            // Gender | Age
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
                 LabeledCell("Gender") {
                     CompactDropdown(
                         selectedText = entry.gender, placeholder = "Select",
                         options = listOf("Male", "Female", "Other"),
-                        onSelected = onGenderChange, modifier = Modifier.weight(1f),
-                    )
-                }
-                LabeledCell("Age") {
-                    CompactField(
-                        value = entry.age?.toString() ?: "",
-                        onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) },
-                        placeholder = "—", keyboardType = KeyboardType.Number,
-                        colors = compactColors, modifier = Modifier.weight(1f),
+                        onSelected = onGenderChange, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
                     )
                 }
             }
 
-            // Date of Birth | ID Type
+            // Full Name | Govt ID
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
+                LabeledCell(if (isPrimary) "Full Name *" else "Full Name") {
+                    CompactField(
+                        value = entry.name, onValueChange = onNameChange,
+                        placeholder = "Enter name", colors = compactColors, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
+                    )
+                }
+                LabeledCell("Govt ID") {
+                    CompactField(
+                        value = entry.govIdNumber, onValueChange = onGovIdChange,
+                        placeholder = "Enter ID number", colors = compactColors, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            // DOB | ID Type
             Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
                 LabeledCell("DOB") {
-                    DobPickerField(modifier = Modifier.weight(1f), dob = entry.dob, onDobChange = onDobChange)
+                    DobPickerField(modifier = Modifier.weight(1f), dob = entry.dob, onDobChange = onDobChange, enabled = fieldsEnabled)
                 }
                 LabeledCell("ID Type") {
                     CompactDropdown(
                         selectedText = entry.idType, placeholder = "Select",
                         options = ID_TYPE_OPTIONS,
-                        onSelected = onIdTypeChange, modifier = Modifier.weight(1f),
+                        onSelected = onIdTypeChange, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
                     )
                 }
             }
 
-            // Govt ID | Purpose
+            // Age | Purpose
             Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
-                LabeledCell("Govt ID") {
+                LabeledCell("Age") {
                     CompactField(
-                        value = entry.govIdNumber, onValueChange = onGovIdChange,
-                        placeholder = "Enter ID number", colors = compactColors, modifier = Modifier.weight(1f),
+                        value = entry.age?.toString() ?: "",
+                        onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) },
+                        placeholder = "—", keyboardType = KeyboardType.Number,
+                        colors = compactColors, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
                     )
                 }
                 LabeledCell("Purpose") {
@@ -1359,7 +1375,7 @@ private fun GuestWizardCard(
                         modifier = Modifier.weight(1f),
                         value = entry.purpose, options = purposeOptions,
                         onValueChange = onPurposeChange, onAdd = onAddPurpose,
-                        colors = compactColors,
+                        colors = compactColors, enabled = fieldsEnabled,
                     )
                 }
             }
@@ -1369,7 +1385,7 @@ private fun GuestWizardCard(
                 Text("Address", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(GUEST_LABEL_WIDTH))
                 CompactField(
                     value = entry.address, onValueChange = onAddressChange,
-                    placeholder = "Enter address", colors = compactColors, modifier = Modifier.weight(1f),
+                    placeholder = "Enter address", colors = compactColors, enabled = fieldsEnabled, modifier = Modifier.weight(1f),
                 )
                 if (entry.govIdPicture1.isNotBlank()) {
                     OutlinedButton(
@@ -1411,13 +1427,15 @@ internal fun CompactField(
     keyboardType: KeyboardType = KeyboardType.Text,
     prefix: String? = null,
     isError: Boolean = false,
+    enabled: Boolean = true,
 ) {
     val interaction = remember { MutableInteractionSource() }
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        enabled = enabled,
         modifier = modifier.height(46.dp),
-        textStyle = TextStyle(fontSize = 13.sp, color = DreamlandOnDark),
+        textStyle = TextStyle(fontSize = 13.sp, color = if (enabled) DreamlandOnDark else DreamlandMuted.copy(alpha = 0.4f)),
         singleLine = true,
         cursorBrush = SolidColor(DreamlandGold),
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -1426,7 +1444,7 @@ internal fun CompactField(
             OutlinedTextFieldDefaults.DecorationBox(
                 value = value,
                 innerTextField = inner,
-                enabled = true,
+                enabled = enabled,
                 singleLine = true,
                 visualTransformation = VisualTransformation.None,
                 interactionSource = interaction,
@@ -1448,6 +1466,7 @@ internal fun CompactDropdown(
     options: List<String>,
     onSelected: (String) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var triggerSize by remember { mutableStateOf(IntSize.Zero) }
@@ -1459,17 +1478,17 @@ internal fun CompactDropdown(
                 .height(46.dp)
                 .onSizeChanged { triggerSize = it }
                 .clip(RoundedCornerShape(4.dp))
-                .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                .clickable { expanded = true }
+                .border(1.dp, DreamlandMuted.copy(alpha = if (enabled) 0.4f else 0.2f), RoundedCornerShape(4.dp))
+                .clickable(enabled = enabled) { expanded = true }
                 .padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 selectedText.ifBlank { placeholder },
-                color = if (selectedText.isBlank()) DreamlandMuted.copy(alpha = 0.5f) else DreamlandOnDark,
+                color = if (!enabled) DreamlandMuted.copy(alpha = 0.4f) else if (selectedText.isBlank()) DreamlandMuted.copy(alpha = 0.5f) else DreamlandOnDark,
                 fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f),
             )
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(18.dp))
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = DreamlandMuted.copy(alpha = if (enabled) 1f else 0.4f), modifier = Modifier.size(18.dp))
         }
         DropdownMenu(
             expanded = expanded,
@@ -1488,7 +1507,7 @@ internal fun CompactDropdown(
 }
 
 @Composable
-private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChange: (String) -> Unit) {
+private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChange: (String) -> Unit, enabled: Boolean = true) {
     val parts = dob.split("/")
     var selDay   by remember(dob) { mutableStateOf(parts.getOrNull(0)?.toIntOrNull() ?: 1) }
     var selMonth by remember(dob) { mutableStateOf(parts.getOrNull(1)?.toIntOrNull() ?: 1) }
@@ -1511,13 +1530,13 @@ private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChan
     Box(
         modifier
             .height(46.dp)
-            .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(4.dp)),
+            .border(1.dp, DreamlandMuted.copy(alpha = if (enabled) 0.4f else 0.2f), RoundedCornerShape(4.dp)),
         contentAlignment = Alignment.Center,
     ) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         // Day
         Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { dayExpanded = true }, shape = btnShape, border = btnBorder,
+            OutlinedButton(onClick = { dayExpanded = true }, enabled = enabled, shape = btnShape, border = btnBorder,
                 contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
             ) { Text("%02d".format(selDay), color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
             DropdownMenu(expanded = dayExpanded, onDismissRequest = { dayExpanded = false },
@@ -1531,7 +1550,7 @@ private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChan
         Text("/", color = DreamlandMuted, fontSize = 13.sp)
         // Month
         Box(Modifier.weight(1.2f)) {
-            OutlinedButton(onClick = { monthExpanded = true }, shape = btnShape, border = btnBorder,
+            OutlinedButton(onClick = { monthExpanded = true }, enabled = enabled, shape = btnShape, border = btnBorder,
                 contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
             ) { Text(monthNames.getOrElse(selMonth - 1) { "Jan" }, color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
             DropdownMenu(expanded = monthExpanded, onDismissRequest = { monthExpanded = false },
@@ -1545,7 +1564,7 @@ private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChan
         Text("/", color = DreamlandMuted, fontSize = 13.sp)
         // Year
         Box(Modifier.weight(1.5f)) {
-            OutlinedButton(onClick = { yearExpanded = true }, shape = btnShape, border = btnBorder,
+            OutlinedButton(onClick = { yearExpanded = true }, enabled = enabled, shape = btnShape, border = btnBorder,
                 contentPadding = btnPad, modifier = Modifier.fillMaxWidth(),
             ) { Text(selYear.toString(), color = DreamlandOnDark, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
             DropdownMenu(expanded = yearExpanded, onDismissRequest = { yearExpanded = false },
@@ -2051,6 +2070,7 @@ private fun PurposeAutocompleteField(
     onValueChange: (String) -> Unit,
     onAdd: (String) -> Unit,
     colors: androidx.compose.material3.TextFieldColors,
+    enabled: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val query = value.trim()
@@ -2062,10 +2082,11 @@ private fun PurposeAutocompleteField(
             onValueChange = { onValueChange(it); expanded = true },
             placeholder = "Business, Tourism…",
             colors = colors,
-            modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) expanded = true },
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused && enabled) expanded = true },
         )
         DropdownMenu(
-            expanded = expanded && (matches.isNotEmpty() || showAdd),
+            expanded = enabled && expanded && (matches.isNotEmpty() || showAdd),
             onDismissRequest = { expanded = false },
             properties = PopupProperties(focusable = false),
         ) {

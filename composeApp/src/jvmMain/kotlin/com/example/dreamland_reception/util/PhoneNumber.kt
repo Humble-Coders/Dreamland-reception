@@ -24,3 +24,13 @@ fun normalizePhoneE164(raw: String?): String? {
     }
     return "+91$national"
 }
+
+/**
+ * Inverse of [normalizePhoneE164] for display in a phone field that already shows a `+91` prefix.
+ * Extracts the bare 10-digit national number from any stored form (`+91XXXXXXXXXX`, `91XXXXXXXXXX`,
+ * `XXXXXXXXXX`). Returns the digits as-is if fewer than 10 are present, or "" for blank input.
+ */
+fun toNationalPhone(raw: String?): String {
+    val digits = raw?.filter { it.isDigit() } ?: return ""
+    return if (digits.length >= 10) digits.takeLast(10) else digits
+}
