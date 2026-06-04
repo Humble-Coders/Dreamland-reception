@@ -1,6 +1,7 @@
 package com.example.dreamland_reception.data.accounting
 
 import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.data.model.Order
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
@@ -43,6 +44,9 @@ import java.util.Locale
  *   stay_<stayId>_advance_applied ADVANCE_APPLIED
  *   stay_<stayId>_txn_<txnId>     PAYMENT (one per PaymentTransaction)
  */
+/** A vendor's current Humble Ledger balance. [payable] > 0 = we owe them. */
+data class VendorBalanceInfo(val payable: Double, val balanceType: String)
+
 object AccountingRepository {
 
     private val client = AccountingApiClient
@@ -58,6 +62,13 @@ object AccountingRepository {
     // future advance postings. Always use the canonical name.
     private const val ADVANCE_ACCOUNT_NAME = "Advance Liability"
     private const val APP_ID = "dreamland"
+
+    // Expense account that vendor food purchases are booked against.
+    private const val FOOD_EXPENSE_ACCOUNT_NAME = "Food & Beverage Cost"
+
+    /** In-memory cache for the food expense account ID. */
+    @Volatile
+    private var foodExpenseAccountId: String? = null
 
     /** Outcome of a successful settlement — carries the ledger invoice identity. */
     data class SettleResult(
@@ -388,6 +399,144 @@ object AccountingRepository {
         )
         log("'$ADVANCE_ACCOUNT_NAME' account created — id=${created.id}")
         advanceLiabilityAccountId = created.id
+        return created.id
+    }
+
+    // ── Vendor settlement (food bought from an outside supplier) ────────────────
+
+    /**
+     * Posts the vendor side of a completed order to Humble Ledger:
+     *   1. resolve/create the ledger vendor (idempotent on the Firestore vendor id),
+     *   2. book the purchase   — DR Food expense / CR vendor AP  (we now owe the vendor),
+     *   3. book payments       — DR vendor AP / CR Cash|Bank      (one per method paid now).
+     *
+     * Paying less than the cost leaves the vendor PAYABLE (we owe them); paying more
+     * leaves a CREDIT (prepaid). Every leg uses a deterministic sourceId so retries
+     * are idempotent.
+     *
+     * Returns:
+     *   success(true)  — posted to the ledger,
+     *   success(false) — skipped (accounting not configured, or no vendor / in-house),
+     *   failure(e)     — a real error; the caller should persist it for retry.
+     */
+    suspend fun settleOrderVendor(order: Order): Result<Boolean> = runCatching {
+        if (order.vendorId.isBlank()) {
+            log("settleOrderVendor SKIP — no vendor (in-house) for order ${order.id}")
+            return@runCatching false
+        }
+        if (!AccountingConfig.isConfigured()) {
+            log("settleOrderVendor SKIP — accounting not configured (order ${order.id})")
+            return@runCatching false
+        }
+
+        val cost = roundAmount(order.vendorCost)
+        val cash = roundAmount(order.vendorCashPaid)
+        val bank = roundAmount(order.vendorBankPaid)
+        val today = LocalDate.now().toString()
+        val token = client.ensureValidToken()
+
+        log("settleOrderVendor — order=${order.id}, vendor='${order.vendorName}' (uid=${order.vendorId}), " +
+            "cost=$cost, cash=$cash, bank=$bank")
+
+        // 1. Resolve/create the ledger vendor (externalId = Firestore vendors/{id}).
+        val hlVendor = client.createVendor(
+            token = token,
+            req   = CreateVendorRequest(name = order.vendorName.ifBlank { "Vendor" }, externalId = order.vendorId),
+        )
+        log("Vendor resolved — ledgerId=${hlVendor.id}")
+
+        // 2. Purchase (DR Food expense / CR vendor AP).
+        if (cost > 0.0) {
+            val foodExpenseId = ensureFoodExpenseAccount(token)
+            client.postPurchase(
+                token = token,
+                req   = PostPurchaseRequest(
+                    vendorId         = hlVendor.id,
+                    amount           = cost,
+                    expenseAccountId = foodExpenseId,
+                    description      = "Food order — Room ${order.roomNumber} (${order.guestName})",
+                    date             = today,
+                    appId            = APP_ID,
+                    sourceId         = "order_${order.id}_purchase",
+                ),
+            )
+            log("Purchase posted — $cost")
+        }
+
+        // 3. Payments (one per method actually paid).
+        if (cash > 0.0) {
+            client.postVendorPayment(
+                token = token,
+                req   = PostVendorPaymentRequest(
+                    vendorId    = hlVendor.id,
+                    amount      = cash,
+                    method      = "CASH",
+                    description = "Vendor payment (cash) — order ${order.id}",
+                    date        = today,
+                    appId       = APP_ID,
+                    sourceId    = "order_${order.id}_pay_cash",
+                ),
+            )
+            log("Vendor cash payment posted — $cash")
+        }
+        if (bank > 0.0) {
+            client.postVendorPayment(
+                token = token,
+                req   = PostVendorPaymentRequest(
+                    vendorId    = hlVendor.id,
+                    amount      = bank,
+                    method      = "BANK",
+                    description = "Vendor payment (bank) — order ${order.id}",
+                    date        = today,
+                    appId       = APP_ID,
+                    sourceId    = "order_${order.id}_pay_bank",
+                ),
+            )
+            log("Vendor bank payment posted — $bank")
+        }
+
+        log("settleOrderVendor COMPLETE — order ${order.id}")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("settleOrderVendor FAILED — order ${order.id}: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /**
+     * Fetches a vendor's current balance from Humble Ledger by its Firestore id
+     * (externalId). Returns null when accounting isn't configured, the vendor isn't
+     * in the ledger yet (brand-new), or on any non-fatal error.
+     */
+    suspend fun fetchVendorBalance(externalId: String): VendorBalanceInfo? {
+        if (externalId.isBlank() || !AccountingConfig.isConfigured()) return null
+        return runCatching {
+            val token = client.ensureValidToken()
+            client.getVendorByExternalId(token, externalId)?.let {
+                VendorBalanceInfo(
+                    payable = it.currentBalance ?: (it.payable?.toDoubleOrNull() ?: 0.0),
+                    balanceType = it.balanceType ?: "SETTLED",
+                )
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Finds or creates the "$FOOD_EXPENSE_ACCOUNT_NAME" expense account and returns its UUID.
+     * Cached in [foodExpenseAccountId] for the process lifetime.
+     */
+    private suspend fun ensureFoodExpenseAccount(token: String): String {
+        foodExpenseAccountId?.let { return it }
+        val accounts = client.getAccounts(token)
+        val existing = accounts.firstOrNull { it.name.equals(FOOD_EXPENSE_ACCOUNT_NAME, ignoreCase = true) }
+        if (existing != null) {
+            foodExpenseAccountId = existing.id
+            return existing.id
+        }
+        log("'$FOOD_EXPENSE_ACCOUNT_NAME' account not found — creating it")
+        val created = client.createAccount(
+            token = token,
+            req   = CreateAccountRequest(name = FOOD_EXPENSE_ACCOUNT_NAME, type = "EXPENSE"),
+        )
+        foodExpenseAccountId = created.id
         return created.id
     }
 

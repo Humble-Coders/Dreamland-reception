@@ -20,6 +20,15 @@ interface OrderRepository {
     suspend fun updateStatus(id: String, status: String)
     suspend fun updateAssignment(id: String, staffId: String, staffName: String)
     suspend fun delete(id: String)
+    /** Marks an order COMPLETED and records the vendor + payment details (unsynced). */
+    suspend fun markCompletedWithVendor(
+        id: String, vendorId: String, vendorName: String,
+        vendorCost: Double, cashPaid: Double, bankPaid: Double,
+    )
+    suspend fun markVendorSynced(id: String)
+    suspend fun markVendorSyncFailed(id: String, error: String)
+    /** COMPLETED orders that have a vendor but never synced — retried on load. */
+    suspend fun getCompletedUnsyncedVendorOrders(hotelId: String): List<Order>
     fun listenByHotel(hotelId: String): Flow<List<Order>>
     fun listenByStay(stayId: String): Flow<List<Order>>
 }
@@ -80,6 +89,38 @@ object FirestoreOrderRepository : OrderRepository {
         col.document(id).delete().get(); Unit
     }
 
+    override suspend fun markCompletedWithVendor(
+        id: String, vendorId: String, vendorName: String,
+        vendorCost: Double, cashPaid: Double, bankPaid: Double,
+    ) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "status" to "COMPLETED",
+            "vendorId" to vendorId,
+            "vendorName" to vendorName,
+            "vendorCost" to vendorCost,
+            "vendorCashPaid" to cashPaid,
+            "vendorBankPaid" to bankPaid,
+            "vendorSynced" to false,
+            "vendorSyncError" to "",
+        )).get(); Unit
+    }
+
+    override suspend fun markVendorSynced(id: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("vendorSynced" to true, "vendorSyncError" to "")).get(); Unit
+    }
+
+    override suspend fun markVendorSyncFailed(id: String, error: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("vendorSynced" to false, "vendorSyncError" to error.take(500))).get(); Unit
+    }
+
+    override suspend fun getCompletedUnsyncedVendorOrders(hotelId: String): List<Order> = withContext(Dispatchers.IO) {
+        // Re-running settle is safe — deterministic sourceIds make Humble Ledger dedupe.
+        col.whereEqualTo("hotelId", hotelId)
+            .whereEqualTo("vendorSynced", false)
+            .get().get().documents.mapNotNull { it.toOrder() }
+            .filter { it.status == "COMPLETED" && it.vendorId.isNotBlank() }
+    }
+
     override fun listenByHotel(hotelId: String): Flow<List<Order>> = callbackFlow {
         val registration = col.whereEqualTo("hotelId", hotelId)
             .addSnapshotListener { snapshot, error ->
@@ -126,6 +167,13 @@ object FirestoreOrderRepository : OrderRepository {
             createdAt = getTimestamp("createdAt")?.toDate() ?: getTimestamp("orderedAt")?.toDate() ?: Date(),
             assignedTo = getString("assignedTo") ?: "",
             assignedToName = getString("assignedToName") ?: "",
+            vendorId = getString("vendorId") ?: "",
+            vendorName = getString("vendorName") ?: "",
+            vendorCost = getDouble("vendorCost") ?: 0.0,
+            vendorCashPaid = getDouble("vendorCashPaid") ?: 0.0,
+            vendorBankPaid = getDouble("vendorBankPaid") ?: 0.0,
+            vendorSynced = getBoolean("vendorSynced") ?: false,
+            vendorSyncError = getString("vendorSyncError") ?: "",
         )
     }.getOrNull()
 
@@ -172,6 +220,13 @@ object FirestoreOrderRepository : OrderRepository {
         "createdAt" to createdAt,
         "assignedTo" to assignedTo,
         "assignedToName" to assignedToName,
+        "vendorId" to vendorId,
+        "vendorName" to vendorName,
+        "vendorCost" to vendorCost,
+        "vendorCashPaid" to vendorCashPaid,
+        "vendorBankPaid" to vendorBankPaid,
+        "vendorSynced" to vendorSynced,
+        "vendorSyncError" to vendorSyncError,
     )
 
     private fun OrderItem.toMap() = mapOf(

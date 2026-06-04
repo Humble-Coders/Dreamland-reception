@@ -66,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.orders.AssignStaffDialog
 import com.example.dreamland_reception.orders.CreateOrderDialog
+import com.example.dreamland_reception.orders.MarkOrderDoneDialog
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -80,6 +81,7 @@ fun OrdersScreen(
     val screenState by vm.screenState.collectAsStateWithLifecycle()
     val createDialog by vm.createOrderDialog.collectAsStateWithLifecycle()
     val assignDialog by vm.assignStaffDialog.collectAsStateWithLifecycle()
+    val vendors by vm.vendors.collectAsStateWithLifecycle()
 
     // Pre-select order when navigated from stays screen
     LaunchedEffect(initialOrderId) {
@@ -207,30 +209,24 @@ fun OrdersScreen(
         }
     }
 
-    // ── Mark Done confirmation ─────────────────────────────────────────────────
+    // ── Mark Done — vendor & payment ───────────────────────────────────────────
     confirmMarkDoneId?.let { orderId ->
         val order = screenState.orders.find { it.id == orderId }
         if (order != null) {
-            AlertDialog(
-                onDismissRequest = { confirmMarkDoneId = null },
-                containerColor = DreamlandForestElevated,
-                title = { Text("Mark Order Done?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Room ${order.roomNumber}  ·  ${order.guestName}", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        order.items.forEach { item -> Text("• ${item.name} ×${item.quantity}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall) }
-                    }
+            MarkOrderDoneDialog(
+                order = order,
+                vendors = vendors,
+                onAddVendor = { name, phone, onCreated -> vm.addVendor(name, phone, onCreated = onCreated) },
+                onLoadBalance = { externalId -> vm.vendorBalance(externalId) },
+                onConfirm = { vendor, cost, cash, bank ->
+                    confirmMarkDoneId = null
+                    vm.markOrderDoneWithVendor(orderId, vendor.id, vendor.name, cost, cash, bank)
                 },
-                confirmButton = {
-                    Button(
-                        onClick = { confirmMarkDoneId = null; vm.updateStatus(orderId, "COMPLETED") },
-                        enabled = false,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                        shape = RoundedCornerShape(8.dp),
-                    ) { Text("Mark Done", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }
-                },
-                dismissButton = { TextButton(onClick = { confirmMarkDoneId = null }, enabled = false) { Text("Cancel", color = DreamlandMuted) } },
+                onSkip = { confirmMarkDoneId = null; vm.markOrderDoneInHouse(orderId) },
+                onDismiss = { confirmMarkDoneId = null },
             )
+        } else {
+            confirmMarkDoneId = null
         }
     }
 

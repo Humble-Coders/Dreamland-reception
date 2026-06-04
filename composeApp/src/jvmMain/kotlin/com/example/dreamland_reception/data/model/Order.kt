@@ -34,4 +34,16 @@ data class Order(
     val createdAt: Date = Date(),
     val assignedTo: String = "",
     val assignedToName: String = "",
+    // ── Vendor / accounting (food bought from an outside supplier) ──────────────
+    // Captured on "Mark Done". vendorId blank = in-house (no vendor accounting).
+    // vendorCost = what the vendor charged; cash+bank = what we paid them now (may
+    // be less than cost = pay later, or more = overpay/prepay). Synced to Humble
+    // Ledger durably; vendorSynced flips true once the purchase + payments post.
+    val vendorId: String = "",
+    val vendorName: String = "",
+    val vendorCost: Double = 0.0,
+    val vendorCashPaid: Double = 0.0,
+    val vendorBankPaid: Double = 0.0,
+    val vendorSynced: Boolean = false,
+    val vendorSyncError: String = "",
 )

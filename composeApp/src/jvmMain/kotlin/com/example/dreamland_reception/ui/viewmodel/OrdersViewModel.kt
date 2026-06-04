@@ -3,20 +3,25 @@ package com.example.dreamland_reception.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.data.accounting.AccountingRepository
+import com.example.dreamland_reception.data.accounting.VendorBalanceInfo
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.OrderItem
 import com.example.dreamland_reception.data.model.StaffMember
 import com.example.dreamland_reception.data.model.Stay
+import com.example.dreamland_reception.data.model.Vendor
 import com.example.dreamland_reception.data.repository.FirestoreFoodItemRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
 import com.example.dreamland_reception.data.repository.FirestoreServiceRepository
 import com.example.dreamland_reception.data.repository.FirestoreStaffRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.data.repository.FirestoreVendorRepository
 import com.example.dreamland_reception.data.repository.FoodItemRepository
 import com.example.dreamland_reception.data.repository.OrderRepository
 import com.example.dreamland_reception.data.repository.ServiceRepository
 import com.example.dreamland_reception.data.repository.StaffRepository
 import com.example.dreamland_reception.data.repository.StayRepository
+import com.example.dreamland_reception.data.repository.VendorRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -122,6 +127,8 @@ class OrdersViewModel(
     private val stayRepo: StayRepository = FirestoreStayRepository,
     private val foodItemRepo: FoodItemRepository = FirestoreFoodItemRepository,
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
+    private val vendorRepo: VendorRepository = FirestoreVendorRepository,
+    private val accountingRepo: AccountingRepository = AccountingRepository,
 ) : ViewModel() {
 
     private val _screenState = MutableStateFlow(OrdersScreenState(isLoading = true))
@@ -133,6 +140,10 @@ class OrdersViewModel(
     private val _assignStaffDialog = MutableStateFlow(AssignStaffDialogState())
     val assignStaffDialog: StateFlow<AssignStaffDialogState> = _assignStaffDialog.asStateFlow()
 
+    // Vendors for the "Mark Done" dropdown (separate `vendors` collection).
+    private val _vendors = MutableStateFlow<List<Vendor>>(emptyList())
+    val vendors: StateFlow<List<Vendor>> = _vendors.asStateFlow()
+
     // Backward-compat sealed state
     private val _uiState = MutableStateFlow<OrdersUiState>(OrdersUiState.Loading)
     val uiState: StateFlow<OrdersUiState> = _uiState.asStateFlow()
@@ -140,7 +151,13 @@ class OrdersViewModel(
     private var listenerJob: Job? = null
     private var previousOrderIds: Set<String> = emptySet()
 
-    init { startListener() }
+    init {
+        startListener()
+        loadVendors()
+        // Recover any completed-but-unsynced vendor orders (e.g. a sync that failed
+        // or the app closed before it finished). Safe — sourceIds are deterministic.
+        viewModelScope.launch { retryUnsyncedVendorOrders() }
+    }
 
     // ── Real-time listener ────────────────────────────────────────────────────
 
@@ -210,6 +227,83 @@ class OrdersViewModel(
                 .onSuccess { _screenState.update { it.copy(selectedOrderId = null, error = null) } }
                 .onFailure { e -> _screenState.update { it.copy(error = e.message ?: "Failed to delete order") } }
         }
+    }
+
+    // ── Mark Done + vendor ──────────────────────────────────────────────────────
+
+    /** Loads the vendor list for the "Mark Done" dropdown. */
+    fun loadVendors() {
+        val hotelId = AppContext.hotelId
+        if (hotelId.isBlank()) return
+        viewModelScope.launch {
+            runCatching { vendorRepo.listByHotel(hotelId) }.onSuccess { _vendors.value = it }
+        }
+    }
+
+    /** Creates a new vendor in the `vendors` collection and selects it via [onCreated]. */
+    fun addVendor(name: String, phone: String = "", email: String = "", onCreated: (Vendor) -> Unit) {
+        val hotelId = AppContext.hotelId
+        val trimmed = name.trim()
+        if (hotelId.isBlank() || trimmed.isBlank()) return
+        viewModelScope.launch {
+            runCatching {
+                val v = Vendor(hotelId = hotelId, name = trimmed, phone = phone.trim(), email = email.trim())
+                v.copy(id = vendorRepo.add(v))
+            }.onSuccess { created ->
+                _vendors.update { list -> (list + created).sortedBy { it.name.lowercase() } }
+                onCreated(created)
+            }.onFailure { e -> _screenState.update { it.copy(error = e.message ?: "Failed to add vendor") } }
+        }
+    }
+
+    /** The selected vendor's current Humble Ledger balance (for the dialog). */
+    suspend fun vendorBalance(externalId: String): VendorBalanceInfo? =
+        accountingRepo.fetchVendorBalance(externalId)
+
+    /** In-house food (Skip) — completes the order with no vendor accounting. */
+    fun markOrderDoneInHouse(orderId: String) {
+        updateStatus(orderId, "COMPLETED")
+    }
+
+    /**
+     * Completes the order, records the vendor + payment split, then posts the vendor
+     * side to Humble Ledger durably (persists success/failure for retry).
+     */
+    fun markOrderDoneWithVendor(
+        orderId: String, vendorId: String, vendorName: String,
+        cost: Double, cashPaid: Double, bankPaid: Double,
+    ) {
+        viewModelScope.launch {
+            val order = _screenState.value.orders.find { it.id == orderId }
+            runCatching {
+                orderRepo.markCompletedWithVendor(orderId, vendorId, vendorName, cost, cashPaid, bankPaid)
+            }.onSuccess {
+                if (order?.assignedTo?.isNotBlank() == true) {
+                    runCatching { staffRepo.setAvailability(order.assignedTo, true) }
+                }
+                val snapshot = (order ?: Order(id = orderId)).copy(
+                    id = orderId, status = "COMPLETED",
+                    vendorId = vendorId, vendorName = vendorName,
+                    vendorCost = cost, vendorCashPaid = cashPaid, vendorBankPaid = bankPaid,
+                )
+                syncOrderVendor(snapshot)
+            }.onFailure { e -> _screenState.update { it.copy(error = e.message ?: "Failed to mark order done") } }
+        }
+    }
+
+    /** Posts an order's vendor accounting to Humble Ledger and persists the outcome. */
+    private suspend fun syncOrderVendor(order: Order) {
+        accountingRepo.settleOrderVendor(order)
+            .onSuccess { posted -> if (posted) runCatching { orderRepo.markVendorSynced(order.id) } }
+            .onFailure { e -> runCatching { orderRepo.markVendorSyncFailed(order.id, e.message ?: "vendor sync failed") } }
+    }
+
+    /** Re-posts any completed orders whose vendor accounting never landed. Idempotent. */
+    private suspend fun retryUnsyncedVendorOrders() {
+        val hotelId = AppContext.hotelId
+        if (hotelId.isBlank()) return
+        val pending = runCatching { orderRepo.getCompletedUnsyncedVendorOrders(hotelId) }.getOrElse { emptyList() }
+        for (o in pending) syncOrderVendor(o)
     }
 
     // ── Create Order dialog ───────────────────────────────────────────────────
