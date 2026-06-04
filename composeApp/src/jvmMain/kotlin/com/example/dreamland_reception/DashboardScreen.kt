@@ -2,11 +2,6 @@
 
 package com.example.dreamland_reception
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +33,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.Hotel
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -45,7 +41,6 @@ import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
-import androidx.compose.material.icons.automirrored.filled.TrendingFlat
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -110,17 +105,9 @@ fun DashboardScreen(
     onRoomClick: (String) -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
-    var showDatePicker by remember { mutableStateOf(false) }
     var showCheckAvailability by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
-        DashboardHeader(
-            state = state,
-            onDateChipClick = { showDatePicker = true },
-            onNewWalkIn = onNewWalkIn,
-            onAddBooking = onAddBooking,
-        )
-
         // Error banner
         if (state.error != null) {
             Surface(color = Color(0xFFB71C1C).copy(alpha = 0.9f), modifier = Modifier.fillMaxWidth()) {
@@ -189,6 +176,7 @@ fun DashboardScreen(
                     CheckAvailabilityCard()
                     QuickActionsCard(
                         onNewWalkIn = onNewWalkIn,
+                        onAddBooking = onAddBooking,
                         onNavigateToOrders = onNavigateToOrders,
                         onNavigateToComplaints = onNavigateToComplaints,
                         onNavigateToStaff = onNavigateToStaff,
@@ -198,130 +186,10 @@ fun DashboardScreen(
             }
     }
 
-    if (showDatePicker) {
-        DashboardDatePickerDialog(
-            currentDate = state.selectedDate,
-            onSelect = { date -> vm.onDateSelected(date); showDatePicker = false },
-            onDismiss = { showDatePicker = false },
-        )
-    }
     if (showCheckAvailability) {
         com.example.dreamland_reception.stays.CheckAvailabilityDialog(
             onDismiss = { showCheckAvailability = false },
         )
-    }
-}
-
-// ── Header ────────────────────────────────────────────────────────────────────
-
-@Composable
-private fun DashboardHeader(
-    state: DashboardState,
-    onDateChipClick: () -> Unit,
-    onNewWalkIn: () -> Unit,
-    onAddBooking: () -> Unit,
-) {
-    val dateFmt = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
-    Surface(
-        color = DreamlandForestSurface,
-        shadowElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth().border(1.dp, DreamlandGold.copy(alpha = 0.18f)),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .padding(horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            // Title area
-            Column {
-                Text(
-                    text = "OPERATIONS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = DreamlandGold,
-                    letterSpacing = 2.sp,
-                )
-                Text(
-                    text = "Dashboard",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = DreamlandOnDark,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                // LIVE badge
-                if (state.isToday) {
-                    LiveDot()
-                }
-
-                // Date chip
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(DreamlandForestElevated)
-                        .border(1.dp, DreamlandGold.copy(alpha = 0.4f), RoundedCornerShape(20.dp))
-                        .clickable(onClick = onDateChipClick)
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.AutoMirrored.Filled.TrendingFlat, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(14.dp))
-                        Text(
-                            text = if (state.isToday) "Today, ${dateFmt.format(state.selectedDate)}"
-                                   else dateFmt.format(state.selectedDate),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = DreamlandOnDark,
-                        )
-                    }
-                }
-
-                // Walk-in button
-                Button(
-                    onClick = onNewWalkIn,
-                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.height(36.dp),
-                ) {
-                    Icon(Icons.Filled.PersonAdd, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Walk-in", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                }
-
-                // Add Booking button — same action as on the Rooms & Bookings screen.
-                OutlinedButton(
-                    onClick = onAddBooking,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.height(36.dp),
-                ) {
-                    Text("+ Add Booking", color = DreamlandGold, style = MaterialTheme.typography.labelLarge)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LiveDot() {
-    val infiniteTransition = rememberInfiniteTransition(label = "live_pulse")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900, easing = LinearEasing), RepeatMode.Reverse),
-        label = "live_alpha",
-    )
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF2ECC71).copy(alpha = alpha)),
-        )
-        Text("LIVE", style = MaterialTheme.typography.labelSmall, color = Color(0xFF2ECC71), letterSpacing = 1.sp)
     }
 }
 
@@ -1091,6 +959,7 @@ private fun DashboardBarChart(
 @Composable
 private fun QuickActionsCard(
     onNewWalkIn: () -> Unit,
+    onAddBooking: () -> Unit,
     onNavigateToOrders: () -> Unit,
     onNavigateToComplaints: () -> Unit,
     onNavigateToStaff: () -> Unit,
@@ -1115,6 +984,7 @@ private fun QuickActionsCard(
                 Text("Check Availability", style = MaterialTheme.typography.bodySmall, color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
             }
             QuickActionButton(Icons.Filled.PersonAdd, "Walk-in Check-in", onNewWalkIn)
+            QuickActionButton(Icons.Filled.EventAvailable, "Add Booking", onAddBooking)
             QuickActionButton(Icons.Filled.ShoppingBag, "View Orders", onNavigateToOrders)
             QuickActionButton(Icons.Filled.Feedback, "View Complaints", onNavigateToComplaints)
             QuickActionButton(Icons.Filled.Groups, "Staff Management", onNavigateToStaff)
@@ -1134,51 +1004,6 @@ private fun QuickActionButton(icon: ImageVector, label: String, onClick: () -> U
         Icon(icon, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(8.dp))
         Text(label, style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
-    }
-}
-
-// ── Date picker dialog ────────────────────────────────────────────────────────
-
-@Composable
-private fun DashboardDatePickerDialog(
-    currentDate: Date,
-    onSelect: (Date) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val cal = Calendar.getInstance().apply { time = currentDate }
-    var year by remember { mutableStateOf(cal.get(Calendar.YEAR)) }
-    var month by remember { mutableStateOf(cal.get(Calendar.MONTH) + 1) }
-    var day by remember { mutableStateOf(cal.get(Calendar.DAY_OF_MONTH)) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text("Select Date", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark)
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    DashboardNumberSpinner("Day", day, 1, 31) { day = it }
-                    DashboardNumberSpinner("Month", month, 1, 12) { month = it }
-                    DashboardNumberSpinner("Year", year, 2020, 2030) { year = it }
-                }
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                    TextButton(onClick = onDismiss) { Text("Cancel", color = DreamlandMuted) }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = { onSelect(dateFromPicker(year, month - 1, day)) },
-                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                    ) {
-                        Text("Set", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
-        }
     }
 }
 
