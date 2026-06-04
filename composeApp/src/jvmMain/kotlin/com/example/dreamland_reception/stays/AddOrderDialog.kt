@@ -10,14 +10,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -27,6 +34,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -152,85 +161,71 @@ fun AddOrderDialog(
                     val dropdownSuggestions = if (item.name.isBlank()) state.catalogItems
                         else state.catalogItems.filter { it.name.contains(item.name, ignoreCase = true) }
 
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
-                        shape = RoundedCornerShape(10.dp),
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text("Item ${index + 1}", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted)
-                                if (state.items.size > 1) {
-                                    TextButton(onClick = { vm.removeOrderItem(index) }) {
-                                        Text("Remove", color = Color(0xFFEF5350), style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-                            }
-
-                            Spacer(Modifier.height(6.dp))
-
-                            // Searchable dropdown for item name — shows all items, filtered by typed text
-                            AutocompleteItemField(
-                                value = item.name,
-                                suggestions = dropdownSuggestions,
-                                showSuggestions = itemFieldFocused,
-                                onValueChange = { vm.onAddOrderItemName(index, it) },
-                                onSuggestionSelected = { vm.selectOrderItemSuggestion(index, it); itemFieldFocused = false },
-                                onDismiss = { itemFieldFocused = false },
-                                modifier = Modifier.fillMaxWidth().onFocusChanged { itemFieldFocused = it.isFocused },
-                                allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
-                                onToggleItemAvailability = { catalogItem ->
-                                    if (catalogItem.category == "Services") {
-                                        settingsVm.toggleService(catalogItem.id, true)
-                                    } else {
-                                        settingsVm.toggleFoodItem(catalogItem.id, true)
-                                    }
-                                    vm.refreshAddOrderCatalog()
-                                },
-                            )
-
-                            Spacer(Modifier.height(8.dp))
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Qty", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted)
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                                            .background(DreamlandForestSurface),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        TextButton(onClick = { vm.onAddOrderItemQty(index, item.quantity - 1) }) {
-                                            Text("-", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        }
-                                        Text("${item.quantity}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-                                        TextButton(onClick = { vm.onAddOrderItemQty(index, item.quantity + 1) }) {
-                                            Text("+", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        }
-                                    }
-                                }
-                                DreamlandTextField(
-                                    modifier = Modifier.weight(1f),
-                                    value = item.price,
-                                    onValueChange = { vm.onAddOrderItemPrice(index, it) },
-                                    label = "Price (₹)",
-                                    keyboardType = KeyboardType.Number,
-                                )
+                        // Searchable item name (all items shown on focus, filters as you type)
+                        AutocompleteItemField(
+                            value = item.name,
+                            suggestions = dropdownSuggestions,
+                            showSuggestions = itemFieldFocused,
+                            onValueChange = { vm.onAddOrderItemName(index, it) },
+                            onSuggestionSelected = { vm.selectOrderItemSuggestion(index, it); itemFieldFocused = false },
+                            onDismiss = { itemFieldFocused = false },
+                            modifier = Modifier.weight(1f).onFocusChanged { itemFieldFocused = it.isFocused },
+                            allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
+                            onToggleItemAvailability = { catalogItem ->
+                                if (catalogItem.category == "Services") settingsVm.toggleService(catalogItem.id, true)
+                                else settingsVm.toggleFoodItem(catalogItem.id, true)
+                                vm.refreshAddOrderCatalog()
+                            },
+                        )
+                        // Qty stepper (compact)
+                        Row(
+                            modifier = Modifier
+                                .width(112.dp)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(8.dp)),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                Modifier.width(36.dp).fillMaxHeight().clickable { vm.onAddOrderItemQty(index, item.quantity - 1) },
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Remove, contentDescription = "Decrease", tint = DreamlandGold, modifier = Modifier.size(16.dp)) }
+                            Text("${item.quantity}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                            Box(
+                                Modifier.width(36.dp).fillMaxHeight().clickable { vm.onAddOrderItemQty(index, item.quantity + 1) },
+                                contentAlignment = Alignment.Center,
+                            ) { Icon(Icons.Filled.Add, contentDescription = "Increase", tint = DreamlandGold, modifier = Modifier.size(16.dp)) }
+                        }
+                        // Price
+                        DreamlandTextField(
+                            modifier = Modifier.width(116.dp),
+                            value = item.price,
+                            onValueChange = { vm.onAddOrderItemPrice(index, it) },
+                            label = "Price (₹)",
+                            keyboardType = KeyboardType.Number,
+                        )
+                        // Remove (fixed 36dp slot keeps every row aligned)
+                        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                            if (state.items.size > 1) {
+                                Box(
+                                    Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).clickable { vm.removeOrderItem(index) },
+                                    contentAlignment = Alignment.Center,
+                                ) { Icon(Icons.Filled.Delete, contentDescription = "Remove", tint = Color(0xFFEF5350).copy(alpha = 0.85f), modifier = Modifier.size(18.dp)) }
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                 }
 
-                TextButton(onClick = { vm.addOrderItem() }) {
-                    Text("+ Add Item", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { vm.addOrderItem() }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)) {
+                    Icon(Icons.Filled.Add, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Add Item", color = DreamlandGold, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 }
 
                 // ── Total preview ──────────────────────────────────────────
