@@ -141,12 +141,12 @@ private data class NavItem(
 
 private val dreamlandNavItems: List<NavItem> = listOf(
     NavItem(MainTab.Dashboard, Icons.Filled.Dashboard, "Dashboard"),
-    NavItem(MainTab.RoomsAndBookings, Icons.Filled.Hotel, "Rooms & Bookings"),
+    NavItem(MainTab.RoomsAndBookings, Icons.Filled.Hotel, "Bookings"),
     NavItem(MainTab.Stays, Icons.Filled.Key, "Stays"),
     NavItem(MainTab.Billing, Icons.Filled.CreditCard, "Billing"),
     NavItem(MainTab.Orders, Icons.Filled.ShoppingBag, "Orders"),
-    NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"),
-    NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"),
+    /* HIDDEN: NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"), */
+    /* HIDDEN: NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"), */
     NavItem(MainTab.Reports, Icons.Filled.Person, "Users"),
     NavItem(MainTab.Logs, Icons.Filled.History, "Logs"),
     NavItem(MainTab.Settings, Icons.Filled.Settings, "Settings"),

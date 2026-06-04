@@ -152,12 +152,6 @@ fun DashboardScreen(
                         onRoomClick = onRoomClick,
                     )
                     TodayBookingsCard(bookings = state.todayBookings)
-                    AlertsSection(
-                        alerts = state.alerts,
-                        onOrdersClick = onNavigateToOrders,
-                        onComplaintsClick = onNavigateToComplaints,
-                    )
-                    ActiveStaysSection(stays = state.activeStays)
                 }
 
                 // ── Divider ───────────────────────────────────────────────────

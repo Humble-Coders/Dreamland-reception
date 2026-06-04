@@ -167,7 +167,7 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
                 )
             },
         ) {
-            listOf("Billing", "Orders", "Complaints").forEachIndexed { index, label ->
+            listOf("Billing", "Orders" /*, "Complaints" HIDDEN */).forEachIndexed { index, label ->
                 Tab(
                     selected = selectedTab == index,
                     onClick = { selectedTab = index },
@@ -192,7 +192,7 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
             when (selectedTab) {
                 0 -> BillingTab(detailState.bill)
                 1 -> OrdersTab(detailState.orders, vm, stay.status == "ACTIVE", onNavigateToOrder)
-                2 -> ComplaintsTab(detailState.complaints, vm, stay.status == "ACTIVE")
+                /* 2 -> ComplaintsTab(detailState.complaints, vm, stay.status == "ACTIVE") HIDDEN */
             }
         }
     }
@@ -416,7 +416,10 @@ private fun BillRow(label: String, amount: Double) {
 
 @Composable
 private fun OrdersTab(orders: List<Order>, vm: StaysViewModel, canAdd: Boolean, onNavigateToOrder: (String) -> Unit = {}) {
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 100.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (canAdd) {
             item {
                 androidx.compose.material3.OutlinedButton(
