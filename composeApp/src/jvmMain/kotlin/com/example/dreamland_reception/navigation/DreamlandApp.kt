@@ -325,7 +325,8 @@ fun DreamlandApp() {
         }
 
         // Launch-time desk lock — blocks the whole app until a manager signs in.
-        ShiftLockGate()
+        // Disabled for now (manager selection on open is not required).
+        // ShiftLockGate()
     }
 }
 
