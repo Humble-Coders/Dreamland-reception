@@ -96,12 +96,11 @@ object HumbleBillEngine {
             }
         }
         return InvoiceData(
-            // Prefer the authoritative Humble Ledger invoice number (e.g. INV-000044)
-            // so the printed bill reconciles 1:1 with the accounting ledger. Falls
-            // back to the Firestore bill id until the ledger sync has completed.
-            invoiceNumber = bill.ledgerInvoiceNumber
-                .ifBlank { bill.id }
-                .ifBlank { "DL-${System.currentTimeMillis()}" },
+            // STRICT: always the authoritative Humble Ledger invoice number (e.g.
+            // INV-000044) so the printed bill reconciles 1:1 with the accounting ledger.
+            // The caller (generateInvoicePdf) guarantees this is populated before
+            // rendering, so we never fall back to the opaque Firestore bill id.
+            invoiceNumber = bill.ledgerInvoiceNumber,
             issueDate = apiDateFmt.format(Date()),
             dueDate = bill.checkOutDate?.let { apiDateFmt.format(it) },
             description = if (roomLabel.isNotBlank()) "Stay — Room $roomLabel" else "Hotel Stay",
