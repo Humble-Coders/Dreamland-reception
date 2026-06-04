@@ -83,6 +83,9 @@ object DreamlandAppInitializer {
     @Volatile
     private var availabilityVm: AvailabilityViewModel? = null
 
+    @Volatile
+    private var logsVm: com.example.dreamland_reception.ui.viewmodel.LogsViewModel? = null
+
     /** @param serviceAccountJsonPath Optional path to service account JSON (see `claude.md`). */
     fun initialize(serviceAccountJsonPath: String? = null) {
         FirebaseManager.initialize(serviceAccountJsonPath)
@@ -134,6 +137,7 @@ object DreamlandAppInitializer {
         getStaffViewModel().loadActive()
         getUsersViewModel().loadAll()
         getSettingsViewModel().refresh()
+        getLogsViewModel().load()
     }
 
     fun getDashboardViewModel(): DashboardViewModel =
@@ -199,5 +203,10 @@ object DreamlandAppInitializer {
     fun getAvailabilityViewModel(): AvailabilityViewModel =
         availabilityVm ?: synchronized(this) {
             availabilityVm ?: AvailabilityViewModel().also { availabilityVm = it }
+        }
+
+    fun getLogsViewModel(): com.example.dreamland_reception.ui.viewmodel.LogsViewModel =
+        logsVm ?: synchronized(this) {
+            logsVm ?: com.example.dreamland_reception.ui.viewmodel.LogsViewModel().also { logsVm = it }
         }
 }

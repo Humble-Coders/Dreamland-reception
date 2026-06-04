@@ -1682,11 +1682,11 @@ class StaysViewModel(
                         assignment.guestIndices.filter { it != primaryIdx }.sorted()
                     val guestRecords = orderedIndices.mapNotNull { idx ->
                         ws.guestEntries.getOrNull(idx)?.let { e ->
-                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), address = e.address, dob = e.dob, age = e.age ?: 0, grcNumber = ws.grc.numbers[idx] ?: "")
+                            GuestRecord(name = e.name.trim(), phone = e.phone.trim(), idProofVerified = e.idProofVerified, gender = e.gender, idType = e.idType, govIdNumber = e.govIdNumber, govIdPictures = listOfNotNull(e.govIdPicture1.ifBlank { null }, e.govIdPicture2.ifBlank { null }), purpose = e.purpose, address = e.address, dob = e.dob, age = e.age ?: 0, grcNumber = ws.grc.numbers[idx] ?: "")
                         }
                     }.ifEmpty {
                         ws.guestEntries.take(1).map { e ->
-                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().ifBlank { primaryPhone }, idProofVerified = e.idProofVerified, grcNumber = ws.grc.numbers[0] ?: "")
+                            GuestRecord(name = e.name.trim().ifBlank { primaryName }, phone = e.phone.trim().ifBlank { primaryPhone }, idProofVerified = e.idProofVerified, idType = e.idType, purpose = e.purpose, grcNumber = ws.grc.numbers[0] ?: "")
                         }
                     }
                     val primaryGuest = guestRecords.firstOrNull() ?: GuestRecord()

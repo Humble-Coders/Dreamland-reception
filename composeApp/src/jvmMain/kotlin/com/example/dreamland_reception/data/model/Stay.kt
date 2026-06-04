@@ -7,8 +7,10 @@ data class GuestRecord(
     val phone: String = "",
     val idProofVerified: Boolean = false,
     val gender: String = "",
+    val idType: String = "",                         // e.g. Aadhaar | PAN | Passport | Driving Licence | Voter ID
     val govIdNumber: String = "",
     val govIdPictures: List<String> = emptyList(),   // URLs of the scanned ID images
+    val purpose: String = "",                        // purpose of visit
     val address: String = "",
     val dob: String = "",
     val age: Int = 0,

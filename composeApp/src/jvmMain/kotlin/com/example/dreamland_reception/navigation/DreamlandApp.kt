@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Hotel
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Menu
@@ -128,6 +129,7 @@ internal enum class MainTab(val label: String) {
     Complaints("Complaints"),
     Staff("Staff"),
     Reports("Users"),
+    Logs("Logs"),
     Settings("Settings"),
 }
 
@@ -146,6 +148,7 @@ private val dreamlandNavItems: List<NavItem> = listOf(
     NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"),
     NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"),
     NavItem(MainTab.Reports, Icons.Filled.Person, "Users"),
+    NavItem(MainTab.Logs, Icons.Filled.History, "Logs"),
     NavItem(MainTab.Settings, Icons.Filled.Settings, "Settings"),
 )
 
@@ -280,6 +283,7 @@ fun DreamlandApp() {
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()
                         MainTab.Reports -> UsersScreen()
+                        MainTab.Logs -> com.example.dreamland_reception.LogsScreen()
                         MainTab.Settings -> SettingsScreen()
                     }
                 }
