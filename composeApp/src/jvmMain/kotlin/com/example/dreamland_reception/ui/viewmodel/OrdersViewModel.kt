@@ -390,6 +390,7 @@ class OrdersViewModel(
                     roomInstanceId = stay.roomInstanceId,
                     roomNumber = stay.roomNumber,
                     guestName = stay.guestName,
+                    guestPhone = stay.guestPhone,
                     items = orderItems,
                     type = orderType,
                     subtotalAmount = orderItems.sumOf { it.subtotal },

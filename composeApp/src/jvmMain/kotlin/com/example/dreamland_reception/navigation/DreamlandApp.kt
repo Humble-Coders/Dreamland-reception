@@ -244,9 +244,9 @@ fun DreamlandApp() {
                             onNavigateToOrders = { selectedTab = MainTab.Orders },
                             onNavigateToComplaints = { selectedTab = MainTab.Complaints },
                             onNavigateToStaff = { selectedTab = MainTab.Staff },
-                            onRoomClick = { roomId ->
-                                DreamlandAppInitializer.getRoomsAndBookingsViewModel().selectRoom(roomId)
-                                selectedTab = MainTab.RoomsAndBookings
+                            onRoomClick = { stayId ->
+                                DreamlandAppInitializer.getStaysViewModel().selectStay(stayId)
+                                selectedTab = MainTab.Stays
                             },
                         )
                         MainTab.RoomsAndBookings -> RoomsAndBookingsScreen(

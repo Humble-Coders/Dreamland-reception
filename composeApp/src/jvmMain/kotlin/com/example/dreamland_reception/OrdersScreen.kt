@@ -15,13 +15,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -29,6 +34,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,98 +86,178 @@ fun OrdersScreen(
         if (initialOrderId.isNotBlank()) vm.selectOrder(initialOrderId)
     }
 
-    val selectedOrder = screenState.orders.find { it.id == screenState.selectedOrderId }
+    var confirmMarkDoneId by remember { mutableStateOf<String?>(null) }
+    var confirmDeleteId by remember { mutableStateOf<String?>(null) }
 
-    Row(Modifier.fillMaxSize()) {
-        // ── LEFT: list ────────────────────────────────────────────────────────
-        Column(Modifier.width(480.dp).fillMaxHeight().background(DreamlandForestSurface)) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column {
-                    Text("REQUESTS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
-                    Text("Orders", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
-                }
-                Button(
-                    onClick = { vm.openCreateOrder() },
-                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.height(34.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                ) {
-                    Text("+ New", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                }
+    val staysVm = DreamlandAppInitializer.getStaysViewModel()
+    val staysState by staysVm.listState.collectAsStateWithLifecycle()
+    val stayPhoneMap = staysState.stays.associate { it.id to it.guestPhone }
+
+    val tabColors = listOf(Color(0xFFFFC107), Color(0xFF4CAF50), DreamlandMuted)
+
+    Column(Modifier.fillMaxSize().background(DreamlandForest)) {
+        // ── Top bar ───────────────────────────────────────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.width(140.dp)) {
+                Text("REQUESTS", style = MaterialTheme.typography.labelSmall, color = DreamlandGold, letterSpacing = 2.sp)
+                Text("Orders", style = MaterialTheme.typography.titleLarge, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
             }
-            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-            // Filters
-            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(
-                    value = screenState.searchQuery,
-                    onValueChange = { vm.onSearch(it) },
-                    placeholder = { Text("Search guest, room, item…", color = DreamlandMuted, fontSize = 12.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
-                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                        cursorColor = DreamlandGold,
-                    ),
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterDropdown(
-                        label = "Room", selected = screenState.roomFilter,
-                        options = listOf("" to "All Rooms") + screenState.uniqueRooms.map { it to "Room $it" },
-                        onSelect = { vm.onRoomFilter(it) }, modifier = Modifier.weight(1f),
-                    )
-                    FilterDropdown(
-                        label = "Staff", selected = screenState.staffFilter,
-                        options = listOf("" to "All Staff") + screenState.uniqueStaff.map { it.first to it.second },
-                        onSelect = { vm.onStaffFilter(it) }, modifier = Modifier.weight(1f),
-                    )
-                }
-            }
-            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
-
-            // Tabs
-            val tabLabels = listOf("NEW" to screenState.newOrders.size, "ASSIGNED" to screenState.assignedOrders.size, "COMPLETED" to screenState.completedOrders.size)
-            val tabColors = listOf(Color(0xFFFFC107), Color(0xFF4CAF50), DreamlandMuted)
-            SecondaryTabRow(
-                selectedTabIndex = screenState.selectedTab,
-                containerColor = DreamlandForestSurface,
-                contentColor = DreamlandGold,
-                indicator = { TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(screenState.selectedTab), color = tabColors[screenState.selectedTab]) },
+            OutlinedTextField(
+                value = screenState.searchQuery,
+                onValueChange = { vm.onSearch(it) },
+                placeholder = { Text("Search guest, room, item…", color = DreamlandMuted, fontSize = 12.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                    cursorColor = DreamlandGold,
+                ),
+            )
+            FilterDropdown(
+                label = "Room", selected = screenState.roomFilter,
+                options = listOf("" to "All Rooms") + screenState.uniqueRooms.map { it to "Room $it" },
+                onSelect = { vm.onRoomFilter(it) }, modifier = Modifier.width(140.dp),
+            )
+            FilterDropdown(
+                label = "Staff", selected = screenState.staffFilter,
+                options = listOf("" to "All Staff") + screenState.uniqueStaff.map { it.first to it.second },
+                onSelect = { vm.onStaffFilter(it) }, modifier = Modifier.width(140.dp),
+            )
+            Button(
+                onClick = { vm.openCreateOrder() },
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.height(36.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp),
             ) {
-                tabLabels.forEachIndexed { i, (label, count) ->
-                    Tab(selected = screenState.selectedTab == i, onClick = { vm.onTabSelected(i) }, modifier = Modifier.padding(vertical = 2.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                            Text(label, color = if (screenState.selectedTab == i) tabColors[i] else DreamlandMuted, fontWeight = if (screenState.selectedTab == i) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.labelMedium)
-                            if (count > 0) {
-                                Box(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(tabColors[i].copy(alpha = 0.2f)).padding(horizontal = 5.dp, vertical = 1.dp)) {
-                                    Text("$count", color = tabColors[i], style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                }
+                Text("+ New", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+        }
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+
+        // ── Tabs (ASSIGNED removed from UI; vm tab 0=NEW, 2=COMPLETED) ──────────
+        val visibleTabs = listOf(0 to ("NEW" to screenState.newOrders.size), 2 to ("COMPLETED" to screenState.completedOrders.size))
+        val uiTabIndex = visibleTabs.indexOfFirst { it.first == screenState.selectedTab }.coerceAtLeast(0)
+        val uiTabColors = listOf(tabColors[0], tabColors[2])
+        SecondaryTabRow(
+            selectedTabIndex = uiTabIndex,
+            containerColor = DreamlandForestSurface,
+            contentColor = DreamlandGold,
+            indicator = { TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(uiTabIndex), color = uiTabColors[uiTabIndex]) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            visibleTabs.forEachIndexed { uiIdx, (vmIdx, labelCount) ->
+                val (label, count) = labelCount
+                val color = uiTabColors[uiIdx]
+                Tab(selected = uiTabIndex == uiIdx, onClick = { vm.onTabSelected(vmIdx) }) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 10.dp)) {
+                        Text(label, color = if (uiTabIndex == uiIdx) color else DreamlandMuted, fontWeight = if (uiTabIndex == uiIdx) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.labelMedium)
+                        if (count > 0) {
+                            Box(Modifier.clip(RoundedCornerShape(8.dp)).background(color.copy(alpha = 0.2f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                                Text("$count", color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
             }
-
-            // List
-            OrderListContent(screenState.isLoading, screenState.error, screenState.filtered, screenState.selectedOrderId, vm)
         }
 
-        VerticalDivider(color = DreamlandGold.copy(alpha = 0.15f), thickness = 1.dp)
+        // ── Table header ──────────────────────────────────────────────────────
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(Modifier.width(12.dp))
+            Text("ROOM", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(0.7f))
+            Text("GUEST", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(1.2f))
+            Text("PHONE", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(1.2f))
+            Text("ITEMS & PRICE", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(2.5f))
+            Text("TOTAL", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(0.9f))
+            Spacer(Modifier.weight(1.3f))
+        }
+        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.18f))
 
-        // ── RIGHT: detail ─────────────────────────────────────────────────────
-        Box(Modifier.weight(1f).fillMaxHeight().background(DreamlandForest)) {
-            if (selectedOrder != null) {
-                OrderDetailPanel(order = selectedOrder, vm = vm)
-            } else {
-                OrderDetailPlaceholder()
+        // ── Table content ─────────────────────────────────────────────────────
+        when {
+            screenState.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = DreamlandGold)
             }
+            screenState.error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                ErrorText(screenState.error!!)
+            }
+            screenState.filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("No orders", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
+            }
+            else -> LazyColumn(Modifier.fillMaxSize()) {
+                items(screenState.filtered, key = { it.id }) { order ->
+                    OrderTableRow(
+                        order = order,
+                        stayPhoneMap = stayPhoneMap,
+                        onMarkDone = { confirmMarkDoneId = order.id },
+                        onDelete = { confirmDeleteId = order.id },
+                    )
+                    HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f))
+                }
+            }
+        }
+    }
+
+    // ── Mark Done confirmation ─────────────────────────────────────────────────
+    confirmMarkDoneId?.let { orderId ->
+        val order = screenState.orders.find { it.id == orderId }
+        if (order != null) {
+            AlertDialog(
+                onDismissRequest = { confirmMarkDoneId = null },
+                containerColor = DreamlandForestElevated,
+                title = { Text("Mark Order Done?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Room ${order.roomNumber}  ·  ${order.guestName}", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        order.items.forEach { item -> Text("• ${item.name} ×${item.quantity}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { confirmMarkDoneId = null; vm.updateStatus(orderId, "COMPLETED") },
+                        enabled = false,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Mark Done", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }
+                },
+                dismissButton = { TextButton(onClick = { confirmMarkDoneId = null }, enabled = false) { Text("Cancel", color = DreamlandMuted) } },
+            )
+        }
+    }
+
+    // ── Delete confirmation ────────────────────────────────────────────────────
+    confirmDeleteId?.let { orderId ->
+        val order = screenState.orders.find { it.id == orderId }
+        if (order != null) {
+            AlertDialog(
+                onDismissRequest = { confirmDeleteId = null },
+                containerColor = DreamlandForestElevated,
+                title = { Text("Delete Order?", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("This permanently deletes the order.", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("Room ${order.roomNumber}  ·  ${order.guestName}", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        order.items.forEach { item -> Text("• ${item.name} ×${item.quantity}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { confirmDeleteId = null; vm.deleteOrder(orderId) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("Delete", color = Color.White, fontWeight = FontWeight.SemiBold) }
+                },
+                dismissButton = { TextButton(onClick = { confirmDeleteId = null }) { Text("Cancel", color = DreamlandMuted) } },
+            )
         }
     }
 
@@ -177,7 +265,118 @@ fun OrdersScreen(
     if (assignDialog.isOpen) AssignStaffDialog(state = assignDialog, vm = vm)
 }
 
-// ── Left panel: list ──────────────────────────────────────────────────────────
+// ── Table row ─────────────────────────────────────────────────────────────────
+
+@Composable
+private fun OrderTableRow(
+    order: Order,
+    stayPhoneMap: Map<String, String> = emptyMap(),
+    onMarkDone: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val statusColor = when (order.status) { "NEW" -> Color(0xFFFFC107); "ASSIGNED" -> Color(0xFF4CAF50); else -> DreamlandMuted }
+    val isDone = order.status == "COMPLETED"
+    val phone = stayPhoneMap[order.stayId]?.ifBlank { null } ?: order.guestPhone.ifBlank { "—" }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
+    ) {
+        // Status dot
+        Box(Modifier.padding(top = 4.dp)) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(statusColor))
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(
+            order.roomNumber.ifBlank { "—" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = DreamlandOnDark,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(0.7f),
+        )
+        Text(
+            order.guestName.ifBlank { "—" },
+            style = MaterialTheme.typography.bodyMedium,
+            color = DreamlandOnDark,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1.2f),
+        )
+        Text(
+            phone,
+            style = MaterialTheme.typography.bodySmall,
+            color = DreamlandMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1.2f).padding(top = 2.dp),
+        )
+        // Items + tax merged column — compact, prices right after names with fixed gap
+        Column(Modifier.weight(2.5f).padding(end = 40.dp)) {
+            order.items.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // Fixed-width name so all prices start at the same position
+                    Text(
+                        "${item.name} ×${item.quantity}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(160.dp),
+                    )
+                    Text(
+                        "₹${"%.2f".format(item.subtotal)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandOnDark,
+                    )
+                }
+                if (item.taxAmount > 0.005) {
+                    val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}%" else "${"%.1f".format(item.taxPercentage)}%"
+                    Row(Modifier.padding(start = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Tax $rateLabel", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f), modifier = Modifier.width(150.dp))
+                        Text("+₹${"%.2f".format(item.taxAmount)}", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f))
+                    }
+                }
+            }
+        }
+        // Total
+        Text(
+            if (order.totalAmount > 0) "₹${"%.2f".format(order.totalAmount)}" else "—",
+            style = MaterialTheme.typography.bodySmall,
+            color = DreamlandGold,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(0.9f).padding(top = 1.dp),
+        )
+        // Mark Done button
+        OutlinedButton(
+            onClick = onMarkDone,
+            enabled = !isDone,
+            modifier = Modifier.weight(0.8f).height(30.dp).padding(horizontal = 4.dp),
+            shape = RoundedCornerShape(6.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            border = BorderStroke(1.dp, if (isDone) DreamlandMuted.copy(alpha = 0.3f) else Color(0xFF4CAF50).copy(alpha = 0.7f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = Color(0xFF4CAF50),
+                disabledContentColor = DreamlandMuted.copy(alpha = 0.4f),
+            ),
+        ) {
+            Text(
+                if (isDone) "Done" else "Mark Done",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (isDone) DreamlandMuted.copy(alpha = 0.4f) else Color(0xFF4CAF50),
+            )
+        }
+        // Delete button
+        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFEF5350).copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+/* ── OLD two-panel composables (kept for reference, no longer rendered) ──────
 
 @Composable
 private fun OrderListContent(
@@ -438,6 +637,8 @@ private fun OrderDetailPlaceholder() {
         }
     }
 }
+
+── END OLD composables ───────────────────────────────────────────────────── */
 
 // ── Shared composables ────────────────────────────────────────────────────────
 

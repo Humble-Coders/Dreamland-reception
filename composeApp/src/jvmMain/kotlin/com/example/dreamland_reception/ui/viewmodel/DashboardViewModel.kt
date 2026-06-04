@@ -86,6 +86,7 @@ data class DashboardState(
     val pendingPaymentsCount: Int = 0,
     val pendingPaymentsAmount: Double = 0.0,
     val activeComplaintsCount: Int = 0,
+    val activeOrdersCount: Int = 0,
     // Room breakdown
     val roomStatus: RoomStatusBreakdown = RoomStatusBreakdown(),
     // Alerts & activity
@@ -326,6 +327,7 @@ class DashboardViewModel(
                 pendingPaymentsCount = pendingInvoices.size,
                 pendingPaymentsAmount = pendingInvoices.sumOf { it.pendingAmount },
                 activeComplaintsCount = complaints.count { it.status in listOf("NEW", "ASSIGNED") },
+                activeOrdersCount = orders.count { it.status == "NEW" || it.status == "ASSIGNED" },
                 roomStatus = roomStatus,
                 alerts = buildAlerts(orders, complaints, rooms, pendingInvoices),
                 activeStays = activeStayRows,

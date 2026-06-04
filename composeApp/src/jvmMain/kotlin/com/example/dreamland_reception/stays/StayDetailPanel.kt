@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -317,11 +319,15 @@ private fun BillingTab(bill: Bill?) {
 
     val roomCharges = bill.items.filter { it.type == "ROOM" }.sumOf { it.total }
     val serviceCharges = bill.items.filter { it.type == "SERVICE" }.sumOf { it.total }
-    val orderCharges = bill.items.filter { it.type == "ORDER" }.sumOf { it.total }
+    // orderCharges includes tax since order tax is shown inside the orders section, not separately
+    val orderCharges = bill.items.filter { it.type == "ORDER" }.sumOf { it.total * (1 + it.taxPercentage / 100.0) }
     val customCharges = bill.items.filter { it.type == "CUSTOM" }.sumOf { it.total }
     val amountPaid = bill.totalPaid + bill.advancePayment
 
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 100.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         item {
             Card(
                 colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
@@ -332,10 +338,31 @@ private fun BillingTab(bill: Bill?) {
                     HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
                     if (roomCharges > 0) BillRow("Room Charges", roomCharges)
                     if (serviceCharges > 0) BillRow("Service Charges", serviceCharges)
-                    if (orderCharges > 0) BillRow("Orders", orderCharges)
+                    val orderItems = bill.items.filter { it.type == "ORDER" }
+                    if (orderItems.isNotEmpty()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Orders", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                            Text("₹${"%.2f".format(orderCharges)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                        }
+                        orderItems.forEach { item ->
+                            Row(Modifier.fillMaxWidth().padding(start = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("· ${item.name}", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis, maxLines = 1)
+                                Text("₹${"%.2f".format(item.total)}", color = DreamlandMuted.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
+                            }
+                            val taxAmt = item.total * item.taxPercentage / 100.0
+                            if (taxAmt > 0.005) {
+                                val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}" else "%.1f".format(item.taxPercentage)
+                                Row(Modifier.fillMaxWidth().padding(start = 22.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Tax ($rateLabel%)", color = DreamlandMuted.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall)
+                                    Text("₹${"%.2f".format(taxAmt)}", color = DreamlandMuted.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
                     if (customCharges > 0) BillRow("Other", customCharges)
                     // Show per-rate tax rows (same logic as BillSummaryCard)
-                    val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
+                    // Exclude ORDER items from tax rows — their tax is already included in orderCharges
+                    val taxByRate = bill.items.filter { it.taxPercentage > 0 && it.type != "ORDER" }.groupBy { it.taxPercentage }
                     if (taxByRate.isNotEmpty()) {
                         taxByRate.forEach { (rate, items) ->
                             val rateAmt = items.sumOf { it.total * rate / 100.0 }

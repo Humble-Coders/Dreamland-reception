@@ -23,6 +23,7 @@ data class Order(
     val roomInstanceId: String = "",
     val roomNumber: String = "",
     val guestName: String = "",
+    val guestPhone: String = "",
     val items: List<OrderItem> = emptyList(),
     val type: String = "ORDER",      // ROOM_SERVICE | ORDER | SERVICE
     val subtotalAmount: Double = 0.0,   // Σ items[].subtotal (pre-tax)

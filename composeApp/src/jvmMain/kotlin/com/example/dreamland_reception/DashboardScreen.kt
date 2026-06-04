@@ -2,6 +2,10 @@
 
 package com.example.dreamland_reception
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -178,9 +182,7 @@ fun DashboardScreen(
                         onNewWalkIn = onNewWalkIn,
                         onAddBooking = onAddBooking,
                         onNavigateToOrders = onNavigateToOrders,
-                        onNavigateToComplaints = onNavigateToComplaints,
-                        onNavigateToStaff = onNavigateToStaff,
-                        onCheckAvailability = { showCheckAvailability = true },
+                        activeOrdersCount = state.activeOrdersCount,
                     )
                 }
             }
@@ -233,7 +235,7 @@ private fun RoomGridSection(
                                 isOccupied = stay != null,
                                 onSetCleaning = onSetCleaning,
                                 onSetAvailable = onSetAvailable,
-                                onClick = { onRoomClick(room.id) },
+                                onClick = { stay?.id?.let { onRoomClick(it) } },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -961,9 +963,7 @@ private fun QuickActionsCard(
     onNewWalkIn: () -> Unit,
     onAddBooking: () -> Unit,
     onNavigateToOrders: () -> Unit,
-    onNavigateToComplaints: () -> Unit,
-    onNavigateToStaff: () -> Unit,
-    onCheckAvailability: () -> Unit = {},
+    activeOrdersCount: Int = 0,
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -972,22 +972,19 @@ private fun QuickActionsCard(
         Column(Modifier.padding(16.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Quick Actions", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
-            // Prominent availability check button
+            // Prominent walk-in check-in button
             Button(
-                onClick = onCheckAvailability,
+                onClick = onNewWalkIn,
                 modifier = Modifier.fillMaxWidth().height(42.dp),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
             ) {
-                Icon(Icons.Filled.Hotel, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.PersonAdd, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Check Availability", style = MaterialTheme.typography.bodySmall, color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+                Text("Walk-in Check-in", style = MaterialTheme.typography.bodySmall, color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
             }
-            QuickActionButton(Icons.Filled.PersonAdd, "Walk-in Check-in", onNewWalkIn)
             QuickActionButton(Icons.Filled.EventAvailable, "Add Booking", onAddBooking)
-            QuickActionButton(Icons.Filled.ShoppingBag, "View Orders", onNavigateToOrders)
-            QuickActionButton(Icons.Filled.Feedback, "View Complaints", onNavigateToComplaints)
-            QuickActionButton(Icons.Filled.Groups, "Staff Management", onNavigateToStaff)
+            ActiveOrdersButton(activeOrdersCount = activeOrdersCount, onClick = onNavigateToOrders)
         }
     }
 }
@@ -1004,6 +1001,43 @@ private fun QuickActionButton(icon: ImageVector, label: String, onClick: () -> U
         Icon(icon, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(8.dp))
         Text(label, style = MaterialTheme.typography.bodySmall, color = DreamlandOnDark, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+    }
+}
+
+@Composable
+private fun ActiveOrdersButton(activeOrdersCount: Int, onClick: () -> Unit) {
+    val hasActive = activeOrdersCount > 0
+    val infiniteTransition = rememberInfiniteTransition(label = "ordersAlert")
+    val pulse by infiniteTransition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(700), repeatMode = RepeatMode.Reverse),
+        label = "pulse",
+    )
+    val alertRed = Color(0xFFEF5350)
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(40.dp),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            width = if (hasActive) 1.5.dp else 1.dp,
+            color = if (hasActive) alertRed.copy(alpha = 0.4f + pulse * 0.6f) else DreamlandGoldDeep.copy(alpha = 0.6f),
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (hasActive) alertRed.copy(alpha = pulse * 0.12f) else Color.Transparent,
+            contentColor = DreamlandOnDark,
+        ),
+    ) {
+        Icon(Icons.Filled.ShoppingBag, contentDescription = null, tint = if (hasActive) alertRed else DreamlandGold, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Text("View Orders", style = MaterialTheme.typography.bodySmall, color = if (hasActive) alertRed else DreamlandOnDark, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
+        if (hasActive) {
+            Box(
+                modifier = Modifier.size(20.dp).clip(CircleShape).background(alertRed),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(activeOrdersCount.toString(), style = MaterialTheme.typography.labelSmall, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
