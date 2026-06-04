@@ -1316,15 +1316,45 @@ class StayBillingViewModel(
         val effectiveTaxPct = if (bill.taxEnabled && bill.subtotal > 0)
             Math.round(bill.taxAmount / bill.subtotal * 10000.0) / 100.0
         else bill.taxPercentage
-        val billForInvoice = bill.copy(taxPercentage = effectiveTaxPct)
         _state.update { it.copy(invoicePdf = InvoicePdfState(show = true, isGenerating = true)) }
         viewModelScope.launch {
+            // The printed invoice number MUST be the Humble Ledger number (e.g. INV-000044),
+            // never the Firestore bill id. If we don't have it yet, settle (idempotent) to
+            // obtain it before rendering; if it still can't be resolved, fail rather than
+            // print a wrong number.
+            var invNo = bill.ledgerInvoiceNumber
+            var invId = bill.ledgerInvoiceId
+            if (invNo.isBlank()) {
+                val uid = resolveGuestUid(bill.guestName, guestPhone)
+                accountingRepo.settle(bill, guestPhone, uid).onSuccess { r ->
+                    if (r.invoiceNumber.isNotBlank()) {
+                        invNo = r.invoiceNumber
+                        invId = r.invoiceId
+                        runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
+                        _state.update { s ->
+                            s.copy(bill = s.bill?.takeIf { it.id == bill.id }?.copy(
+                                ledgerSynced = true, ledgerInvoiceId = r.invoiceId, ledgerInvoiceNumber = r.invoiceNumber,
+                            ) ?: s.bill)
+                        }
+                    }
+                }
+            }
+            if (invNo.isBlank()) {
+                _state.update { it.copy(invoicePdf = it.invoicePdf.copy(
+                    isGenerating = false,
+                    error = "Invoice number not ready — accounting sync pending. Please retry in a moment.",
+                )) }
+                return@launch
+            }
+            val billForInvoice = bill.copy(
+                taxPercentage = effectiveTaxPct,
+                ledgerInvoiceNumber = invNo,
+                ledgerInvoiceId = invId,
+            )
             runCatching {
                 val url = HumbleBillEngine.generateInvoiceUrl(billForInvoice, guestPhone)
                 // Persist the PDF URL in the bills collection (best-effort, non-blocking)
-                if (bill.id.isNotBlank()) {
-                    runCatching { billRepo.updateInvoiceUrl(bill.id, url) }
-                }
+                runCatching { billRepo.updateInvoiceUrl(bill.id, url) }
                 url to HumbleBillEngine.renderPdfPages(url)
             }.onSuccess { (url, pages) ->
                 _state.update { it.copy(

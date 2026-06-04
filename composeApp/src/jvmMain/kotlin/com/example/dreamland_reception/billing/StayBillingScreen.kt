@@ -1788,29 +1788,6 @@ private fun ConfirmPaymentDialogUI(
                             }
                         }
 
-                        // Status preview
-                        val effectiveReceivedOuter = bill.advancePayment + previewCash + previewBank
-                        val effectivePendingOuter = (liveTotalAmount - effectiveReceivedOuter).coerceAtLeast(0.0)
-                        val willBePaid = effectivePendingOuter <= 0 && liveTotalAmount > 0
-                        val statusColor = if (willBePaid) Color(0xFF4CAF50) else Color(0xFFFF9800)
-                        val statusLabel = if (willBePaid) "PAID" else "PARTIAL"
-                        val statusDesc = if (willBePaid) "Full amount received — bill will be marked as Paid" else "Balance still due — bill will be marked as Partial"
-                        val statusIcon = if (willBePaid) Icons.Filled.CheckCircle else Icons.Filled.Receipt
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(statusColor.copy(alpha = 0.12f))
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Icon(statusIcon, contentDescription = null, tint = statusColor, modifier = Modifier.size(20.dp))
-                            Column {
-                                Text("Status → $statusLabel", color = statusColor, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                                Text(statusDesc, color = statusColor.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
                     }
 
                     if (cpd.error != null) {
@@ -1940,18 +1917,24 @@ private fun InvoicePdfViewerDialog(
                         Button(
                             onClick = { vm.printInvoice() },
                             enabled = !ipd.isPrinting && ipd.selectedPrinter.isNotBlank() && ipd.availablePrinters.isNotEmpty(),
-                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = DreamlandForest),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DreamlandGold,
+                                contentColor = Color(0xFF0D1F17),
+                                disabledContainerColor = DreamlandGold.copy(alpha = 0.4f),
+                                disabledContentColor = Color(0xFF0D1F17).copy(alpha = 0.5f),
+                            ),
                             shape = RoundedCornerShape(8.dp),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                         ) {
                             if (ipd.isPrinting) {
-                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = DreamlandForest)
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Color(0xFF0D1F17))
                                 Spacer(Modifier.width(6.dp))
                             }
                             Text(
                                 if (ipd.isPrinting) "Printing…" else "Print",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF0D1F17),
                             )
                         }
                         ipd.printError?.let { err ->

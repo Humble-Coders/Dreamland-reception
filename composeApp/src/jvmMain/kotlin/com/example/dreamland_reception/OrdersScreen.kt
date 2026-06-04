@@ -169,18 +169,18 @@ fun OrdersScreen(
             }
         }
 
-        // ── Table header ──────────────────────────────────────────────────────
+        // ── Table header (shared weights with OrderTableRow → perfect alignment) ─
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Spacer(Modifier.width(12.dp))
-            Text("ROOM", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(0.7f))
-            Text("GUEST", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(1.2f))
-            Text("PHONE", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(1.2f))
-            Text("ITEMS & PRICE", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(2.5f))
-            Text("TOTAL", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp, modifier = Modifier.weight(0.9f))
-            Spacer(Modifier.weight(1.3f))
+            Spacer(Modifier.width(W_STATUS))            // status-dot column (filled in rows)
+            OrderHeaderCell("ROOM", W_ROOM)
+            OrderHeaderCell("GUEST", W_GUEST)
+            OrderHeaderCell("PHONE", W_PHONE)
+            OrderHeaderCell("ITEMS & PRICE", W_ITEMS)
+            OrderHeaderCell("TOTAL", W_TOTAL)
+            OrderHeaderCell("ACTIONS", W_ACTIONS)
         }
         HorizontalDivider(color = DreamlandGold.copy(alpha = 0.18f))
 
@@ -261,7 +261,28 @@ fun OrdersScreen(
     if (assignDialog.isOpen) AssignStaffDialog(state = assignDialog, vm = vm)
 }
 
-// ── Table row ─────────────────────────────────────────────────────────────────
+// ── Table ───────────────────────────────────────────────────────────────────
+
+// Shared column metrics so the header and rows line up (matches the Logs table).
+private val W_STATUS = 16.dp        // fixed status-dot column
+private const val W_ROOM = 0.7f
+private const val W_GUEST = 1.3f
+private const val W_PHONE = 1.2f
+private const val W_ITEMS = 2.6f
+private const val W_TOTAL = 0.9f
+private const val W_ACTIONS = 1.4f
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.OrderHeaderCell(text: String, weight: Float) {
+    Text(
+        text,
+        modifier = Modifier.weight(weight),
+        style = MaterialTheme.typography.labelSmall,
+        color = DreamlandGold,
+        letterSpacing = 1.sp,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
 
 @Composable
 private fun OrderTableRow(
@@ -279,19 +300,17 @@ private fun OrderTableRow(
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        // Status dot
-        Box(Modifier.padding(top = 4.dp)) {
+        // Status dot — fixed-width column, aligned under the header's spacer.
+        Box(Modifier.width(W_STATUS).padding(top = 5.dp)) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(statusColor))
         }
-        Spacer(Modifier.width(4.dp))
         Text(
             order.roomNumber.ifBlank { "—" },
             style = MaterialTheme.typography.bodyMedium,
             color = DreamlandOnDark,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(0.7f),
+            modifier = Modifier.weight(W_ROOM).padding(end = 8.dp),
         )
         Text(
             order.guestName.ifBlank { "—" },
@@ -299,7 +318,7 @@ private fun OrderTableRow(
             color = DreamlandOnDark,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1.2f),
+            modifier = Modifier.weight(W_GUEST).padding(end = 8.dp),
         )
         Text(
             phone,
@@ -307,20 +326,19 @@ private fun OrderTableRow(
             color = DreamlandMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1.2f).padding(top = 2.dp),
+            modifier = Modifier.weight(W_PHONE).padding(end = 8.dp, top = 2.dp),
         )
-        // Items + tax merged column — compact, prices right after names with fixed gap
-        Column(Modifier.weight(2.5f).padding(end = 40.dp)) {
+        // Items & price — name fills, price right-aligned so prices line up down the column.
+        Column(Modifier.weight(W_ITEMS).padding(end = 12.dp)) {
             order.items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    // Fixed-width name so all prices start at the same position
                     Text(
                         "${item.name} ×${item.quantity}",
                         style = MaterialTheme.typography.bodySmall,
                         color = DreamlandMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(160.dp),
+                        modifier = Modifier.weight(1f),
                     )
                     Text(
                         "₹${"%.2f".format(item.subtotal)}",
@@ -330,44 +348,48 @@ private fun OrderTableRow(
                 }
                 if (item.taxAmount > 0.005) {
                     val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}%" else "${"%.1f".format(item.taxPercentage)}%"
-                    Row(Modifier.padding(start = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Tax $rateLabel", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f), modifier = Modifier.width(150.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Tax $rateLabel", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f), modifier = Modifier.weight(1f))
                         Text("+₹${"%.2f".format(item.taxAmount)}", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f))
                     }
                 }
             }
         }
-        // Total
         Text(
             if (order.totalAmount > 0) "₹${"%.2f".format(order.totalAmount)}" else "—",
             style = MaterialTheme.typography.bodySmall,
             color = DreamlandGold,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.weight(0.9f).padding(top = 1.dp),
+            modifier = Modifier.weight(W_TOTAL).padding(top = 1.dp),
         )
-        // Mark Done button
-        OutlinedButton(
-            onClick = onMarkDone,
-            enabled = !isDone,
-            modifier = Modifier.weight(0.8f).height(30.dp).padding(horizontal = 4.dp),
-            shape = RoundedCornerShape(6.dp),
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-            border = BorderStroke(1.dp, if (isDone) DreamlandMuted.copy(alpha = 0.3f) else Color(0xFF4CAF50).copy(alpha = 0.7f)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = Color(0xFF4CAF50),
-                disabledContentColor = DreamlandMuted.copy(alpha = 0.4f),
-            ),
+        // Actions — weighted column matching the header's ACTIONS cell.
+        Row(
+            modifier = Modifier.weight(W_ACTIONS),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(
-                if (isDone) "Done" else "Mark Done",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (isDone) DreamlandMuted.copy(alpha = 0.4f) else Color(0xFF4CAF50),
-            )
-        }
-        // Delete button
-        IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFEF5350).copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+            OutlinedButton(
+                onClick = onMarkDone,
+                enabled = !isDone,
+                modifier = Modifier.height(30.dp),
+                shape = RoundedCornerShape(6.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                border = BorderStroke(1.dp, if (isDone) DreamlandMuted.copy(alpha = 0.3f) else Color(0xFF4CAF50).copy(alpha = 0.7f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color(0xFF4CAF50),
+                    disabledContentColor = DreamlandMuted.copy(alpha = 0.4f),
+                ),
+            ) {
+                Text(
+                    if (isDone) "Done" else "Mark Done",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isDone) DreamlandMuted.copy(alpha = 0.4f) else Color(0xFF4CAF50),
+                )
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
+                Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFEF5350).copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
+            }
         }
     }
 }
