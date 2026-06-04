@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.example.dreamland_reception.util.atHotelTime
 import com.example.dreamland_reception.util.localTodayUtcMidnight
+import com.example.dreamland_reception.util.normalizePhoneE164
 import com.example.dreamland_reception.util.toLocalDayUtcMidnight
 import com.example.dreamland_reception.util.toMidnightUtc
 import java.util.Calendar
@@ -619,7 +620,7 @@ class RoomsAndBookingsViewModel(
                     hotelId = AppContext.hotelId,
                     hotelName = AppContext.hotelName,
                     guestName = guestName.trim(),
-                    guestPhone = guestPhone.trim(),
+                    guestPhone = guestPhone.trim().let { normalizePhoneE164(it) ?: it },
                     roomCategoryId = entry.categoryId,
                     roomCategoryName = entry.categoryName,
                     roomInstanceId = entry.selectedInstanceId,

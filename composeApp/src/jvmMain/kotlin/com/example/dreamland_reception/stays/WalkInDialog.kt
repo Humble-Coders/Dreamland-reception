@@ -220,7 +220,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 if (currentStep < totalSteps) {
                     Column(horizontalAlignment = Alignment.End) {
                         // Hint when step 3 validation fails
-                        if (currentStep == 3 && !step3Valid) {
+                        if (currentStep == 3 && !step3Valid && !state.isBookingMode) {
                             val assignedIdx = state.roomGuestAssignment.values.flatMap { it.guestIndices }.toSet()
                             val unassigned = state.guestEntries.indices.count { it !in assignedIdx }
                             val emptyRooms = state.selectedInstanceIds.count {
@@ -238,7 +238,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                         }
                         Button(
                             onClick = { currentStep++ },
-                            enabled = step3Valid,
+                            enabled = step3Valid || state.isBookingMode,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = DreamlandGold,
                                 disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),

@@ -198,11 +198,6 @@ object FirestoreBookingRepository : BookingRepository {
             "name" to guestName,
             "phone" to guestPhone,
         ),
-        "allGuests" to allGuestDetails.map { g ->
-            mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified,
-                "gender" to g.gender, "govIdNumber" to g.govIdNumber, "address" to g.address,
-                "dob" to g.dob, "age" to g.age)
-        },
         "guests" to mapOf(
             "adults" to adults,
             "children" to children,

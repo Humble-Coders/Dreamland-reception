@@ -33,6 +33,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.ui.window.Dialog
@@ -170,29 +172,27 @@ fun RoomsAndBookingsScreen(
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
+            /* ROOMS_TAB_HIDDEN: PageHeader and RoomsBookingsTabRow removed
             PageHeader(state = state, vm = vm, staysVm = staysVm)
-
-            RoomsBookingsTabRow(
-                selectedTab = state.selectedTab,
-                roomCount = state.rooms.size,
-                bookingCount = state.filteredBookings.size,
-                onTabSelected = vm::setTab,
-            )
+            RoomsBookingsTabRow(selectedTab = state.selectedTab, roomCount = state.rooms.size,
+                bookingCount = state.filteredBookings.size, onTabSelected = vm::setTab)
+            */
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    state.isInitialLoading -> {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(color = DreamlandGold, strokeWidth = 2.5.dp)
-                                Spacer(Modifier.height(16.dp))
-                                Text("Loading…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
-                            }
+                if (state.isInitialLoading) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = DreamlandGold, strokeWidth = 2.5.dp)
+                            Spacer(Modifier.height(16.dp))
+                            Text("Loading…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
                         }
                     }
-                    state.selectedTab == 0 -> RoomsTabContent(state = state, vm = vm)
-                    else -> BookingsTabContent(state = state, vm = vm, onCheckIn = onCheckIn, onCheckInAll = onCheckInAll)
+                } else {
+                    BookingsTabContent(state = state, vm = vm, staysVm = staysVm, onCheckIn = onCheckIn, onCheckInAll = onCheckInAll)
                 }
+                /* ROOMS_TAB_HIDDEN: RoomsTabContent removed
+                if (state.selectedTab == 0) RoomsTabContent(state = state, vm = vm)
+                */
             }
         }
 
@@ -1084,27 +1084,78 @@ private fun RoomFilterDropdown(
 private fun BookingsTabContent(
     state: RoomsAndBookingsUiState,
     vm: RoomsAndBookingsViewModel,
+    staysVm: StaysViewModel,
     onCheckIn: (Booking) -> Unit,
     onCheckInAll: (List<Booking>) -> Unit = {},
 ) {
-    val bookings = state.filteredBookings
+    var bookingSubTab by remember { mutableStateOf(0) }
 
-    Column {
-        BookingFilterBar(state = state, vm = vm)
+    Column(Modifier.fillMaxSize()) {
+        BookingTopBar(state = state, vm = vm, staysVm = staysVm)
+
+        // ── Inner sub-tabs ────────────────────────────────────────────────────
+        TabRow(
+            selectedTabIndex = bookingSubTab,
+            containerColor = DreamlandForestSurface,
+            contentColor = DreamlandOnDark,
+            indicator = { tabPositions ->
+                SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[bookingSubTab]),
+                    color = DreamlandGold,
+                )
+            },
+            divider = { HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f)) },
+        ) {
+            listOf("Upcoming Bookings", "Today Check-ins").forEachIndexed { idx, label ->
+                Tab(
+                    selected = bookingSubTab == idx,
+                    onClick = { bookingSubTab = idx },
+                    selectedContentColor = DreamlandGold,
+                    unselectedContentColor = DreamlandMuted,
+                ) {
+                    Text(
+                        text = label,
+                        fontWeight = if (bookingSubTab == idx) FontWeight.SemiBold else FontWeight.Normal,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                    )
+                }
+            }
+        }
+
+        // ── Content ───────────────────────────────────────────────────────────
+        val allGroups = state.filteredBookingGroups
+        // "Today Check-ins": match on calendar date only, not hotel check-in time
+        val todayStart = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.time
+        val tomorrowStart = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.time
+        val displayedGroups = if (bookingSubTab == 1)
+            allGroups.filter { g -> g.any { it.checkIn >= todayStart && it.checkIn < tomorrowStart } }
+        else allGroups
 
         when {
-            state.bookingsLoading && bookings.isEmpty() -> {
+            state.bookingsLoading && displayedGroups.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = DreamlandGold, strokeWidth = 2.5.dp)
                 }
             }
-            bookings.isEmpty() -> {
+            displayedGroups.isEmpty() -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("No bookings found", style = MaterialTheme.typography.bodyLarge, color = DreamlandMuted)
+                        Text(
+                            if (bookingSubTab == 1) "No check-ins today" else "No bookings found",
+                            style = MaterialTheme.typography.bodyLarge, color = DreamlandMuted,
+                        )
                         Spacer(Modifier.height(4.dp))
                         Text(
                             text = if (state.searchQuery.isNotBlank()) "Try a different search or filter"
+                            else if (bookingSubTab == 1) "All caught up for today"
                             else "No bookings for the selected filters",
                             style = MaterialTheme.typography.bodySmall,
                             color = DreamlandMuted.copy(alpha = 0.7f),
@@ -1113,14 +1164,15 @@ private fun BookingsTabContent(
                 }
             }
             else -> {
-                val groups = state.filteredBookingGroups
                 val checkedInBookingIds = state.activeStaysByRoom.values
                     .map { it.bookingId }.filter { it.isNotBlank() }.toSet()
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 LazyColumn(
+                    modifier = Modifier.widthIn(max = 960.dp).fillMaxHeight(),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(groups, key = { group ->
+                    items(displayedGroups, key = { group ->
                         if (group.size == 1) group[0].id else group[0].groupBookingId
                     }) { group ->
                         if (group.size == 1) {
@@ -1154,20 +1206,51 @@ private fun BookingsTabContent(
                         }
                     }
                 }
+                } // end Box
             }
         }
     }
 }
 
 @Composable
-private fun BookingFilterBar(state: RoomsAndBookingsUiState, vm: RoomsAndBookingsViewModel) {
-    Column(
-        Modifier.fillMaxWidth().background(DreamlandForestElevated),
+private fun BookingTopBar(
+    state: RoomsAndBookingsUiState,
+    vm: RoomsAndBookingsViewModel,
+    staysVm: StaysViewModel,
+) {
+    var timeMenuExpanded by remember { mutableStateOf(false) }
+    var statusMenuExpanded by remember { mutableStateOf(false) }
+
+    val timeLabel = when (state.bookingDateFilter) {
+        BookingDateFilter.ALL -> "All Time"
+        BookingDateFilter.TODAY -> "Today"
+        BookingDateFilter.UPCOMING -> "Upcoming"
+    }
+    val statusLabel = when (state.bookingStatusFilter) {
+        null -> "All Status"
+        "CONFIRMED" -> "Confirmed"
+        "PENDING_PAYMENT" -> "Pending"
+        "CANCELLED" -> "Cancelled"
+        "NO_SHOW" -> "No Show"
+        "COMPLETED" -> "Completed"
+        else -> "All Status"
+    }
+    val isTimeFiltered = state.bookingDateFilter != BookingDateFilter.ALL
+    val isStatusFiltered = state.bookingStatusFilter != null
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(DreamlandForestElevated)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // ── Search ────────────────────────────────────────────────────────────
         OutlinedTextField(
             value = state.searchQuery,
             onValueChange = vm::setSearchQuery,
-            placeholder = { Text("Search bookings…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, fontSize = 11.sp) },
+            placeholder = { Text("Search bookings…", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted, fontSize = 12.sp) },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(15.dp)) },
             trailingIcon = {
                 if (state.searchQuery.isNotEmpty()) {
@@ -1177,107 +1260,114 @@ private fun BookingFilterBar(state: RoomsAndBookingsUiState, vm: RoomsAndBooking
                 }
             },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 2.dp),
+            modifier = Modifier.weight(1f),
             shape = RoundedCornerShape(8.dp),
             textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedTextColor = DreamlandOnDark,
                 unfocusedTextColor = DreamlandOnDark,
-                focusedBorderColor = DreamlandGold.copy(alpha = 0.6f),
-                unfocusedBorderColor = DreamlandGold.copy(alpha = 0.25f),
+                focusedBorderColor = DreamlandGold.copy(alpha = 0.5f),
+                unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.25f),
                 cursorColor = DreamlandGold,
                 focusedContainerColor = DreamlandForestSurface,
                 unfocusedContainerColor = DreamlandForestSurface,
             ),
         )
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BookingDateFilter.values().forEach { filter ->
-            val label = when (filter) {
-                BookingDateFilter.ALL -> "All"
-                BookingDateFilter.TODAY -> "Today"
-                BookingDateFilter.UPCOMING -> "Upcoming"
+
+        // ── All Time dropdown ─────────────────────────────────────────────────
+        Box {
+            OutlinedButton(
+                onClick = { timeMenuExpanded = true },
+                border = BorderStroke(1.dp, if (isTimeFiltered) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f)),
+                shape = RoundedCornerShape(8.dp),
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier.height(36.dp),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = DreamlandForestSurface),
+            ) {
+                Text(timeLabel, color = if (isTimeFiltered) DreamlandGold else DreamlandMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = if (isTimeFiltered) DreamlandGold else DreamlandMuted, modifier = Modifier.size(14.dp))
             }
-            FilterChip(
-                selected = state.bookingDateFilter == filter,
-                onClick = { vm.setBookingDateFilter(filter) },
-                label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = DreamlandGold.copy(alpha = 0.2f),
-                    selectedLabelColor = DreamlandGold,
-                    containerColor = Color.Transparent,
-                    labelColor = DreamlandMuted,
-                ),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = state.bookingDateFilter == filter,
-                    selectedBorderColor = DreamlandGold.copy(alpha = 0.5f),
-                    borderColor = DreamlandMuted.copy(alpha = 0.3f),
-                ),
-                shape = RoundedCornerShape(8.dp),
-            )
+            androidx.compose.material3.DropdownMenu(
+                expanded = timeMenuExpanded,
+                onDismissRequest = { timeMenuExpanded = false },
+                containerColor = DreamlandForestElevated,
+            ) {
+                listOf(BookingDateFilter.ALL to "All Time", BookingDateFilter.TODAY to "Today", BookingDateFilter.UPCOMING to "Upcoming").forEach { (filter, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label, color = if (state.bookingDateFilter == filter) DreamlandGold else DreamlandOnDark, fontSize = 12.sp) },
+                        onClick = { vm.setBookingDateFilter(filter); timeMenuExpanded = false },
+                        modifier = Modifier.background(if (state.bookingDateFilter == filter) DreamlandGold.copy(alpha = 0.08f) else Color.Transparent),
+                    )
+                }
+            }
         }
 
-        Spacer(Modifier.weight(1f))
-
-        val statusOptions = listOf(null to "All", "CONFIRMED" to "Confirmed", "PENDING_PAYMENT" to "Pending Payment", "CANCELLED" to "Cancelled", "NO_SHOW" to "No Show", "COMPLETED" to "Completed")
-        statusOptions.forEach { (status, label) ->
-            FilterChip(
-                selected = state.bookingStatusFilter == status,
-                onClick = { vm.setBookingStatusFilter(status) },
-                label = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (status != null) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(bookingStatusColor(status)),
-                            )
-                            Spacer(Modifier.width(5.dp))
-                        }
-                        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    }
-                },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = (if (status != null) bookingStatusColor(status) else DreamlandGold).copy(alpha = 0.15f),
-                    selectedLabelColor = if (status != null) bookingStatusColor(status) else DreamlandGold,
-                    containerColor = Color.Transparent,
-                    labelColor = DreamlandMuted,
-                ),
-                border = FilterChipDefaults.filterChipBorder(
-                    enabled = true,
-                    selected = state.bookingStatusFilter == status,
-                    selectedBorderColor = (if (status != null) bookingStatusColor(status) else DreamlandGold).copy(alpha = 0.45f),
-                    borderColor = DreamlandMuted.copy(alpha = 0.3f),
-                ),
+        // ── All Status dropdown ───────────────────────────────────────────────
+        Box {
+            OutlinedButton(
+                onClick = { statusMenuExpanded = true },
+                border = BorderStroke(1.dp, if (isStatusFiltered) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f)),
                 shape = RoundedCornerShape(8.dp),
-            )
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                modifier = Modifier.height(36.dp),
+                colors = ButtonDefaults.outlinedButtonColors(containerColor = DreamlandForestSurface),
+            ) {
+                if (isStatusFiltered) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(bookingStatusColor(state.bookingStatusFilter!!)))
+                    Spacer(Modifier.width(5.dp))
+                }
+                Text(statusLabel, color = if (isStatusFiltered) DreamlandGold else DreamlandMuted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = if (isStatusFiltered) DreamlandGold else DreamlandMuted, modifier = Modifier.size(14.dp))
+            }
+            val statusOptions = listOf(null to "All Status", "CONFIRMED" to "Confirmed", "PENDING_PAYMENT" to "Pending Payment", "CANCELLED" to "Cancelled", "NO_SHOW" to "No Show", "COMPLETED" to "Completed")
+            androidx.compose.material3.DropdownMenu(
+                expanded = statusMenuExpanded,
+                onDismissRequest = { statusMenuExpanded = false },
+                containerColor = DreamlandForestElevated,
+            ) {
+                statusOptions.forEach { (status, label) ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (status != null) {
+                                    Box(Modifier.size(6.dp).clip(CircleShape).background(bookingStatusColor(status)))
+                                    Spacer(Modifier.width(6.dp))
+                                }
+                                Text(label, color = if (state.bookingStatusFilter == status) DreamlandGold else DreamlandOnDark, fontSize = 12.sp)
+                            }
+                        },
+                        onClick = { vm.setBookingStatusFilter(status); statusMenuExpanded = false },
+                        modifier = Modifier.background(if (state.bookingStatusFilter == status) DreamlandGold.copy(alpha = 0.08f) else Color.Transparent),
+                    )
+                }
+            }
         }
 
-        Spacer(Modifier.width(8.dp))
-
+        // ── Sort ──────────────────────────────────────────────────────────────
         val isNewest = state.bookingSortOrder == "NEWEST"
-        IconButton(
+        OutlinedButton(
             onClick = { vm.setBookingSortOrder(if (isNewest) "OLDEST" else "NEWEST") },
-            modifier = Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(DreamlandGold.copy(alpha = if (isNewest) 0.15f else 0.05f)),
+            border = BorderStroke(1.dp, DreamlandMuted.copy(alpha = 0.3f)),
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            modifier = Modifier.height(36.dp),
+            colors = ButtonDefaults.outlinedButtonColors(containerColor = DreamlandForestSurface),
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Sort,
-                contentDescription = if (isNewest) "Newest first" else "Oldest first",
-                tint = DreamlandGold,
-                modifier = Modifier.size(16.dp),
-            )
+            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = if (isNewest) "Newest first" else "Oldest first", tint = DreamlandGold, modifier = Modifier.size(16.dp))
         }
-    }
+
+        // ── New Booking ───────────────────────────────────────────────────────
+        Button(
+            onClick = staysVm::openWalkInAsBooking,
+            shape = RoundedCornerShape(8.dp),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+            modifier = Modifier.height(36.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, contentColor = Color(0xFF0D1F17)),
+        ) {
+            Text("+ New Booking", fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = Color(0xFF0D1F17))
+        }
     }
 }
 
@@ -1390,6 +1480,13 @@ private fun GroupBookingCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = DreamlandMuted,
                     )
+                    if (primary.guestPhone.isNotBlank()) {
+                        Spacer(Modifier.height(3.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Filled.Phone, contentDescription = null, tint = DreamlandGold.copy(alpha = 0.8f), modifier = Modifier.size(11.dp))
+                            Text(primary.guestPhone, style = MaterialTheme.typography.bodySmall, color = DreamlandGold.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
                 Box(
                     Modifier
@@ -1662,11 +1759,11 @@ private fun BookingCard(
                         color = DreamlandMuted,
                     )
                     if (booking.guestPhone.isNotBlank()) {
-                        Text(
-                            booking.guestPhone,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = DreamlandMuted.copy(alpha = 0.7f),
-                        )
+                        Spacer(Modifier.height(3.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(Icons.Filled.Phone, contentDescription = null, tint = DreamlandGold.copy(alpha = 0.8f), modifier = Modifier.size(11.dp))
+                            Text(booking.guestPhone, style = MaterialTheme.typography.bodySmall, color = DreamlandGold.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
+                        }
                     }
                 }
                 Spacer(Modifier.width(12.dp))
