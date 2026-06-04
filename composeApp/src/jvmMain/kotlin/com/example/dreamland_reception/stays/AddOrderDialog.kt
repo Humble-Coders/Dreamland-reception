@@ -44,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +74,8 @@ fun AddOrderDialog(
     settingsVm: SettingsViewModel = DreamlandAppInitializer.getSettingsViewModel(),
 ) {
     val settingsState by settingsVm.state.collectAsStateWithLifecycle()
+    val listState by vm.listState.collectAsStateWithLifecycle()
+    val selectedStay = listState.stays.find { it.id == listState.selectedStayId }
 
     // Refresh catalog when food/service add dialogs close after saving
     var wasFoodDialogOpen by remember { mutableStateOf(false) }
@@ -92,8 +95,8 @@ fun AddOrderDialog(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.62f)
-                .heightIn(max = 740.dp)
+                .fillMaxWidth(0.65f)
+                .heightIn(max = 800.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(DreamlandForestSurface)
                 .padding(24.dp),
@@ -107,21 +110,48 @@ fun AddOrderDialog(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column {
-                        Text("ADD ORDER", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
-                        Text("New Service Request", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark)
+                        Text("NEW ORDER", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                        Text("Create Service Request", style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark)
                     }
                     TextButton(onClick = { vm.closeAddOrder() }) {
                         Text("Cancel", color = DreamlandMuted)
                     }
                 }
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(16.dp))
+
+                // ── Pre-filled room/stay display ───────────────────────────
+                if (selectedStay != null) {
+                    SectionLabel("Guest Stay")
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, DreamlandGold.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .background(DreamlandForestElevated)
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Room ${selectedStay.roomNumber}", color = DreamlandGold, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                            Text("—", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            Text(selectedStay.guestName, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
 
                 // ── Items ──────────────────────────────────────────────────
                 SectionLabel("Items")
                 Spacer(Modifier.height(8.dp))
 
                 state.items.forEachIndexed { index, item ->
+                    var itemFieldFocused by remember { mutableStateOf(false) }
+                    // Show all catalog items on focus, filter by name when typing
+                    val dropdownSuggestions = if (item.name.isBlank()) state.catalogItems
+                        else state.catalogItems.filter { it.name.contains(item.name, ignoreCase = true) }
+
                     Card(
                         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
                         shape = RoundedCornerShape(10.dp),
@@ -141,61 +171,17 @@ fun AddOrderDialog(
                                 }
                             }
 
-                            // Per-item category chips
-                            if (state.isLoadingCatalog) {
-                                Spacer(Modifier.height(6.dp))
-                                CircularProgressIndicator(modifier = Modifier.height(20.dp).width(20.dp), color = DreamlandGold, strokeWidth = 2.dp)
-                            } else if (state.categories.isNotEmpty()) {
-                                Spacer(Modifier.height(6.dp))
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                ) {
-                                    state.categories.forEach { cat ->
-                                        val isSelected = item.category == cat
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .border(
-                                                    1.dp,
-                                                    if (isSelected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f),
-                                                    RoundedCornerShape(8.dp),
-                                                )
-                                                .background(if (isSelected) DreamlandGold.copy(alpha = 0.15f) else DreamlandForestSurface)
-                                                .clickable(
-                                                    interactionSource = remember { MutableInteractionSource() },
-                                                    indication = null,
-                                                ) { vm.onAddOrderItemCategory(index, cat) }
-                                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                                        ) {
-                                            Text(
-                                                cat,
-                                                color = if (isSelected) DreamlandGold else DreamlandMuted,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
                             Spacer(Modifier.height(6.dp))
 
-                            // Autocomplete item name field
-                            val isServiceCategory = item.category == "Services"
+                            // Searchable dropdown for item name — shows all items, filtered by typed text
                             AutocompleteItemField(
                                 value = item.name,
-                                suggestions = item.suggestions,
-                                showSuggestions = item.showSuggestions,
+                                suggestions = dropdownSuggestions,
+                                showSuggestions = itemFieldFocused,
                                 onValueChange = { vm.onAddOrderItemName(index, it) },
-                                onSuggestionSelected = { vm.selectOrderItemSuggestion(index, it) },
-                                onDismiss = { vm.dismissOrderItemSuggestions(index) },
-                                modifier = Modifier.fillMaxWidth(),
-                                onAddNew = { typedName ->
-                                    if (isServiceCategory) settingsVm.openAddService(typedName)
-                                    else settingsVm.openAddFood(typedName)
-                                },
-                                addNewLabel = if (isServiceCategory) "Add as new service" else "Add as new food item",
+                                onSuggestionSelected = { vm.selectOrderItemSuggestion(index, it); itemFieldFocused = false },
+                                onDismiss = { itemFieldFocused = false },
+                                modifier = Modifier.fillMaxWidth().onFocusChanged { itemFieldFocused = it.isFocused },
                                 allCatalogNames = state.catalogItems.mapTo(mutableSetOf()) { it.name },
                                 onToggleItemAvailability = { catalogItem ->
                                     if (catalogItem.category == "Services") {
