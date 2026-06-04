@@ -25,6 +25,9 @@ import com.example.dreamland_reception.ui.viewmodel.StayBillingViewModel
 import com.example.dreamland_reception.ui.viewmodel.ComplaintsViewModel
 import com.example.dreamland_reception.ui.viewmodel.DashboardViewModel
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
+import com.example.dreamland_reception.ui.viewmodel.ExpensesViewModel
+import com.example.dreamland_reception.ui.viewmodel.TransfersViewModel
+import com.example.dreamland_reception.ui.viewmodel.ShiftViewModel
 import com.example.dreamland_reception.ui.viewmodel.ReportsViewModel
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
 import com.example.dreamland_reception.ui.viewmodel.UsersViewModel
@@ -64,6 +67,9 @@ object DreamlandAppInitializer {
 
     @Volatile
     private var ordersVm: OrdersViewModel? = null
+    private var expensesVm: ExpensesViewModel? = null
+    private var transfersVm: TransfersViewModel? = null
+    private var shiftVm: ShiftViewModel? = null
 
     @Volatile
     private var complaintsVm: ComplaintsViewModel? = null
@@ -173,6 +179,21 @@ object DreamlandAppInitializer {
     fun getOrdersViewModel(): OrdersViewModel =
         ordersVm ?: synchronized(this) {
             ordersVm ?: OrdersViewModel().also { ordersVm = it }
+        }
+
+    fun getExpensesViewModel(): ExpensesViewModel =
+        expensesVm ?: synchronized(this) {
+            expensesVm ?: ExpensesViewModel().also { expensesVm = it }
+        }
+
+    fun getTransfersViewModel(): TransfersViewModel =
+        transfersVm ?: synchronized(this) {
+            transfersVm ?: TransfersViewModel().also { transfersVm = it }
+        }
+
+    fun getShiftViewModel(): ShiftViewModel =
+        shiftVm ?: synchronized(this) {
+            shiftVm ?: ShiftViewModel().also { shiftVm = it }
         }
 
     fun getComplaintsViewModel(): ComplaintsViewModel =

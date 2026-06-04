@@ -24,6 +24,10 @@ object AppConfig {
     var selectedHotelName: String = ""
         private set
 
+    /** The reception manager currently on duty (persists across restarts). */
+    var currentManager: String = ""
+        private set
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /** Read config from disk. Call once at app startup before any ViewModel initialises. */
@@ -33,7 +37,14 @@ object AppConfig {
             val text = configFile.readText()
             selectedHotelId = parseString(text, "selectedHotelId") ?: ""
             selectedHotelName = parseString(text, "selectedHotelName") ?: ""
+            currentManager = parseString(text, "currentManager") ?: ""
         }
+    }
+
+    /** Persist the on-duty manager name. */
+    fun saveManager(name: String) {
+        currentManager = name
+        write()
     }
 
     /** Persist a new hotel selection immediately. */
@@ -57,7 +68,8 @@ object AppConfig {
             configFile.writeText(
                 "{\n" +
                 "  \"selectedHotelId\": \"${selectedHotelId.esc()}\",\n" +
-                "  \"selectedHotelName\": \"${selectedHotelName.esc()}\"\n" +
+                "  \"selectedHotelName\": \"${selectedHotelName.esc()}\",\n" +
+                "  \"currentManager\": \"${currentManager.esc()}\"\n" +
                 "}\n"
             )
         }

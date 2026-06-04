@@ -18,6 +18,17 @@ object AppContext {
     var hotelName: String = AppConfig.selectedHotelName
         private set
 
+    /** The reception manager currently on duty — attached to every ledger entry. */
+    @Volatile
+    var currentManager: String = AppConfig.currentManager
+        private set
+
+    /** Set the on-duty manager and persist it. */
+    fun setManager(name: String) {
+        currentManager = name
+        AppConfig.saveManager(name)
+    }
+
     /** Persist a hotel selection to the config file and update in-memory state. */
     fun setHotel(id: String, name: String) {
         hotelId = id
@@ -39,5 +50,6 @@ object AppContext {
     internal fun syncFromConfig() {
         hotelId = AppConfig.selectedHotelId
         hotelName = AppConfig.selectedHotelName
+        currentManager = AppConfig.currentManager
     }
 }

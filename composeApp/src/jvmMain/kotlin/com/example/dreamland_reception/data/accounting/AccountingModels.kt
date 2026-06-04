@@ -161,6 +161,17 @@ internal data class PostPurchaseRequest(
     val sourceId: String,
 )
 
+// Direct expense (no vendor): DR expense / CR Cash|Bank|Payable.
+internal data class PostExpenseRequest(
+    val amount: Double,
+    val expenseAccountId: String,
+    val paymentMethod: String,   // "CASH" | "BANK" | "PAYABLE"
+    val description: String,
+    val date: String,            // "YYYY-MM-DD"
+    val appId: String,
+    val sourceId: String,
+)
+
 // Pay a vendor: DR vendor AP / CR Cash|Bank.
 internal data class PostVendorPaymentRequest(
     val vendorId: String,
@@ -170,6 +181,18 @@ internal data class PostVendorPaymentRequest(
     val date: String,            // "YYYY-MM-DD"
     val appId: String,
     val sourceId: String,
+)
+
+// ── Balance sheet (for the live Cash & Bank widget) ───────────────────────────
+
+internal data class AssetLine(
+    val accountId: String = "",
+    val name: String = "",
+    val balance: String? = null,   // positive = asset balance
+)
+
+internal data class BalanceSheetData(
+    val assets: List<AssetLine> = emptyList(),
 )
 
 // ── Generic API envelope ──────────────────────────────────────────────────────

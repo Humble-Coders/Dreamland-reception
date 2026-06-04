@@ -58,6 +58,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShoppingBag
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -107,6 +109,9 @@ import com.example.dreamland_reception.DreamlandGoldBright
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
 import com.example.dreamland_reception.OrdersScreen
+import com.example.dreamland_reception.ExpensesScreen
+import com.example.dreamland_reception.TransfersScreen
+import com.example.dreamland_reception.shift.ShiftBar
 import com.example.dreamland_reception.UsersScreen
 import com.example.dreamland_reception.RoomsAndBookingsScreen
 import com.example.dreamland_reception.SettingsScreen
@@ -126,6 +131,8 @@ internal enum class MainTab(val label: String) {
     Stays("Stays"),
     Billing("Billing"),
     Orders("Orders"),
+    Expenses("Expenses"),
+    Transfers("Transfers"),
     Complaints("Complaints"),
     Staff("Staff"),
     Reports("Users"),
@@ -145,6 +152,8 @@ private val dreamlandNavItems: List<NavItem> = listOf(
     NavItem(MainTab.Stays, Icons.Filled.Key, "Stays"),
     NavItem(MainTab.Billing, Icons.Filled.CreditCard, "Billing"),
     NavItem(MainTab.Orders, Icons.Filled.ShoppingBag, "Orders"),
+    NavItem(MainTab.Expenses, Icons.Filled.Payments, "Expenses"),
+    NavItem(MainTab.Transfers, Icons.Filled.SwapHoriz, "Transfers"),
     /* HIDDEN: NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"), */
     /* HIDDEN: NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"), */
     NavItem(MainTab.Reports, Icons.Filled.Person, "Users"),
@@ -226,6 +235,7 @@ fun DreamlandApp() {
                         isSidebarExpanded = true
                     },
                     onRefresh = { DreamlandAppInitializer.refreshAllViewModels() },
+                    actions = { ShiftBar() },
                 )
 
                 Box(
@@ -280,6 +290,8 @@ fun DreamlandApp() {
                         MainTab.Orders -> OrdersScreen(
                             initialOrderId = pendingOrderId.also { pendingOrderId = "" },
                         )
+                        MainTab.Expenses -> ExpensesScreen()
+                        MainTab.Transfers -> TransfersScreen()
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()
                         MainTab.Reports -> UsersScreen()

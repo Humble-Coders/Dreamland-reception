@@ -1192,14 +1192,22 @@ class StayBillingViewModel(
                     found ?: ""
                 }
             }
-            // Durable ledger sync — persists success/failure on the bill so an
-            // unsynced bill can be retried later (on reload or via the Retry
-            // button). Runs in its own coroutine so the guest's bill is never
-            // blocked on accounting.
-            syncLedger(settledBill, guestPhone)
+            // Settle to Humble Ledger FIRST (awaited) so we have the authoritative
+            // invoice number, then render the bill with it. The Firestore bill is
+            // already finalized above, so only accounting + the PDF wait here — never
+            // the guest. Doing it in one settle avoids racing two concurrent posts of
+            // the same sourceId (which would leave the invoice number blank).
+            val settleResult = syncLedger(settledBill, guestPhone)
+            val billForInvoice = if (settleResult != null && settleResult.invoiceNumber.isNotBlank()) {
+                settledBill.copy(
+                    ledgerSynced = true,
+                    ledgerInvoiceId = settleResult.invoiceId,
+                    ledgerInvoiceNumber = settleResult.invoiceNumber,
+                )
+            } else settledBill
 
             // Generate the branded invoice PDF and open it in the in-app viewer.
-            generateInvoicePdf(settledBill, guestPhone)
+            generateInvoicePdf(billForInvoice, guestPhone)
         }
     }
 
@@ -1212,43 +1220,45 @@ class StayBillingViewModel(
      * be retried later — safe because every posting uses a deterministic sourceId,
      * so the ledger dedupes anything that already landed.
      */
-    private fun syncLedger(bill: Bill, guestPhone: String) {
-        if (bill.id.isBlank()) return
+    private suspend fun syncLedger(bill: Bill, guestPhone: String): AccountingRepository.SettleResult? {
+        if (bill.id.isBlank()) return null
         _state.update { it.copy(accountingStatus = AccountingStatus.InProgress) }
-        viewModelScope.launch {
-            val guestUid = resolveGuestUid(bill.guestName, guestPhone)
-            // Use the authoritative display name from the users collection for accounting,
-            // so the ledger record matches the registered guest identity.
-            val normalizedPhone = normalizePhoneE164(guestPhone) ?: guestPhone
-            val accountingName = if (normalizedPhone.isNotBlank()) {
-                runCatching { userRepo.findNameByPhone(normalizedPhone) }.getOrNull()
-            } else null
-            val billForAccounting = if (!accountingName.isNullOrBlank()) bill.copy(guestName = accountingName) else bill
-            accountingRepo.settle(billForAccounting, guestPhone, guestUid)
-                .onSuccess { r ->
-                    if (r.invoiceId.isNotBlank()) {
-                        runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
-                        _state.update { s ->
-                            s.copy(
-                                bill = s.bill?.takeIf { it.id == bill.id }?.copy(
-                                    ledgerSynced = true,
-                                    ledgerInvoiceId = r.invoiceId,
-                                    ledgerInvoiceNumber = r.invoiceNumber,
-                                    ledgerSyncError = "",
-                                ) ?: s.bill,
-                                accountingStatus = AccountingStatus.Synced,
-                            )
-                        }
-                    } else {
-                        // Accounting not configured — treat as a no-op, not a failure.
-                        _state.update { it.copy(accountingStatus = AccountingStatus.Idle) }
+        val guestUid = resolveGuestUid(bill.guestName, guestPhone)
+        // Use the authoritative display name from the users collection for accounting,
+        // so the ledger record matches the registered guest identity.
+        val normalizedPhone = normalizePhoneE164(guestPhone) ?: guestPhone
+        val accountingName = if (normalizedPhone.isNotBlank()) {
+            runCatching { userRepo.findNameByPhone(normalizedPhone) }.getOrNull()
+        } else null
+        val billForAccounting = if (!accountingName.isNullOrBlank()) bill.copy(guestName = accountingName) else bill
+        return accountingRepo.settle(billForAccounting, guestPhone, guestUid)
+            .onSuccess { r ->
+                if (r.invoiceId.isNotBlank()) {
+                    runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
+                    _state.update { s ->
+                        s.copy(
+                            bill = s.bill?.takeIf { it.id == bill.id }?.copy(
+                                ledgerSynced = true,
+                                ledgerInvoiceId = r.invoiceId,
+                                ledgerInvoiceNumber = r.invoiceNumber,
+                                ledgerSyncError = "",
+                            ) ?: s.bill,
+                            accountingStatus = AccountingStatus.Synced,
+                        )
                     }
+                } else {
+                    // Accounting not configured — treat as a no-op, not a failure.
+                    _state.update { it.copy(accountingStatus = AccountingStatus.Idle) }
                 }
-                .onFailure { e ->
-                    runCatching { billRepo.markLedgerSyncFailed(bill.id, e.message ?: "sync failed") }
-                    _state.update { it.copy(accountingStatus = AccountingStatus.Failed(e.message ?: "Accounting sync failed")) }
-                }
-        }
+            }
+            .onFailure { e ->
+                runCatching { billRepo.markLedgerSyncFailed(bill.id, e.message ?: "sync failed") }
+                _state.update { it.copy(accountingStatus = AccountingStatus.Failed(e.message ?: "Accounting sync failed")) }
+            }
+            // A successful settle with a real invoice number; null otherwise (failure /
+            // not configured) — caller falls back to its own settle-if-missing.
+            .getOrNull()
+            ?.takeIf { it.invoiceId.isNotBlank() }
     }
 
     /**

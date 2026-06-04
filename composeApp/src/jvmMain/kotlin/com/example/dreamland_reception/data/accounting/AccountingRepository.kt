@@ -1,7 +1,10 @@
 package com.example.dreamland_reception.data.accounting
 
+import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.model.Bill
+import com.example.dreamland_reception.data.model.Expense
 import com.example.dreamland_reception.data.model.Order
+import com.example.dreamland_reception.data.model.Transfer
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
@@ -47,6 +50,11 @@ import java.util.Locale
 /** A vendor's current Humble Ledger balance. [payable] > 0 = we owe them. */
 data class VendorBalanceInfo(val payable: Double, val balanceType: String)
 
+/** The hotel's current liquid balances from Humble Ledger. */
+data class CashBankBalance(val cash: Double, val bank: Double) {
+    val total: Double get() = cash + bank
+}
+
 object AccountingRepository {
 
     private val client = AccountingApiClient
@@ -69,6 +77,12 @@ object AccountingRepository {
     /** In-memory cache for the food expense account ID. */
     @Volatile
     private var foodExpenseAccountId: String? = null
+
+    // Default expense account for general hotel expenses (no per-expense category).
+    private const val GENERAL_EXPENSE_ACCOUNT_NAME = "General Expense"
+
+    @Volatile
+    private var generalExpenseAccountId: String? = null
 
     /** Outcome of a successful settlement — carries the ledger invoice identity. */
     data class SettleResult(
@@ -147,7 +161,7 @@ object AccountingRepository {
                     appId       = APP_ID,
                     sourceId    = "stay_${bill.stayId}_advance_in",
                     postingType = "ADVANCE",
-                    description = "Advance received — Room ${bill.roomNumber} (${bill.guestName})",
+                    description = stampManager("Advance received — Room ${bill.roomNumber} (${bill.guestName})"),
                     date        = checkInDate,
                     entries     = listOf(
                         RawEntryInput(account = if (bill.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "DEBIT", amount = advanceRounded),
@@ -170,7 +184,7 @@ object AccountingRepository {
                 amount      = netRevenue,
                 taxRate     = taxRate,
                 taxAmount   = tax,
-                description = saleDescription,
+                description = stampManager(saleDescription),
                 date        = today,
                 appId       = APP_ID,
                 sourceId    = "stay_${bill.stayId}_sale",
@@ -210,7 +224,7 @@ object AccountingRepository {
                         method           = "CASH",            // ignored: paymentAccountId overrides it
                         paymentAccountId = advanceLiabilityId,
                         invoiceId        = invoiceId,
-                        description      = "Advance applied — invoice ${saleResponse.invoice.invoiceNumber}",
+                        description      = stampManager("Advance applied — invoice ${saleResponse.invoice.invoiceNumber}"),
                         date             = today,
                         appId            = APP_ID,
                         sourceId         = src,
@@ -229,7 +243,7 @@ object AccountingRepository {
                         method           = "CASH",
                         paymentAccountId = advanceLiabilityId,
                         invoiceId        = null,
-                        description      = "Advance surplus (credit) — ${saleResponse.invoice.invoiceNumber}",
+                        description      = stampManager("Advance surplus (credit) — ${saleResponse.invoice.invoiceNumber}"),
                         date             = today,
                         appId            = APP_ID,
                         sourceId         = "${src}_acct",
@@ -264,7 +278,7 @@ object AccountingRepository {
                         amount      = toInvoice,
                         method      = method,
                         invoiceId   = invoiceId,
-                        description = "Payment via ${txn.method}",
+                        description = stampManager("Payment via ${txn.method}"),
                         date        = today,
                         appId       = APP_ID,
                         sourceId    = base,
@@ -281,7 +295,7 @@ object AccountingRepository {
                         amount      = toAccount,
                         method      = method,
                         invoiceId   = null,
-                        description = "Payment via ${txn.method} (prior balance)",
+                        description = stampManager("Payment via ${txn.method} (prior balance)"),
                         date        = today,
                         appId       = APP_ID,
                         sourceId    = "${base}_acct",
@@ -454,7 +468,7 @@ object AccountingRepository {
                     vendorId         = hlVendor.id,
                     amount           = cost,
                     expenseAccountId = foodExpenseId,
-                    description      = "Food order — Room ${order.roomNumber} (${order.guestName})",
+                    description      = stampManager("Food order — Room ${order.roomNumber} (${order.guestName})"),
                     date             = today,
                     appId            = APP_ID,
                     sourceId         = "order_${order.id}_purchase",
@@ -471,7 +485,7 @@ object AccountingRepository {
                     vendorId    = hlVendor.id,
                     amount      = cash,
                     method      = "CASH",
-                    description = "Vendor payment (cash) — order ${order.id}",
+                    description = stampManager("Vendor payment (cash) — order ${order.id}"),
                     date        = today,
                     appId       = APP_ID,
                     sourceId    = "order_${order.id}_pay_cash",
@@ -486,7 +500,7 @@ object AccountingRepository {
                     vendorId    = hlVendor.id,
                     amount      = bank,
                     method      = "BANK",
-                    description = "Vendor payment (bank) — order ${order.id}",
+                    description = stampManager("Vendor payment (bank) — order ${order.id}"),
                     date        = today,
                     appId       = APP_ID,
                     sourceId    = "order_${order.id}_pay_bank",
@@ -499,6 +513,31 @@ object AccountingRepository {
         true
     }.also { result ->
         result.onFailure { e -> log("settleOrderVendor FAILED — order ${order.id}: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /**
+     * Fetches the hotel's current Cash & Bank balances from Humble Ledger. Uses a
+     * far-future as-of date so it reflects every posted entry (the true current
+     * balance), immune to timezone/date edges. Bank folds in the clearing accounts.
+     * Returns null when accounting isn't configured or on any non-fatal error.
+     */
+    suspend fun fetchCashBankBalance(): CashBankBalance? {
+        if (!AccountingConfig.isConfigured()) return null
+        return runCatching {
+            val token = client.ensureValidToken()
+            client.getBalanceSheet(token, "2999-12-31")?.let { bs ->
+                fun sumNamed(vararg names: String): Double {
+                    val wanted = names.map { it.lowercase() }
+                    return bs.assets
+                        .filter { it.name.lowercase() in wanted }
+                        .sumOf { it.balance?.toDoubleOrNull() ?: 0.0 }
+                }
+                CashBankBalance(
+                    cash = sumNamed("Cash"),
+                    bank = sumNamed("Bank", "Card Clearing", "UPI Clearing"),
+                )
+            }
+        }.getOrNull()
     }
 
     /**
@@ -540,6 +579,142 @@ object AccountingRepository {
         return created.id
     }
 
+    // ── Expense settlement (hotel costs, optionally tied to a vendor) ───────────
+
+    /**
+     * Posts a hotel expense to Humble Ledger against the "General Expense" account.
+     *   - With a vendor: purchase (DR expense / CR vendor AP) + cash/bank payments,
+     *     so the vendor's balance tracks pay-later / overpay (same as orders).
+     *   - Without a vendor: a direct expense (DR expense / CR Cash|Bank) per method.
+     * Deterministic sourceIds keep every leg idempotent on retry.
+     *
+     * Returns success(true) when posted, success(false) when skipped (not configured),
+     * failure(e) on a real error (caller persists it for retry).
+     */
+    suspend fun settleExpense(expense: Expense): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("settleExpense SKIP — accounting not configured (expense ${expense.id})")
+            return@runCatching false
+        }
+        val amount = roundAmount(expense.amount)
+        val cash = roundAmount(expense.cashPaid)
+        val bank = roundAmount(expense.bankPaid)
+        val today = LocalDate.now().toString()
+        val token = client.ensureValidToken()
+        val expenseAccountId = ensureGeneralExpenseAccount(token)
+        val desc = stampManager(buildString {
+            append(expense.title.ifBlank { if (expense.vendorName.isNotBlank()) "Expense — ${expense.vendorName}" else "Expense" })
+            if (expense.notes.isNotBlank()) append(" — ${expense.notes}")
+        })
+        log("settleExpense — id=${expense.id}, vendor='${expense.vendorName}' (uid=${expense.vendorId}), " +
+            "amount=$amount, cash=$cash, bank=$bank")
+
+        if (expense.vendorId.isNotBlank()) {
+            // Vendor expense → Accounts Payable flow (DR General Expense / CR vendor AP).
+            val hlVendor = client.createVendor(
+                token = token,
+                req   = CreateVendorRequest(name = expense.vendorName.ifBlank { "Vendor" }, externalId = expense.vendorId),
+            )
+            if (amount > 0.0) {
+                client.postPurchase(
+                    token = token,
+                    req   = PostPurchaseRequest(
+                        vendorId = hlVendor.id, amount = amount, expenseAccountId = expenseAccountId,
+                        description = desc, date = today, appId = APP_ID, sourceId = "expense_${expense.id}_purchase",
+                    ),
+                )
+            }
+            if (cash > 0.0) client.postVendorPayment(
+                token, PostVendorPaymentRequest(hlVendor.id, cash, "CASH", stampManager("Expense (cash) — ${expense.id}"), today, APP_ID, "expense_${expense.id}_pay_cash"),
+            )
+            if (bank > 0.0) client.postVendorPayment(
+                token, PostVendorPaymentRequest(hlVendor.id, bank, "BANK", stampManager("Expense (bank) — ${expense.id}"), today, APP_ID, "expense_${expense.id}_pay_bank"),
+            )
+        } else {
+            // No vendor → direct expense paid from cash/bank (must be fully paid).
+            if (cash > 0.0) client.postExpense(
+                token, PostExpenseRequest(cash, expenseAccountId, "CASH", desc, today, APP_ID, "expense_${expense.id}_cash"),
+            )
+            if (bank > 0.0) client.postExpense(
+                token, PostExpenseRequest(bank, expenseAccountId, "BANK", desc, today, APP_ID, "expense_${expense.id}_bank"),
+            )
+        }
+        log("settleExpense COMPLETE — expense ${expense.id}")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("settleExpense FAILED — expense ${expense.id}: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    private suspend fun ensureGeneralExpenseAccount(token: String): String {
+        generalExpenseAccountId?.let { return it }
+        val accounts = client.getAccounts(token)
+        val existing = accounts.firstOrNull { it.name.equals(GENERAL_EXPENSE_ACCOUNT_NAME, ignoreCase = true) }
+        if (existing != null) {
+            generalExpenseAccountId = existing.id
+            return existing.id
+        }
+        log("'$GENERAL_EXPENSE_ACCOUNT_NAME' account not found — creating it")
+        val created = client.createAccount(token, CreateAccountRequest(name = GENERAL_EXPENSE_ACCOUNT_NAME, type = "EXPENSE"))
+        generalExpenseAccountId = created.id
+        return created.id
+    }
+
+    // ── Money transfer (from → to: DR the destination / CR the source) ──────────
+
+    /**
+     * Posts a money transfer to Humble Ledger as one balanced journal entry:
+     * `DR(to) / CR(from)`. Either side may be Cash, Bank, a Customer (AR sub-account)
+     * or a Vendor (AP sub-account). This single rule is correct for any pair because
+     * each account's type handles the sign. Idempotent on the transfer id.
+     */
+    suspend fun settleTransfer(transfer: Transfer): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("settleTransfer SKIP — accounting not configured (transfer ${transfer.id})")
+            return@runCatching false
+        }
+        val amount = roundAmount(transfer.amount)
+        if (amount <= 0.0) return@runCatching false
+        val token = client.ensureValidToken()
+        val today = LocalDate.now().toString()
+
+        val toEntry = resolveTransferEntry(token, transfer.toKind, transfer.toRefId, transfer.toName, "DEBIT", amount)
+        val fromEntry = resolveTransferEntry(token, transfer.fromKind, transfer.fromRefId, transfer.fromName, "CREDIT", amount)
+
+        val desc = stampManager(buildString {
+            append("Transfer — ${transfer.fromName} → ${transfer.toName}")
+            if (transfer.notes.isNotBlank()) append(" · ${transfer.notes}")
+        })
+        log("settleTransfer — id=${transfer.id}, ${transfer.fromName} → ${transfer.toName}, amount=$amount")
+        client.postRawTransaction(
+            token = token,
+            req   = RawTransactionRequest(
+                appId = APP_ID, sourceId = "transfer_${transfer.id}", postingType = "JOURNAL",
+                description = desc, date = today, entries = listOf(toEntry, fromEntry),
+            ),
+        )
+        log("settleTransfer COMPLETE — transfer ${transfer.id}")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("settleTransfer FAILED — transfer ${transfer.id}: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /** Resolves one side of a transfer to a ledger entry (by account name or sub-account id). */
+    private suspend fun resolveTransferEntry(
+        token: String, kind: String, refId: String, name: String, type: String, amount: Double,
+    ): RawEntryInput = when (kind) {
+        "CASH" -> RawEntryInput(account = "Cash", type = type, amount = amount)
+        "BANK" -> RawEntryInput(account = "Bank", type = type, amount = amount)
+        "CUSTOMER" -> {
+            val c = client.createCustomer(token, CreateCustomerRequest(name = name.ifBlank { "Guest" }, externalId = refId))
+            RawEntryInput(accountId = c.accountId, type = type, amount = amount)
+        }
+        "VENDOR" -> {
+            val v = client.createVendor(token, CreateVendorRequest(name = name.ifBlank { "Vendor" }, externalId = refId))
+            RawEntryInput(accountId = v.accountId, type = type, amount = amount)
+        }
+        else -> error("Unknown transfer party kind: $kind")
+    }
+
     private fun buildSaleDescription(bill: Bill): String = buildString {
         append("Hotel stay — Room ${bill.roomNumber}")
         if (bill.checkInDate != null && bill.checkOutDate != null) {
@@ -549,4 +724,14 @@ object AccountingRepository {
     }
 
     private fun log(msg: String) = println("[Accounting] $msg")
+
+    /**
+     * Appends the on-duty reception manager to a ledger description, so every entry
+     * records who was at the desk. Returns the description unchanged when no manager
+     * is set (nothing breaks before the handover system is used).
+     */
+    private fun stampManager(desc: String): String {
+        val mgr = AppContext.currentManager.trim()
+        return if (mgr.isNotEmpty()) "$desc · by $mgr" else desc
+    }
 }

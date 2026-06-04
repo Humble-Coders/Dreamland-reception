@@ -165,6 +165,17 @@ internal object AccountingApiClient {
             post<AccountData>(path = "/api/v1/accounts", body = req, token = token)
         }
 
+    /** Balance sheet as of [date] — used to read current Cash & Bank balances. */
+    suspend fun getBalanceSheet(token: String, date: String): BalanceSheetData? =
+        withContext(Dispatchers.IO) {
+            val raw = get(path = "/api/v1/reports/balance-sheet?date=$date", token = token)
+            runCatching {
+                val type = object : TypeToken<ApiEnvelope<BalanceSheetData>>() {}.type
+                val env: ApiEnvelope<BalanceSheetData> = gson.fromJson(raw, type)
+                env.data
+            }.getOrNull()
+        }
+
     // ── Raw double-entry transactions ─────────────────────────────────────────
 
     /** Posts a raw double-entry journal entry. Used for ADVANCE and ADVANCE_APPLIED types. */
@@ -220,6 +231,13 @@ internal object AccountingApiClient {
     suspend fun postVendorPayment(token: String, req: PostVendorPaymentRequest) =
         withContext(Dispatchers.IO) {
             post<Map<*, *>>(path = "/api/v1/vendor-payments", body = req, token = token)
+            Unit
+        }
+
+    /** Record a direct expense (DR expense / CR Cash|Bank|Payable). */
+    suspend fun postExpense(token: String, req: PostExpenseRequest) =
+        withContext(Dispatchers.IO) {
+            post<Map<*, *>>(path = "/api/v1/expenses", body = req, token = token)
             Unit
         }
 
