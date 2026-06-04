@@ -37,6 +37,7 @@ import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.UUID
 import com.example.dreamland_reception.util.normalizePhoneE164
+import com.example.dreamland_reception.util.toNationalPhone
 
 // ── Accounting status ─────────────────────────────────────────────────────────
 
@@ -213,7 +214,7 @@ class StayBillingViewModel(
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: ""
-            val guestPhone = bill?.guestPhone?.ifBlank { null } ?: ""
+            val guestPhone = toNationalPhone(bill?.guestPhone?.ifBlank { null })
             val hotelId = AppContext.hotelId
             val instances = runCatching { instanceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val allRooms = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
@@ -324,7 +325,7 @@ class StayBillingViewModel(
             val pd = initPaymentAmountsFrom(bill)
             val override = _state.value.pendingGuestNameOverride
             val guestName = override.takeIf { it.isNotBlank() } ?: bill?.guestName ?: stay?.guestName ?: ""
-            val guestPhone2 = bill?.guestPhone?.ifBlank { null } ?: stay?.guestPhone ?: ""
+            val guestPhone2 = toNationalPhone(bill?.guestPhone?.ifBlank { null } ?: stay?.guestPhone)
             val hotelId2 = AppContext.hotelId
             val instances2 = runCatching { instanceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val allRooms2 = runCatching { roomRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
