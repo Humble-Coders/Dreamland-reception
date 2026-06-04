@@ -8,12 +8,15 @@ package com.example.dreamland_reception.stays
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -44,6 +47,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,11 +70,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -251,11 +258,10 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                         }
                     }
                 } else {
-                    // Final (Confirm) step: submit — require ALL guests to have ID verified
-                    val allIdVerified = state.guestEntries.all { it.idProofVerified }
+                    // Final (Confirm) step: submit
                     Button(
                         onClick = { if (state.isBookingMode) vm.submitAsBooking() else vm.requestSubmitWalkIn() },
-                        enabled = !state.isSaving && (state.isBookingMode || allIdVerified),
+                        enabled = !state.isSaving,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DreamlandGold,
                             disabledContainerColor = DreamlandGold.copy(alpha = 0.35f),
@@ -1095,19 +1101,6 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
         Spacer(Modifier.height(8.dp))
     }
 
-    // ID proof warning — require all guests
-    val allVerified = state.guestEntries.all { it.idProofVerified }
-    if (!state.isBookingMode && !allVerified) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFFF39C12).copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("⚠", color = Color(0xFFF39C12), fontSize = 14.sp)
-            Text("Verify ID proof for all guests to enable check-in", color = Color(0xFFF39C12), style = MaterialTheme.typography.bodySmall)
-        }
-    }
 }
 
 @Composable
@@ -1217,6 +1210,22 @@ private fun RoomChip(
 
 // ── Guest wizard card (step 2, all guests with name+phone+ID) ─────────────────
 
+// Shared label width so every field in the 2-column grid starts at the same x.
+private val GUEST_LABEL_WIDTH = 74.dp
+
+/** One grid cell = fixed-width left label + field. Occupies one half of the row. */
+@Composable
+private fun RowScope.LabeledCell(label: String, field: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.weight(1f),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(label, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(GUEST_LABEL_WIDTH))
+        field()
+    }
+}
+
 @Composable
 private fun GuestWizardCard(
     index: Int,
@@ -1237,18 +1246,22 @@ private fun GuestWizardCard(
     onRemove: (() -> Unit)? = null,
 ) {
     val isPrimary = index == 0
-    // Let fields size naturally so text + label never clip
-    val fieldMod = Modifier
+    // Compact field colors reused across all rows
+    val compactColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+        cursorColor = DreamlandGold, errorBorderColor = Color(0xFFEF5350),
+    )
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
         shape = RoundedCornerShape(12.dp),
     ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
             // Header: number circle + label + Use Scanner + Remove
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
             ) {
                 Box(
                     modifier = Modifier
@@ -1261,19 +1274,6 @@ private fun GuestWizardCard(
                     Text("${index + 1}", color = if (isPrimary) Color(0xFF0D1F17) else DreamlandMuted, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
                 Text("Guest ${index + 1}", color = DreamlandGold, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                // ID Proof toggle inline
-                Text("ID ✓", color = DreamlandMuted, fontSize = 11.sp)
-                Switch(
-                    checked = entry.idProofVerified,
-                    onCheckedChange = onIdProofChange,
-                    modifier = Modifier.height(24.dp),
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color(0xFF0D1F17),
-                        checkedTrackColor = Color(0xFF4CAF50),
-                        uncheckedThumbColor = DreamlandMuted,
-                        uncheckedTrackColor = DreamlandForestElevated,
-                    ),
-                )
                 OutlinedButton(
                     onClick = onScannerClick,
                     shape = RoundedCornerShape(6.dp),
@@ -1290,59 +1290,87 @@ private fun GuestWizardCard(
                 }
             }
 
-            // Row 1: Full Name + Phone
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DreamlandTextField(modifier = fieldMod.weight(1f), value = entry.name, onValueChange = onNameChange, label = if (isPrimary) "Full Name *" else "Full Name")
-                OutlinedTextField(
-                    value = entry.phone,
-                    onValueChange = { v ->
-                        val digits = v.filter(Char::isDigit).take(10)
-                        onPhoneChange(digits)
-                    },
-                    label = { Text("Phone", color = DreamlandMuted, fontSize = 13.sp) },
-                    prefix = { Text("+91 ", color = DreamlandMuted, fontSize = 13.sp) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    isError = entry.phone.isNotBlank() && entry.phone.length != 10,
-                    modifier = fieldMod.weight(1f),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
-                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                        cursorColor = DreamlandGold,
-                        errorBorderColor = Color(0xFFEF5350),
-                    ),
-                )
+            // Clean 2-column grid: each cell = fixed-width label + field, columns align across rows.
+            val rowGap = Arrangement.spacedBy(24.dp)
+
+            // Full Name | Phone
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
+                LabeledCell(if (isPrimary) "Full Name *" else "Full Name") {
+                    CompactField(
+                        value = entry.name, onValueChange = onNameChange,
+                        placeholder = "Enter name", colors = compactColors, modifier = Modifier.weight(1f),
+                    )
+                }
+                LabeledCell("Phone") {
+                    CompactField(
+                        value = entry.phone,
+                        onValueChange = { v -> onPhoneChange(v.filter(Char::isDigit).take(10)) },
+                        placeholder = "00000 00000", prefix = "+91 ",
+                        keyboardType = KeyboardType.Phone,
+                        isError = entry.phone.isNotBlank() && entry.phone.length != 10,
+                        colors = compactColors, modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
-            // Row 2: Gender + DOB + Age + Govt ID No. (CenterVertically aligns all to the same midpoint)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                DreamlandTextField(modifier = fieldMod.weight(0.8f), value = entry.gender, onValueChange = onGenderChange, label = "Gender")
-                DobPickerField(modifier = Modifier.weight(1.2f), dob = entry.dob, onDobChange = onDobChange)
-                DreamlandTextField(modifier = fieldMod.weight(0.6f), value = entry.age?.toString() ?: "", onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) }, label = "Age", keyboardType = KeyboardType.Number)
-                DreamlandTextField(modifier = fieldMod.weight(1.4f), value = entry.govIdNumber, onValueChange = onGovIdChange, label = "Govt ID No.")
+            // Gender | Age
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
+                LabeledCell("Gender") {
+                    CompactDropdown(
+                        selectedText = entry.gender, placeholder = "Select",
+                        options = listOf("Male", "Female", "Other"),
+                        onSelected = onGenderChange, modifier = Modifier.weight(1f),
+                    )
+                }
+                LabeledCell("Age") {
+                    CompactField(
+                        value = entry.age?.toString() ?: "",
+                        onValueChange = { onAgeChange(it.filter(Char::isDigit).take(3)) },
+                        placeholder = "—", keyboardType = KeyboardType.Number,
+                        colors = compactColors, modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
-            // Row 2b: ID Type + Purpose of Visit
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                DreamlandDropdown(
-                    modifier = Modifier.weight(1f),
-                    label = "ID Type",
-                    selectedText = entry.idType.ifBlank { "Select" },
-                    options = ID_TYPE_OPTIONS.map { it to it },
-                    onSelected = onIdTypeChange,
-                )
-                PurposeAutocompleteField(
-                    modifier = Modifier.weight(1.4f),
-                    value = entry.purpose,
-                    options = purposeOptions,
-                    onValueChange = onPurposeChange,
-                    onAdd = onAddPurpose,
-                )
+            // Date of Birth | ID Type
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
+                LabeledCell("DOB") {
+                    DobPickerField(modifier = Modifier.weight(1f), dob = entry.dob, onDobChange = onDobChange)
+                }
+                LabeledCell("ID Type") {
+                    CompactDropdown(
+                        selectedText = entry.idType, placeholder = "Select",
+                        options = ID_TYPE_OPTIONS,
+                        onSelected = onIdTypeChange, modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
-            // Row 3: Address + ID image buttons
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                DreamlandTextField(modifier = Modifier.weight(1f), value = entry.address, onValueChange = onAddressChange, label = "Address")
+            // Govt ID | Purpose
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = rowGap, verticalAlignment = Alignment.CenterVertically) {
+                LabeledCell("Govt ID") {
+                    CompactField(
+                        value = entry.govIdNumber, onValueChange = onGovIdChange,
+                        placeholder = "Enter ID number", colors = compactColors, modifier = Modifier.weight(1f),
+                    )
+                }
+                LabeledCell("Purpose") {
+                    PurposeAutocompleteField(
+                        modifier = Modifier.weight(1f),
+                        value = entry.purpose, options = purposeOptions,
+                        onValueChange = onPurposeChange, onAdd = onAddPurpose,
+                        colors = compactColors,
+                    )
+                }
+            }
+
+            // Address (full width) + optional ID image buttons
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Address", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(GUEST_LABEL_WIDTH))
+                CompactField(
+                    value = entry.address, onValueChange = onAddressChange,
+                    placeholder = "Enter address", colors = compactColors, modifier = Modifier.weight(1f),
+                )
                 if (entry.govIdPicture1.isNotBlank()) {
                     OutlinedButton(
                         onClick = { openUrlInBrowser(entry.govIdPicture1) },
@@ -1368,6 +1396,97 @@ private fun openUrlInBrowser(url: String) {
     runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) }
 }
 
+// ── Compact single-line field (no clipping at 46.dp) ──────────────────────────
+// Standard M3 OutlinedTextField clips when forced below ~56.dp. This uses the
+// lower-level DecorationBox with reduced content padding so text + placeholder
+// render fully inside a fixed 46.dp height.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CompactField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    colors: androidx.compose.material3.TextFieldColors,
+    modifier: Modifier = Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    prefix: String? = null,
+    isError: Boolean = false,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.height(46.dp),
+        textStyle = TextStyle(fontSize = 13.sp, color = DreamlandOnDark),
+        singleLine = true,
+        cursorBrush = SolidColor(DreamlandGold),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        interactionSource = interaction,
+        decorationBox = { inner ->
+            OutlinedTextFieldDefaults.DecorationBox(
+                value = value,
+                innerTextField = inner,
+                enabled = true,
+                singleLine = true,
+                visualTransformation = VisualTransformation.None,
+                interactionSource = interaction,
+                isError = isError,
+                placeholder = { Text(placeholder, color = DreamlandMuted.copy(alpha = 0.5f), fontSize = 12.sp, maxLines = 1) },
+                prefix = prefix?.let { { Text(it, color = DreamlandMuted, fontSize = 13.sp) } },
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                colors = colors,
+            )
+        },
+    )
+}
+
+// ── Compact dropdown styled to match CompactField (46.dp) ─────────────────────
+@Composable
+internal fun CompactDropdown(
+    selectedText: String,
+    placeholder: String,
+    options: List<String>,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var triggerSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+    Box(modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(46.dp)
+                .onSizeChanged { triggerSize = it }
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                selectedText.ifBlank { placeholder },
+                color = if (selectedText.isBlank()) DreamlandMuted.copy(alpha = 0.5f) else DreamlandOnDark,
+                fontSize = 13.sp, maxLines = 1, modifier = Modifier.weight(1f),
+            )
+            Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.width(with(density) { triggerSize.width.toDp() }).background(DreamlandForestElevated),
+        ) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    modifier = Modifier.fillMaxWidth(),
+                    text = { Text(opt, color = DreamlandOnDark, fontSize = 13.sp) },
+                    onClick = { onSelected(opt); expanded = false },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChange: (String) -> Unit) {
     val parts = dob.split("/")
@@ -1388,11 +1507,10 @@ private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChan
     val btnPad = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
     val btnShape = RoundedCornerShape(8.dp)
 
-    // 56.dp = M3 OutlinedTextField container height (without label overhead above the border)
+    // 46.dp = matches the compact Age field height in the same row
     Box(
         modifier
-            .padding(top = 8.dp)
-            .height(56.dp)
+            .height(46.dp)
             .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(4.dp)),
         contentAlignment = Alignment.Center,
     ) {
@@ -1932,44 +2050,36 @@ private fun PurposeAutocompleteField(
     options: List<String>,
     onValueChange: (String) -> Unit,
     onAdd: (String) -> Unit,
+    colors: androidx.compose.material3.TextFieldColors,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val query = value.trim()
     val matches = options.filter { it.contains(query, ignoreCase = true) }.take(6)
     val showAdd = query.isNotEmpty() && options.none { it.equals(query, ignoreCase = true) }
-    Column(modifier) {
-        Text("Purpose of Visit", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted)
-        Spacer(Modifier.height(4.dp))
-        Box {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { onValueChange(it); expanded = true },
-                singleLine = true,
-                placeholder = { Text("e.g. Business, Tourism", color = DreamlandMuted, fontSize = 13.sp) },
-                modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) expanded = true },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
-                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-                    cursorColor = DreamlandGold,
-                ),
-            )
-            DropdownMenu(
-                expanded = expanded && (matches.isNotEmpty() || showAdd),
-                onDismissRequest = { expanded = false },
-                properties = PopupProperties(focusable = false),
-            ) {
-                matches.forEach { p ->
-                    DropdownMenuItem(
-                        text = { Text(p, color = DreamlandOnDark) },
-                        onClick = { onValueChange(p); expanded = false },
-                    )
-                }
-                if (showAdd) {
-                    DropdownMenuItem(
-                        text = { Text("Add \"$query\"", color = DreamlandGold, fontWeight = FontWeight.SemiBold) },
-                        onClick = { onAdd(query); expanded = false },
-                    )
-                }
+    Box(modifier) {
+        CompactField(
+            value = value,
+            onValueChange = { onValueChange(it); expanded = true },
+            placeholder = "Business, Tourism…",
+            colors = colors,
+            modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) expanded = true },
+        )
+        DropdownMenu(
+            expanded = expanded && (matches.isNotEmpty() || showAdd),
+            onDismissRequest = { expanded = false },
+            properties = PopupProperties(focusable = false),
+        ) {
+            matches.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p, color = DreamlandOnDark, fontSize = 13.sp) },
+                    onClick = { onValueChange(p); expanded = false },
+                )
+            }
+            if (showAdd) {
+                DropdownMenuItem(
+                    text = { Text("Add \"$query\"", color = DreamlandGold, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) },
+                    onClick = { onAdd(query); expanded = false },
+                )
             }
         }
     }
