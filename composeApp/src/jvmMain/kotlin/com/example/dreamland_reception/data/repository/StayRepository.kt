@@ -14,6 +14,8 @@ interface StayRepository {
     suspend fun getActive(hotelId: String): List<Stay>
     suspend fun getAll(hotelId: String): List<Stay>
     suspend fun getById(id: String): Stay?
+    /** Flags that the check-in advance has been posted to the ledger (idempotency guard). */
+    suspend fun markAdvancePostedAtCheckIn(id: String)
     suspend fun add(stay: Stay): String
     suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String
     suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double = 0.0)
@@ -55,6 +57,12 @@ object FirestoreStayRepository : StayRepository {
 
     override suspend fun getById(id: String): Stay? = withContext(Dispatchers.IO) {
         col.document(id).get().get().toStay()
+    }
+
+    override suspend fun markAdvancePostedAtCheckIn(id: String) = withContext(Dispatchers.IO) {
+        if (id.isBlank()) return@withContext
+        col.document(id).update(mapOf("ledgerAdvancePostedAtCheckIn" to true, "updatedAt" to Date())).get()
+        Unit
     }
 
     override suspend fun add(stay: Stay): String = withContext(Dispatchers.IO) {
@@ -150,6 +158,7 @@ object FirestoreStayRepository : StayRepository {
             lateCheckOutCharge = getDouble("lateCheckOutCharge") ?: 0.0,
             advancePaidAmount = getDouble("advancePaidAmount") ?: getDouble("advanceAmount") ?: 0.0,
             advancePaymentMethod = getString("advancePaymentMethod") ?: "CASH",
+            ledgerAdvancePostedAtCheckIn = getBoolean("ledgerAdvancePostedAtCheckIn") ?: false,
             totalBilled = getDouble("totalBilled") ?: 0.0,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
             updatedAt = getTimestamp("updatedAt")?.toDate() ?: Date(),
@@ -201,6 +210,7 @@ object FirestoreStayRepository : StayRepository {
         "lateCheckOutCharge" to lateCheckOutCharge,
         "advancePaidAmount" to advancePaidAmount,
         "advancePaymentMethod" to advancePaymentMethod,
+        "ledgerAdvancePostedAtCheckIn" to ledgerAdvancePostedAtCheckIn,
         "totalBilled" to totalBilled,
         "createdAt" to createdAt,
         "updatedAt" to updatedAt,

@@ -112,6 +112,7 @@ import com.example.dreamland_reception.OrdersScreen
 import com.example.dreamland_reception.ExpensesScreen
 import com.example.dreamland_reception.TransfersScreen
 import com.example.dreamland_reception.shift.ShiftBar
+import com.example.dreamland_reception.shift.ShiftLockGate
 import com.example.dreamland_reception.UsersScreen
 import com.example.dreamland_reception.RoomsAndBookingsScreen
 import com.example.dreamland_reception.SettingsScreen
@@ -322,6 +323,9 @@ fun DreamlandApp() {
         ) {
             banner?.let { BookingNotificationBanner(it, onDismiss = { banner = null }) }
         }
+
+        // Launch-time desk lock — blocks the whole app until a manager signs in.
+        ShiftLockGate()
     }
 }
 

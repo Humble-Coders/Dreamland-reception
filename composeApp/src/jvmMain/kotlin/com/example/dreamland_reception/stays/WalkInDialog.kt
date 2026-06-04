@@ -839,8 +839,11 @@ private fun Step3AssignRooms(state: WalkInState, vm: StaysViewModel) {
 private fun Step4PrintGrc(state: WalkInState, vm: StaysViewModel) {
     LaunchedEffect(Unit) { vm.loadGrcPrinters() }
     val grc = state.grc
-    // Only guests whose ID was captured in the Guest Info step get a GRC.
-    val idGuests = state.guestEntries.withIndex().filter { it.value.idProofVerified }
+    // A GRC is offered for any guest that has data entered (name / phone / ID).
+    // (Previously gated on an "ID Proof Verified" toggle that no longer exists.)
+    val idGuests = state.guestEntries.withIndex().filter {
+        it.value.name.isNotBlank() || it.value.phone.isNotBlank() || it.value.govIdNumber.isNotBlank()
+    }
 
     WizardSectionLabel("PRINT GUEST REGISTRATION CARDS")
     Spacer(Modifier.height(8.dp))
@@ -891,7 +894,7 @@ private fun Step4PrintGrc(state: WalkInState, vm: StaysViewModel) {
 
     if (idGuests.isEmpty()) {
         Text(
-            "No guest ID captured yet. Capture an ID in the Guest Info step to print a GRC.",
+            "No guest details captured yet. Add a guest's name or phone in the Guest Info step to print a GRC.",
             color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
         )
     } else {
@@ -917,7 +920,7 @@ private fun Step4PrintGrc(state: WalkInState, vm: StaysViewModel) {
                         GrcPhase.WORKING -> if (isSaveMode) "Generating PDF…" else "Generating & printing…"
                         GrcPhase.DONE -> if (isSaveMode) "PDF saved & opened ✓" else "Sent to printer ✓"
                         GrcPhase.ERROR -> grc.errors[index] ?: "Failed"
-                        else -> entry.govIdNumber.ifBlank { "ID on file" }
+                        else -> entry.govIdNumber.ifBlank { entry.phone.ifBlank { "Details captured" } }
                     }
                     Text(
                         sub,

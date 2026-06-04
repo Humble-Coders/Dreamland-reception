@@ -61,9 +61,11 @@ object FirestoreTransferRepository : TransferRepository {
             fromKind = getString("fromKind") ?: "",
             fromRefId = getString("fromRefId") ?: "",
             fromName = getString("fromName") ?: "",
+            fromPhone = getString("fromPhone") ?: "",
             toKind = getString("toKind") ?: "",
             toRefId = getString("toRefId") ?: "",
             toName = getString("toName") ?: "",
+            toPhone = getString("toPhone") ?: "",
             amount = getDouble("amount") ?: 0.0,
             notes = getString("notes") ?: "",
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
@@ -74,8 +76,8 @@ object FirestoreTransferRepository : TransferRepository {
 
     private fun Transfer.toMap() = mapOf(
         "hotelId" to hotelId,
-        "fromKind" to fromKind, "fromRefId" to fromRefId, "fromName" to fromName,
-        "toKind" to toKind, "toRefId" to toRefId, "toName" to toName,
+        "fromKind" to fromKind, "fromRefId" to fromRefId, "fromName" to fromName, "fromPhone" to fromPhone,
+        "toKind" to toKind, "toRefId" to toRefId, "toName" to toName, "toPhone" to toPhone,
         "amount" to amount, "notes" to notes,
         "createdAt" to createdAt, "synced" to synced, "syncError" to syncError,
     )

@@ -6,9 +6,11 @@ import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.accounting.AccountingRepository
 import com.example.dreamland_reception.data.model.Transfer
 import com.example.dreamland_reception.data.model.Vendor
+import com.example.dreamland_reception.data.repository.FirestoreStayRepository
 import com.example.dreamland_reception.data.repository.FirestoreTransferRepository
 import com.example.dreamland_reception.data.repository.FirestoreUserRepository
 import com.example.dreamland_reception.data.repository.FirestoreVendorRepository
+import com.example.dreamland_reception.data.repository.StayRepository
 import com.example.dreamland_reception.data.repository.TransferRepository
 import com.example.dreamland_reception.data.repository.UserRepository
 import com.example.dreamland_reception.data.repository.VendorRepository
@@ -75,6 +77,7 @@ class TransfersViewModel(
     private val transferRepo: TransferRepository = FirestoreTransferRepository,
     private val userRepo: UserRepository = FirestoreUserRepository,
     private val vendorRepo: VendorRepository = FirestoreVendorRepository,
+    private val stayRepo: StayRepository = FirestoreStayRepository,
     private val accountingRepo: AccountingRepository = AccountingRepository,
 ) : ViewModel() {
 
@@ -106,21 +109,36 @@ class TransfersViewModel(
 
     fun onSearch(q: String) = _state.update { it.copy(searchQuery = q) }
 
-    /** Builds the from/to picker list: Cash, Bank, all guests, all vendors. */
+    /**
+     * Builds the from/to picker: Cash, Bank, this hotel's customers, and vendors.
+     * Customers come from the hotel's stays (the `users` collection is global and
+     * not hotel-scoped). Each stay carries the guest `userId` — the same UID used
+     * as the ledger `externalId` — plus name and phone, deduped per guest.
+     */
     fun loadParties() {
         val hotelId = AppContext.hotelId
         if (hotelId.isBlank()) return
         viewModelScope.launch {
-            val guests = runCatching { userRepo.getAllByHotel(hotelId) }.getOrElse { emptyList() }
+            val stays = runCatching { stayRepo.getAll(hotelId) }.getOrElse { emptyList() }
             val vendors = runCatching { vendorRepo.listByHotel(hotelId) }.getOrElse { emptyList() }
-            val customerParties = guests
-                .filter { it.name.isNotBlank() || it.phone.isNotBlank() }
-                .map { TransferParty("CUSTOMER", it.id, it.name.ifBlank { "Guest" }, it.phone) }
+
+            val customerParties = stays
+                .filter { it.guestName.isNotBlank() || it.guestPhone.isNotBlank() || it.userId.isNotBlank() }
+                .map { TransferParty("CUSTOMER", it.userId, it.guestName.ifBlank { "Guest" }, it.guestPhone) }
+                // One entry per guest: prefer keying on UID, then phone, then name.
+                .distinctBy { it.refId.ifBlank { it.phone.ifBlank { it.name.lowercase() } } }
                 .sortedBy { it.name.lowercase() }
             val vendorParties = vendors
                 .map { TransferParty("VENDOR", it.id, it.name, it.phone) }
                 .sortedBy { it.name.lowercase() }
-            val parties = listOf(TransferParty.CASH, TransferParty.BANK) + customerParties + vendorParties
+
+            // Keep any inline-added parties not yet present in the sourced lists.
+            val existingExtras = _state.value.parties.filter { p ->
+                p.kind == "CUSTOMER" && customerParties.none { it.refId.isNotBlank() && it.refId == p.refId } &&
+                    customerParties.none { it.phone.isNotBlank() && it.phone == p.phone }
+            }
+
+            val parties = listOf(TransferParty.CASH, TransferParty.BANK) + customerParties + existingExtras + vendorParties
             _state.update { it.copy(parties = parties) }
         }
     }
@@ -172,8 +190,8 @@ class TransfersViewModel(
         viewModelScope.launch {
             val transfer = Transfer(
                 hotelId = hotelId,
-                fromKind = from.kind, fromRefId = from.refId, fromName = from.label,
-                toKind = to.kind, toRefId = to.refId, toName = to.label,
+                fromKind = from.kind, fromRefId = from.refId, fromName = from.name, fromPhone = from.phone,
+                toKind = to.kind, toRefId = to.refId, toName = to.name, toPhone = to.phone,
                 amount = amount, notes = notes.trim(),
             )
             runCatching { transferRepo.add(transfer) }

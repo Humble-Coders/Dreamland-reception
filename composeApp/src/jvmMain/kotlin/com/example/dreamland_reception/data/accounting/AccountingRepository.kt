@@ -4,11 +4,14 @@ import com.example.dreamland_reception.data.AppContext
 import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.Expense
 import com.example.dreamland_reception.data.model.Order
+import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.model.Transfer
+import com.example.dreamland_reception.data.repository.FirestoreStayRepository
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
 import java.time.LocalDate
+import java.util.Date
 import java.util.Locale
 
 /**
@@ -143,12 +146,22 @@ object AccountingRepository {
         val customerArId   = customer.accountId   // AR sub-account for ADVANCE_APPLIED credit leg
         log("Customer — id=$customerId, arAccountId=$customerArId")
 
-        // ── 4. Ensure the canonical "Advance Liability" account exists ─────────
-        val advanceLiabilityId: String? = if (hasAdvance) {
-            val id = ensureAdvanceLiabilityAccount(token)
-            log("Advance liability account id=$id")
-            id
-        } else null
+        // ── 4. Reverse any check-in advance postings + ensure liability account ──
+        // A stay may have posted its advance to the ledger AT CHECK-IN (so live
+        // cash/bank reflected it immediately). Reverse those here so the
+        // authoritative advance posted in step 5 is the only surviving entry — this
+        // is what makes edited advances and group bills reconcile exactly. Stays
+        // checked in before early-posting existed aren't flagged, so are untouched.
+        val reversibleCheckInAdvances = resolveReversibleCheckInAdvances(bill)
+        val advanceLiabilityId: String? =
+            if (hasAdvance || reversibleCheckInAdvances.isNotEmpty()) {
+                val id = ensureAdvanceLiabilityAccount(token)
+                log("Advance liability account id=$id")
+                id
+            } else null
+        if (advanceLiabilityId != null && reversibleCheckInAdvances.isNotEmpty()) {
+            reverseCheckInAdvances(token, reversibleCheckInAdvances, advanceLiabilityId)
+        }
 
         // ── 5. ADVANCE — DR Cash / CR Advance Liability ───────────────────────
         // Posted with the check-in date because cash was received at check-in.
@@ -313,6 +326,100 @@ object AccountingRepository {
         result.onFailure { e ->
             log("settle() FAILED — ${e::class.simpleName}: ${e.message}")
             log("─────────────────────────────────────────")
+        }
+    }
+
+    // ── Check-in advance (live cash/bank at check-in) ───────────────────────────
+
+    /**
+     * Posts a guest's advance to Humble Ledger AT CHECK-IN so the hotel's live
+     * cash/bank reflects it immediately (rather than only at checkout):
+     *   DR Cash | Bank      advance   ← cash/bank received now
+     *   CR Advance Liability advance  ← held as a liability until the invoice
+     *
+     * Idempotent on `checkin_<stayId>_advance`. At checkout, [settle] reverses this
+     * exact posting and re-posts the authoritative advance (which may have been
+     * edited, or aggregated for a group), so this can never double-count.
+     *
+     * Returns success(true) when posted (or nothing to post), success(false) when
+     * accounting isn't configured, failure(e) on a real error (caller may retry).
+     */
+    suspend fun postCheckInAdvance(
+        stayId: String,
+        amount: Double,
+        method: String,
+        checkInDate: Date,
+        roomNumber: String,
+        guestName: String,
+    ): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("postCheckInAdvance SKIP — not configured (stay $stayId)")
+            return@runCatching false
+        }
+        val amt = roundAmount(amount)
+        if (stayId.isBlank() || amt <= 0.01) return@runCatching true
+        val token = client.ensureValidToken()
+        val advanceLiabilityId = ensureAdvanceLiabilityAccount(token)
+        val date = runCatching { SimpleDateFormat("yyyy-MM-dd").format(checkInDate) }.getOrNull()
+            ?: LocalDate.now().toString()
+        log("postCheckInAdvance — stay=$stayId, amount=$amt, method=$method, date=$date")
+        client.postRawTransaction(
+            token = token,
+            req   = RawTransactionRequest(
+                appId       = APP_ID,
+                sourceId    = "checkin_${stayId}_advance",
+                postingType = "ADVANCE",
+                description = stampManager("Advance received at check-in — Room $roomNumber ($guestName)"),
+                date        = date,
+                entries     = listOf(
+                    RawEntryInput(account = if (method == "BANK") "Bank" else "Cash", type = "DEBIT", amount = amt),
+                    RawEntryInput(accountId = advanceLiabilityId, type = "CREDIT", amount = amt),
+                ),
+            ),
+        )
+        log("postCheckInAdvance OK — stay=$stayId")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("postCheckInAdvance FAILED — stay $stayId: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /**
+     * Fetches the stays on [bill] whose advance was posted to the ledger at check-in
+     * (and is therefore reversible at checkout). A fetch failure propagates so the
+     * caller retries — never silently skipping a reversal, which would double-count.
+     */
+    private suspend fun resolveReversibleCheckInAdvances(bill: Bill): List<Stay> {
+        val stayIds = bill.stayIds.ifEmpty { listOf(bill.stayId) }.filter { it.isNotBlank() }.distinct()
+        if (stayIds.isEmpty()) return emptyList()
+        return stayIds.mapNotNull { sid -> FirestoreStayRepository.getById(sid) }
+            .filter { it.ledgerAdvancePostedAtCheckIn && roundAmount(it.advancePaidAmount) > 0.01 }
+    }
+
+    /**
+     * Reverses each stay's check-in advance posting (the mirror of [postCheckInAdvance]):
+     *   DR Advance Liability     advance
+     *   CR Cash | Bank           advance
+     * Idempotent on `checkin_<stayId>_advance_reversal`.
+     */
+    private suspend fun reverseCheckInAdvances(token: String, stays: List<Stay>, advanceLiabilityId: String) {
+        for (stay in stays) {
+            val amt = roundAmount(stay.advancePaidAmount)
+            if (amt <= 0.01) continue
+            log("Reversing check-in advance — stay=${stay.id}, amount=$amt, method=${stay.advancePaymentMethod}")
+            client.postRawTransaction(
+                token = token,
+                req   = RawTransactionRequest(
+                    appId       = APP_ID,
+                    sourceId    = "checkin_${stay.id}_advance_reversal",
+                    postingType = "ADVANCE",
+                    description = stampManager("Advance re-posted on invoice — Room ${stay.roomNumber}"),
+                    date        = LocalDate.now().toString(),
+                    entries     = listOf(
+                        RawEntryInput(accountId = advanceLiabilityId, type = "DEBIT", amount = amt),
+                        RawEntryInput(account = if (stay.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "CREDIT", amount = amt),
+                    ),
+                ),
+            )
         }
     }
 
@@ -677,8 +784,8 @@ object AccountingRepository {
         val token = client.ensureValidToken()
         val today = LocalDate.now().toString()
 
-        val toEntry = resolveTransferEntry(token, transfer.toKind, transfer.toRefId, transfer.toName, "DEBIT", amount)
-        val fromEntry = resolveTransferEntry(token, transfer.fromKind, transfer.fromRefId, transfer.fromName, "CREDIT", amount)
+        val toEntry = resolveTransferEntry(token, transfer.toKind, transfer.toRefId, transfer.toName, transfer.toPhone, "DEBIT", amount)
+        val fromEntry = resolveTransferEntry(token, transfer.fromKind, transfer.fromRefId, transfer.fromName, transfer.fromPhone, "CREDIT", amount)
 
         val desc = stampManager(buildString {
             append("Transfer — ${transfer.fromName} → ${transfer.toName}")
@@ -700,12 +807,14 @@ object AccountingRepository {
 
     /** Resolves one side of a transfer to a ledger entry (by account name or sub-account id). */
     private suspend fun resolveTransferEntry(
-        token: String, kind: String, refId: String, name: String, type: String, amount: Double,
+        token: String, kind: String, refId: String, name: String, phone: String, type: String, amount: Double,
     ): RawEntryInput = when (kind) {
         "CASH" -> RawEntryInput(account = "Cash", type = type, amount = amount)
         "BANK" -> RawEntryInput(account = "Bank", type = type, amount = amount)
         "CUSTOMER" -> {
-            val c = client.createCustomer(token, CreateCustomerRequest(name = name.ifBlank { "Guest" }, externalId = refId))
+            // Reuse billing's canonical resolution (uid → phone → name) so a transfer
+            // hits the SAME ledger customer that an invoice would.
+            val c = resolveCustomer(token, name.ifBlank { "Guest" }, phone, refId)
             RawEntryInput(accountId = c.accountId, type = type, amount = amount)
         }
         "VENDOR" -> {

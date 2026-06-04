@@ -44,6 +44,11 @@ data class Stay(
     val lateCheckOutCharge: Double = 0.0,
     val advancePaidAmount: Double = 0.0,
     val advancePaymentMethod: String = "CASH",   // CASH | BANK
+    // True once the advance was posted to Humble Ledger at check-in (DR Cash/Bank /
+    // CR Advance Liability) so live cash/bank reflects it immediately. Checkout
+    // reverses this posting and re-posts the authoritative advance, so it must know
+    // whether an early posting exists. False for stays checked in before this existed.
+    val ledgerAdvancePostedAtCheckIn: Boolean = false,
     val totalBilled: Double = 0.0,
     val createdAt: Date = Date(),
     val updatedAt: Date = Date(),

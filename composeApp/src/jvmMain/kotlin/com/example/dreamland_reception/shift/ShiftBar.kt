@@ -138,6 +138,106 @@ fun ShiftBar(vm: ShiftViewModel = DreamlandAppInitializer.getShiftViewModel()) {
     }
 }
 
+/**
+ * Launch-time desk lock. While no manager has signed in for this app session, this
+ * shows a non-dismissable dialog over the whole app: the desk stays locked until a
+ * manager is chosen and their password verified. Closing and reopening the app
+ * re-locks (the session flag never persists). Render once, above all content.
+ */
+@Composable
+fun ShiftLockGate(vm: ShiftViewModel = DreamlandAppInitializer.getShiftViewModel()) {
+    val sessionStarted by vm.sessionStarted.collectAsStateWithLifecycle()
+    val managers by vm.managers.collectAsStateWithLifecycle()
+    if (sessionStarted) return
+
+    var selected by remember { mutableStateOf<ReceptionManager?>(null) }
+    var password by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var showAdd by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = { /* locked: cannot be dismissed without signing in */ },
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false),
+    ) {
+        Box(Modifier.fillMaxWidth(0.36f).clip(RoundedCornerShape(16.dp)).background(DreamlandForestSurface).padding(24.dp)) {
+            Column(Modifier.fillMaxWidth()) {
+                Text("DESK LOCKED", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (selected == null) "Who's on the desk?" else "Sign in as ${selected!!.name}",
+                    style = MaterialTheme.typography.headlineSmall, color = DreamlandOnDark,
+                )
+                Spacer(Modifier.height(14.dp))
+
+                val current = selected
+                if (current == null) {
+                    Text(
+                        "Select the manager taking the desk to unlock the app.",
+                        color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    if (managers.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                            Text("No managers yet — add one to begin.", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        managers.forEach { m ->
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .clickable { selected = m; password = ""; error = null }
+                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(Icons.Filled.Person, contentDescription = null, tint = DreamlandGold, modifier = Modifier.size(16.dp))
+                                Text(m.name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                            }
+                            HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, DreamlandGold.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .clickable { showAdd = true }.padding(vertical = 11.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("+ Add manager", color = DreamlandGold, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold) }
+                } else {
+                    ShiftField(password, { password = it; error = null }, "${current.name}'s password", isPassword = true)
+                    if (error != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(error!!, color = Color(0xFFEF5350), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = { selected = null; password = ""; error = null }, enabled = !busy, modifier = Modifier.weight(1f).height(44.dp)) {
+                            Text("Back", color = DreamlandMuted)
+                        }
+                        Button(
+                            onClick = {
+                                busy = true
+                                vm.startSession(current.name, password) { ok, err -> busy = false; if (!ok) error = err }
+                            },
+                            enabled = !busy && password.isNotEmpty(),
+                            modifier = Modifier.weight(1.4f).height(44.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, disabledContainerColor = DreamlandGold.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(8.dp),
+                        ) { Text("Unlock Desk", color = Color(0xFF0D1F17), fontWeight = FontWeight.SemiBold) }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAdd) {
+        AddManagerDialog(
+            onAdd = { name, pw, cb -> vm.addManager(name, pw, cb) },
+            onDismiss = { showAdd = false },
+        )
+    }
+}
+
 @Composable
 private fun Pill(label: String, amount: Double, color: Color) {
     Row(

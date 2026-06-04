@@ -31,6 +31,12 @@ class ShiftViewModel(
     private val _managers = MutableStateFlow<List<ReceptionManager>>(emptyList())
     val managers: StateFlow<List<ReceptionManager>> = _managers.asStateFlow()
 
+    // False on every fresh app launch (this ViewModel is a process-scoped singleton),
+    // so the desk is locked until a manager signs in for the session. It never
+    // persists — closing and reopening the app always re-locks.
+    private val _sessionStarted = MutableStateFlow(false)
+    val sessionStarted: StateFlow<Boolean> = _sessionStarted.asStateFlow()
+
     init { loadManagers() }
 
     fun loadManagers() {
@@ -58,6 +64,43 @@ class ShiftViewModel(
                     onResult(true, null)
                 }
                 .onFailure { e -> onResult(false, e.message ?: "Failed to add manager") }
+        }
+    }
+
+    /**
+     * Signs a manager in for this app session (the launch-time desk lock). Verifies
+     * the password, records the shift start (with Cash & Bank, unless the same person
+     * is resuming), makes them on duty, and unlocks the app. Distinct from [handover]
+     * in that it has no "already on duty" guard — at launch nobody is signed in yet.
+     */
+    fun startSession(managerName: String, password: String, onResult: (ok: Boolean, error: String?) -> Unit) {
+        val manager = _managers.value.firstOrNull { it.name.equals(managerName.trim(), ignoreCase = true) }
+        if (manager == null) { onResult(false, "Manager not found"); return }
+        if (password.isEmpty()) { onResult(false, "Password is required"); return }
+        if (manager.passwordHash != hashManagerPassword(manager.name, password)) { onResult(false, "Incorrect password"); return }
+
+        viewModelScope.launch {
+            val from = AppContext.currentManager
+            // Log the shift start as a handover from whoever was last on duty — unless
+            // the same manager is simply resuming after a restart. Best-effort.
+            if (!manager.name.equals(from, ignoreCase = true)) {
+                val bal = runCatching { accountingRepo.fetchCashBankBalance() }.getOrNull()
+                runCatching {
+                    shiftRepo.logHandover(
+                        ShiftHandover(
+                            hotelId = AppContext.hotelId,
+                            fromManager = from,
+                            toManager = manager.name,
+                            cashAtHandover = bal?.cash,
+                            bankAtHandover = bal?.bank,
+                        )
+                    )
+                }
+            }
+            AppContext.setManager(manager.name)
+            _currentManager.value = manager.name
+            _sessionStarted.value = true
+            onResult(true, null)
         }
     }
 

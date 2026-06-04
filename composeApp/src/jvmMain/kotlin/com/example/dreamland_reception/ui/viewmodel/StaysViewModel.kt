@@ -380,6 +380,7 @@ class StaysViewModel(
     private val scannerRepo: ScannerRepository = FirestoreScannerRepository,
     private val purposeRepo: com.example.dreamland_reception.data.repository.PurposeTypeRepository = com.example.dreamland_reception.data.repository.FirestorePurposeTypeRepository,
     private val counterRepo: com.example.dreamland_reception.data.repository.CounterRepository = com.example.dreamland_reception.data.repository.FirestoreCounterRepository,
+    private val accountingRepo: com.example.dreamland_reception.data.accounting.AccountingRepository = com.example.dreamland_reception.data.accounting.AccountingRepository,
 ) : ViewModel() {
 
     private val _listState = MutableStateFlow(StaysListState(isLoading = true))
@@ -437,6 +438,7 @@ class StaysViewModel(
             runCatching { stayRepo.getActive(hotelId) }
                 .onSuccess { stays ->
                     _listState.update { it.copy(stays = stays, isLoading = false, categoryNames = catNames) }
+                    retryUnpostedCheckInAdvances(stays)
                 }
                 .onFailure { e ->
                     _listState.update { it.copy(isLoading = false, error = e.message ?: "Failed to load stays") }
@@ -1677,7 +1679,7 @@ class StaysViewModel(
                 // Mark ALL resolved user accounts checked in (covers extra guests too).
                 phoneToUid.values.forEach { uid -> runCatching { userRepo.markCheckedIn(uid, true) } }
 
-                val firstStayId = ws.selectedInstanceIds.mapIndexed { roomIndex, instanceId ->
+                val createdStays = ws.selectedInstanceIds.mapIndexed { roomIndex, instanceId ->
                     val roomInstance = instanceRepo.getById(instanceId)
                         ?: throw Exception("Room instance $instanceId not found")
                     // Fallback to cached selection details if the Firestore doc is missing category fields
@@ -1780,10 +1782,15 @@ class StaysViewModel(
                             ))
                         }
                     }
-                    stayId
-                }.first()
-                firstStayId
-            }.onSuccess { newStayId ->
+                    stay.copy(id = stayId)
+                }
+                createdStays
+            }.onSuccess { createdStays ->
+                val newStayId = createdStays.firstOrNull()?.id ?: ""
+                // Post each room's advance to the ledger now, so live cash/bank reflects
+                // it at check-in. Best-effort + durable (retried on load); checkout
+                // reverses and re-posts the authoritative advance, so nothing is lost.
+                postCheckInAdvances(createdStays)
                 // Cancel bookings that weren't linked to any selected room (user chose this option)
                 if (cancelUnmetBookings && ws.isGroupCheckIn) {
                     val linkedIds = ws.instanceToBookingId.values.toSet()
@@ -1804,6 +1811,38 @@ class StaysViewModel(
                 _walkInState.update { it.copy(isSaving = false, error = e.message ?: "Check-in failed") }
             }
         }
+    }
+
+    // ── Check-in advance → live cash/bank ───────────────────────────────────────
+
+    /**
+     * Posts each stay's advance to Humble Ledger right after check-in so the hotel's
+     * live cash/bank reflects it immediately. Best-effort and idempotent: on success
+     * the stay is flagged so it isn't posted twice; failures are retried by
+     * [retryUnpostedCheckInAdvances] on the next load, and checkout reverses + re-posts
+     * the authoritative advance regardless — so an advance can never be lost.
+     */
+    private suspend fun postCheckInAdvances(stays: List<Stay>) {
+        for (stay in stays) {
+            if (stay.id.isBlank() || stay.advancePaidAmount <= 0.01 || stay.ledgerAdvancePostedAtCheckIn) continue
+            accountingRepo.postCheckInAdvance(
+                stayId = stay.id,
+                amount = stay.advancePaidAmount,
+                method = stay.advancePaymentMethod,
+                checkInDate = stay.checkInActual,
+                roomNumber = stay.roomNumber,
+                guestName = stay.guestName,
+            ).onSuccess { posted ->
+                if (posted) runCatching { stayRepo.markAdvancePostedAtCheckIn(stay.id) }
+            }
+        }
+    }
+
+    /** Durable recovery: re-attempts any active stay whose check-in advance never posted. */
+    private fun retryUnpostedCheckInAdvances(stays: List<Stay>) {
+        val pending = stays.filter { it.advancePaidAmount > 0.01 && !it.ledgerAdvancePostedAtCheckIn }
+        if (pending.isEmpty()) return
+        viewModelScope.launch { postCheckInAdvances(pending) }
     }
 
     // ── From booking ──────────────────────────────────────────────────────────

@@ -11,7 +11,9 @@ import com.example.dreamland_reception.data.model.PaymentTransaction
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.repository.BillRepository
+import com.example.dreamland_reception.data.repository.FirestoreSharedQrCodeRepository
 import com.example.dreamland_reception.data.repository.FirestoreUserRepository
+import com.example.dreamland_reception.data.repository.SharedQrCodeRepository
 import com.example.dreamland_reception.data.repository.UserRepository
 import com.example.dreamland_reception.data.repository.FirestoreBillRepository
 import com.example.dreamland_reception.data.repository.FirestoreFoodItemRepository
@@ -198,6 +200,7 @@ class StayBillingViewModel(
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
     private val userRepo: UserRepository = FirestoreUserRepository,
     private val accountingRepo: AccountingRepository = AccountingRepository,
+    private val sharedQrCodeRepo: SharedQrCodeRepository = FirestoreSharedQrCodeRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(StayBillingState())
@@ -1434,6 +1437,8 @@ class StayBillingViewModel(
         val url = _state.value.invoicePdf.url
         if (url.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
+            // Publish the link to `sharedQrCodes` so it can be shared; best-effort.
+            runCatching { sharedQrCodeRepo.share(url) }
             val qrImage = runCatching {
                 val writer = com.google.zxing.qrcode.QRCodeWriter()
                 val matrix = writer.encode(url, com.google.zxing.BarcodeFormat.QR_CODE, 400, 400)
