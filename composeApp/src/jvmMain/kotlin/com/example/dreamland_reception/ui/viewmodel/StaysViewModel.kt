@@ -219,6 +219,8 @@ data class WalkInState(
     // Previously-scanned IDs for the primary guest's phone (pulled from the stays
     // collection), shown beside the dialog so a returning guest's ID surfaces instantly.
     val matchedGuestIds: List<MatchedGuestId> = emptyList(),
+    // Primary guest's current Humble Ledger balance (null = none / not configured / new guest).
+    val guestBalance: com.example.dreamland_reception.data.accounting.CustomerBalanceInfo? = null,
 )
 
 /**
@@ -261,6 +263,41 @@ fun WalkInState.priceForCategory(catId: String): Double =
  * exactly this. (Not used by the "Add Booking" creation flow, which makes bookings, not stays.)
  */
 fun WalkInState.agreedPriceForCategory(catId: String): Double = priceForCategory(catId)
+
+/**
+ * Converts an order into bill line items — ONE per ordered item, preserving the quantity,
+ * per-unit price and tax (so "Chips ×6" bills as "6 × ₹10.00", not "1 × ₹60.00"). Monetary
+ * totals are identical to the old single-line form (subtotal and tax are unchanged); only
+ * the display is corrected. Falls back to a single line for legacy orders with no item list.
+ */
+fun orderToBillItems(order: Order, prefix: String = ""): List<com.example.dreamland_reception.data.model.BillItem> {
+    val items = order.items.filter { it.subtotal > 0 || it.basePrice > 0 || it.total > 0 }
+    if (items.isEmpty()) {
+        val base = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
+        if (base <= 0.0) return emptyList()
+        val taxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
+            order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
+        return listOf(
+            com.example.dreamland_reception.data.model.BillItem(
+                name = "${prefix}Order", type = "ORDER", quantity = 1,
+                unitPrice = base, total = base, taxPercentage = taxPct, refId = order.id,
+            ),
+        )
+    }
+    return items.map { item ->
+        val qty = item.quantity.coerceAtLeast(1)
+        val unit = if (item.basePrice > 0) item.basePrice else (if (item.subtotal > 0) item.subtotal / qty else item.total / qty)
+        com.example.dreamland_reception.data.model.BillItem(
+            name = "$prefix${item.name.ifBlank { "Item" }}",
+            type = "ORDER",
+            quantity = qty,
+            unitPrice = unit,
+            total = if (item.subtotal > 0) item.subtotal else unit * qty,
+            taxPercentage = item.taxPercentage,
+            refId = order.id,
+        )
+    }
+}
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
 
@@ -647,14 +684,8 @@ class StaysViewModel(
                 ))
                 for (order in orders) {
                     if (order.totalAmount > 0) {
-                        val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
-                        val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
-                            order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
-                        add(com.example.dreamland_reception.data.model.BillItem(
-                            name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
-                            type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
-                            taxPercentage = effectiveTaxPct, refId = order.id,
-                        ))
+                        // One bill line per ordered item, with its real quantity & unit price.
+                        addAll(orderToBillItems(order))
                     }
                 }
             }
@@ -917,9 +948,18 @@ class StaysViewModel(
                 }
             }
             searchGuestIdsByPhone(phone)
+            // Surface the guest's current ledger balance.
+            viewModelScope.launch {
+                val bal = accountingRepo.fetchCustomerBalance(phone)
+                _walkInState.update { ws ->
+                    if (ws.guestEntries.firstOrNull()?.phone == phone) ws.copy(guestBalance = bal) else ws
+                }
+            }
         } else if (index == 0) {
-            // Primary phone incomplete/changed → hide the IDs panel.
-            if (_walkInState.value.matchedGuestIds.isNotEmpty()) _walkInState.update { it.copy(matchedGuestIds = emptyList()) }
+            // Primary phone incomplete/changed → hide the IDs panel + balance.
+            _walkInState.update {
+                if (it.matchedGuestIds.isNotEmpty() || it.guestBalance != null) it.copy(matchedGuestIds = emptyList(), guestBalance = null) else it
+            }
         }
     }
 
@@ -2148,8 +2188,12 @@ class StaysViewModel(
             )
             // Populate full category availability map for all categories
             computeAvailability()
-            // Surface any previously-scanned IDs for the (pre-filled) primary phone.
+            // Surface any previously-scanned IDs + ledger balance for the (pre-filled) phone.
             searchGuestIdsByPhone(toNationalPhone(primaryBooking.guestPhone))
+            viewModelScope.launch {
+                val bal = accountingRepo.fetchCustomerBalance(primaryBooking.guestPhone)
+                _walkInState.update { it.copy(guestBalance = bal) }
+            }
         }
     }
 
@@ -2232,8 +2276,12 @@ class StaysViewModel(
             )
             // Populate full category availability map for all categories
             computeAvailability()
-            // Surface any previously-scanned IDs for the (pre-filled) primary phone.
+            // Surface any previously-scanned IDs + ledger balance for the (pre-filled) phone.
             searchGuestIdsByPhone(toNationalPhone(booking.guestPhone))
+            viewModelScope.launch {
+                val bal = accountingRepo.fetchCustomerBalance(booking.guestPhone)
+                _walkInState.update { it.copy(guestBalance = bal) }
+            }
         }
     }
 
@@ -2567,14 +2615,8 @@ class StaysViewModel(
             ))
             for (order in orders) {
                 if (order.totalAmount > 0) {
-                    val orderBase = if (order.subtotalAmount > 0) order.subtotalAmount else order.totalAmount
-                    val effectiveTaxPct = if (order.subtotalAmount > 0 && order.totalTaxAmount > 0)
-                        order.totalTaxAmount / order.subtotalAmount * 100.0 else 0.0
-                    allItems.add(BillItem(
-                        name = "$prefix${order.items.joinToString(", ") { it.name }.ifBlank { "Order" }}",
-                        type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
-                        taxPercentage = effectiveTaxPct, refId = order.id,
-                    ))
+                    // One bill line per ordered item, with its real quantity & unit price.
+                    allItems.addAll(orderToBillItems(order, prefix))
                 }
             }
             totalAdvance += stay.advancePaidAmount

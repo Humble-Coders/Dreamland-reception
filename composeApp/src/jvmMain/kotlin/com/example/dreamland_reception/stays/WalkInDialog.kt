@@ -97,6 +97,7 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.example.dreamland_reception.data.accounting.CustomerBalanceInfo
 import com.example.dreamland_reception.ui.viewmodel.MatchedGuestId
 import com.example.dreamland_reception.ui.viewmodel.GRC_SAVE_AS_PDF
 import com.example.dreamland_reception.ui.viewmodel.GrcPhase
@@ -331,6 +332,35 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
             onCancelUnmet = { vm.confirmCheckInMismatch(cancelUnmet = true) },
             onDismiss = vm::dismissCheckInMismatch,
         )
+    }
+}
+
+// ── Guest ledger balance ──────────────────────────────────────────────────────
+
+@Composable
+private fun GuestBalanceBanner(bal: CustomerBalanceInfo) {
+    val owes = bal.balance > 0.009
+    val credit = bal.balance < -0.009
+    val (label, amountText, color) = when {
+        owes -> Triple("Previous dues (owes the hotel)", "₹${"%,.2f".format(bal.balance)}", Color(0xFFEF5350))
+        credit -> Triple("Credit on account (prepaid)", "₹${"%,.2f".format(-bal.balance)}", Color(0xFF4CAF50))
+        else -> Triple("Ledger balance", "Settled — no dues", DreamlandMuted)
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column {
+            Text("HUMBLE LEDGER", color = DreamlandMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+            Text(label, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+        }
+        Text(amountText, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
     }
 }
 
@@ -730,6 +760,12 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
         )
     }
     Spacer(Modifier.height(12.dp))
+
+    // Guest's current Humble Ledger balance (shown once the phone resolves to a ledger guest).
+    state.guestBalance?.let { bal ->
+        GuestBalanceBanner(bal)
+        Spacer(Modifier.height(12.dp))
+    }
 
     // Scanner error toast
     if (state.scannerMessage != null) {

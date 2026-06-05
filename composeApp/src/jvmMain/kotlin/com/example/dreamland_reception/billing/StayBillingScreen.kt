@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.example.dreamland_reception.data.accounting.CustomerBalanceInfo
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.focus.onFocusChanged
@@ -355,6 +356,8 @@ fun StayBillingScreen(
                             .padding(20.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
+                        // Guest's current Humble Ledger balance (prior dues / credit on account).
+                        state.guestLedgerBalance?.let { bal -> GuestLedgerBalanceCard(bal) }
                         // Bill summary — editable tax%, advance, and live payment preview
                         BillSummaryCard(
                             bill = bill,
@@ -797,6 +800,32 @@ private fun TaxDiscountSummaryCard(bill: Bill, onEdit: () -> Unit, readOnly: Boo
                     Text("Edit", color = DreamlandGold)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun GuestLedgerBalanceCard(bal: CustomerBalanceInfo) {
+    val owes = bal.balance > 0.009
+    val credit = bal.balance < -0.009
+    val (label, amountText, color) = when {
+        owes -> Triple("Previous dues (owes the hotel)", "₹${"%,.2f".format(bal.balance)}", Color(0xFFEF5350))
+        credit -> Triple("Credit on account (prepaid)", "₹${"%,.2f".format(-bal.balance)}", Color(0xFF4CAF50))
+        else -> Triple("No outstanding balance", "Settled", DreamlandMuted)
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.12f))
+            .border(1.dp, color.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text("HUMBLE LEDGER", color = DreamlandMuted, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+            Text(amountText, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
         }
     }
 }

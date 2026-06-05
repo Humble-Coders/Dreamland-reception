@@ -7,6 +7,7 @@ import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.model.Transfer
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
+import com.example.dreamland_reception.util.normalizePhoneE164
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.text.SimpleDateFormat
@@ -52,6 +53,9 @@ import java.util.Locale
  */
 /** A vendor's current Humble Ledger balance. [payable] > 0 = we owe them. */
 data class VendorBalanceInfo(val payable: Double, val balanceType: String)
+
+/** A guest's current Humble Ledger balance. [balance] > 0 = they owe the hotel; < 0 = credit. */
+data class CustomerBalanceInfo(val balance: Double, val balanceType: String)
 
 /** The hotel's current liquid balances from Humble Ledger. */
 data class CashBankBalance(val cash: Double, val bank: Double) {
@@ -659,6 +663,26 @@ object AccountingRepository {
             client.getVendorByExternalId(token, externalId)?.let {
                 VendorBalanceInfo(
                     payable = it.currentBalance ?: (it.payable?.toDoubleOrNull() ?: 0.0),
+                    balanceType = it.balanceType ?: "SETTLED",
+                )
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Fetches a guest's current Humble Ledger balance by phone (matched to the ledger
+     * customer). `balance` is positive when the guest owes the hotel (RECEIVABLE) and
+     * negative when they have credit. Returns null when accounting isn't configured, the
+     * phone is blank, the guest isn't in the ledger yet, or on any non-fatal error.
+     */
+    suspend fun fetchCustomerBalance(phone: String): CustomerBalanceInfo? {
+        val normalized = normalizePhoneE164(phone) ?: phone.trim()
+        if (normalized.isBlank() || !AccountingConfig.isConfigured()) return null
+        return runCatching {
+            val token = client.ensureValidToken()
+            client.findCustomerByPhone(token, normalized)?.let {
+                CustomerBalanceInfo(
+                    balance = it.currentBalance ?: (it.outstanding?.toDoubleOrNull() ?: 0.0),
                     balanceType = it.balanceType ?: "SETTLED",
                 )
             }

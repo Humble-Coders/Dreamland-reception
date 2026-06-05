@@ -162,6 +162,8 @@ data class StayBillingState(
     val bill: Bill? = null,
     val billGuestName: String = "",  // editable guest name for the bill header
     val billGuestPhone: String = "",  // editable guest phone for the bill header
+    // Guest's current Humble Ledger balance (null = none / not configured / new guest).
+    val guestLedgerBalance: com.example.dreamland_reception.data.accounting.CustomerBalanceInfo? = null,
     val pendingGuestNameOverride: String = "",  // set before load(); applied on bill load then cleared
     val editableTaxPct: String = "",         // inline-editable tax percentage in summary
     val editableAdvancePaid: String = "",    // inline-editable advance paid in summary
@@ -231,6 +233,7 @@ class StayBillingViewModel(
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
+            loadGuestLedgerBalance(guestPhone)
         }
     }
 
@@ -274,25 +277,8 @@ class StayBillingViewModel(
                     if (stay.lateCheckOutCharge > 0) add(BillItem(name = "Late Check-out", type = "SERVICE", quantity = 1, unitPrice = stay.lateCheckOutCharge, total = stay.lateCheckOutCharge))
                     for (order in orders) {
                         if (order.totalAmount > 0) {
-                            // Use pre-tax subtotal; fall back to per-item subtotals for legacy orders
-                            val orderBase = when {
-                                order.subtotalAmount > 0 -> order.subtotalAmount
-                                order.items.any { it.subtotal > 0 } -> order.items.sumOf { it.subtotal }
-                                else -> order.totalAmount
-                            }
-                            val orderTax = when {
-                                order.totalTaxAmount > 0 -> order.totalTaxAmount
-                                order.items.any { it.taxAmount > 0 } -> order.items.sumOf { it.taxAmount }
-                                else -> 0.0
-                            }
-                            val effectiveTaxPct = if (orderBase > 0 && orderTax > 0)
-                                orderTax / orderBase * 100.0 else 0.0
-                            add(BillItem(
-                                name = order.items.joinToString(", ") { it.name }.ifBlank { "Order" },
-                                type = "ORDER", quantity = 1, unitPrice = orderBase, total = orderBase,
-                                taxPercentage = effectiveTaxPct,
-                                refId = order.id, notes = order.notes,
-                            ))
+                            // One bill line per ordered item, with its real quantity & unit price.
+                            addAll(orderToBillItems(order))
                         }
                     }
                 }
@@ -343,6 +329,7 @@ class StayBillingViewModel(
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState()) }
+            loadGuestLedgerBalance(guestPhone2)
         }
     }
 
@@ -404,6 +391,12 @@ class StayBillingViewModel(
             // For ORDER items with a refId, always recompute; for SERVICE, skip if rate already set
             if (item.taxPercentage > 0 && !(item.type == "ORDER" && item.refId.isNotBlank())) return@map item
             val order = if (item.type == "ORDER" && item.refId.isNotBlank()) fetchedOrders[item.refId] else null
+            // New per-item ORDER lines (real quantity, per-unit price, their own tax) are already
+            // correct — skip them so the legacy whole-order base override can't clobber the
+            // quantity/unit price. Only single-line legacy orders (qty 1, one line per order) migrate.
+            if (order != null && (item.quantity > 1 || bill.items.count { it.type == "ORDER" && it.refId == item.refId } > 1)) {
+                return@map item
+            }
             val rate: Double? = when (item.type) {
                 "ORDER" -> {
                     foodTaxByName[item.name.trim().lowercase()]
@@ -1271,6 +1264,15 @@ class StayBillingViewModel(
      * stay may belong to a different guest, so we fall back to the stay(s) backing
      * the bill to find the one whose name matches.
      */
+    /** Fetches the bill guest's current Humble Ledger balance (best-effort; null when none). */
+    private fun loadGuestLedgerBalance(phone: String) {
+        if (phone.isBlank()) { _state.update { it.copy(guestLedgerBalance = null) }; return }
+        viewModelScope.launch {
+            val bal = accountingRepo.fetchCustomerBalance(phone)
+            _state.update { s -> if (s.billGuestPhone == phone) s.copy(guestLedgerBalance = bal) else s }
+        }
+    }
+
     private suspend fun resolveGuestPhone(bill: Bill, loadedStay: Stay?): String {
         if (bill.guestPhone.isNotBlank()) return bill.guestPhone
         if (loadedStay != null && loadedStay.guestName == bill.guestName) return loadedStay.guestPhone

@@ -41,6 +41,8 @@ internal data class CustomerData(
     val phone: String? = null,
     val externalId: String? = null,
     val outstanding: String? = null,
+    val currentBalance: Double? = null,  // positive = customer owes us
+    val balanceType: String? = null,     // RECEIVABLE | CREDIT | SETTLED
 )
 
 internal data class CustomerListEnvelope(
