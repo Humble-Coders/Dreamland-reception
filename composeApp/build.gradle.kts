@@ -45,8 +45,21 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "com.example.dreamland_reception"
-            packageVersion = "1.0.0"
+            packageName = "Dreamland"
+            // Bump this on every release. MSI only replaces an existing install when the
+            // version is higher — otherwise Windows keeps the old app (the "older version"
+            // problem). Increment for each new build you ship.
+            packageVersion = "1.0.1"
+
+            windows {
+                // Desktop shortcut after install.
+                shortcut = true
+                // Start-menu group.
+                menuGroup = "Dreamland"
+                // Stable upgrade code — MUST stay the same across releases so a new MSI
+                // upgrades (replaces) the previous install instead of installing side-by-side.
+                upgradeUuid = "b2e7c4a0-1f3d-4c9b-9a2e-7d6c5b4a3f21"
+            }
         }
     }
 }
