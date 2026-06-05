@@ -144,17 +144,16 @@ object FirebaseManager {
         // Absolute known path (always works regardless of working directory)
         tryFile("/Users/sharnyagoel/AndroidStudioProjects/Dreamlandreception/composeApp/firebase/service-account.json")?.let { return it }
 
-        val creds = runCatching { GoogleCredentials.getApplicationDefault() }.getOrElse { cause ->
-            throw IllegalArgumentException(
-                "No valid Firebase credentials found. Checked paths:\n" +
-                    tried.joinToString("\n") { "  • $it" } +
-                    "\n\n" + credentialHelpText(),
-                cause,
-            )
-        }
-        val projectId = System.getenv("GOOGLE_CLOUD_PROJECT")?.takeIf { it.isNotBlank() }
-            ?: DEFAULT_PROJECT_ID
-        return creds to projectId
+        // NOTE: deliberately NOT falling back to GoogleCredentials.getApplicationDefault().
+        // On a non-GCP machine (e.g. a hotel's Windows PC) ADC probes the GCP metadata
+        // server over HTTP, which hangs/fails with a confusing "HTTP error". The bundled
+        // service-account resource + the file paths above cover every real case, so a
+        // missing credential here is a clean, explicit failure instead.
+        throw IllegalArgumentException(
+            "No valid Firebase credentials found. Checked:\n" +
+                tried.joinToString("\n") { "  • $it" } +
+                "\n\n" + credentialHelpText(),
+        )
     }
 
     private fun extractProjectId(jsonContent: String): String {
