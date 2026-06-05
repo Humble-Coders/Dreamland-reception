@@ -70,6 +70,9 @@ data class SettingsUiState(
     val services: List<Service> = emptyList(),
     val foodItems: List<FoodItem> = emptyList(),
     val complaintTypes: List<ComplaintType> = emptyList(),
+    // Room categories (for the price / offline-price editor)
+    val rooms: List<com.example.dreamland_reception.data.model.Room> = emptyList(),
+    val roomPricesSavedId: String? = null,   // category id that just saved (shows "Saved ✓")
 
     // Async states
     val isLoadingHotels: Boolean = false,
@@ -99,6 +102,8 @@ class SettingsViewModel(
     private val serviceRepo: ServiceRepository = FirestoreServiceRepository,
     private val foodRepo: FoodItemRepository = FirestoreFoodItemRepository,
     private val complaintTypeRepo: ComplaintTypeRepository = FirestoreComplaintTypeRepository,
+    private val roomRepo: com.example.dreamland_reception.data.repository.RoomRepository =
+        com.example.dreamland_reception.data.repository.FirestoreRoomRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SettingsUiState())
@@ -136,12 +141,15 @@ class SettingsViewModel(
             val services = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val food = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val complaints = runCatching { complaintTypeRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+            val rooms = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
+                .sortedBy { it.type.lowercase() }
             _state.update {
                 it.copy(
                     selectedHotel = hotel,
                     services = services,
                     foodItems = food,
                     complaintTypes = complaints,
+                    rooms = rooms,
                     grcTemplateDraft = hotel?.grcTemplateHtml ?: "",
                     grcLogoDraft = hotel?.grcLogoUrl ?: "",
                     grcSaved = false,
@@ -199,6 +207,30 @@ class SettingsViewModel(
     }
 
     // ── Services ──────────────────────────────────────────────────────────────
+
+    /**
+     * Saves a room category's standard price and offline (walk-in) price. Uses a
+     * targeted partial update so seasonal pricing, tax, occupancy, etc. are preserved.
+     */
+    fun saveRoomPrices(categoryId: String, pricePerNight: Double, offlinePrice: Double) {
+        if (categoryId.isBlank()) return
+        viewModelScope.launch {
+            runCatching { roomRepo.updatePrices(categoryId, pricePerNight, offlinePrice) }
+                .onSuccess {
+                    _state.update { s ->
+                        s.copy(
+                            rooms = s.rooms.map { r ->
+                                if (r.id == categoryId) r.copy(pricePerNight = pricePerNight, offlinePrice = offlinePrice) else r
+                            },
+                            roomPricesSavedId = categoryId,
+                        )
+                    }
+                }
+                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Failed to save room prices") } }
+        }
+    }
+
+    fun clearRoomPricesSaved() = _state.update { it.copy(roomPricesSavedId = null) }
 
     fun openAddService(name: String = "") = _state.update { it.copy(addServiceDialog = AddServiceDialog(show = true, name = name)) }
     fun closeAddService() = _state.update { it.copy(addServiceDialog = AddServiceDialog()) }

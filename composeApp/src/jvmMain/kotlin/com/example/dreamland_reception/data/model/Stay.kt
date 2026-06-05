@@ -44,6 +44,16 @@ data class Stay(
     val lateCheckOutCharge: Double = 0.0,
     val advancePaidAmount: Double = 0.0,
     val advancePaymentMethod: String = "CASH",   // CASH | BANK
+    // Agreed room rate per night for THIS stay (the price the receptionist confirmed
+    // at check-in: offline rate for walk-ins, or an adjusted rate). The bill uses this
+    // when > 0; 0 means "use the category's current price" (the original behaviour, and
+    // the default for un-adjusted booking check-ins).
+    val agreedPricePerNight: Double = 0.0,
+    // Reception manager on duty when the room was checked in / checked out. Recorded
+    // separately so each shift change is attributable. Blank for legacy stays or when
+    // no manager was set. (The same name is also stamped onto ledger entries.)
+    val checkInManager: String = "",
+    val checkOutManager: String = "",
     // True once the advance was posted to Humble Ledger at check-in (DR Cash/Bank /
     // CR Advance Liability) so live cash/bank reflects it immediately. Checkout
     // reverses this posting and re-posts the authoritative advance, so it must know

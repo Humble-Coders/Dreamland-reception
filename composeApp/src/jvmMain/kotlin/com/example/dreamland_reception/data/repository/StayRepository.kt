@@ -18,7 +18,7 @@ interface StayRepository {
     suspend fun markAdvancePostedAtCheckIn(id: String)
     suspend fun add(stay: Stay): String
     suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String
-    suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double = 0.0)
+    suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double = 0.0, checkOutManager: String = "")
     suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date)
     suspend fun changeRoom(
         stayId: String, oldInstanceId: String,
@@ -84,15 +84,15 @@ object FirestoreStayRepository : StayRepository {
         stayId
     }
 
-    override suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double) = withContext(Dispatchers.IO) {
-        col.document(id).update(
-            mapOf(
-                "status" to "COMPLETED",
-                "checkOutActual" to checkOutTime,
-                "lateCheckOutCharge" to lateCheckOutCharge,
-                "updatedAt" to Date(),
-            ),
-        ).get(); Unit
+    override suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double, checkOutManager: String) = withContext(Dispatchers.IO) {
+        val updates = mutableMapOf<String, Any>(
+            "status" to "COMPLETED",
+            "checkOutActual" to checkOutTime,
+            "lateCheckOutCharge" to lateCheckOutCharge,
+            "updatedAt" to Date(),
+        )
+        if (checkOutManager.isNotBlank()) updates["checkOutManager"] = checkOutManager
+        col.document(id).update(updates).get(); Unit
     }
 
     override suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date) = withContext(Dispatchers.IO) {
@@ -158,6 +158,9 @@ object FirestoreStayRepository : StayRepository {
             lateCheckOutCharge = getDouble("lateCheckOutCharge") ?: 0.0,
             advancePaidAmount = getDouble("advancePaidAmount") ?: getDouble("advanceAmount") ?: 0.0,
             advancePaymentMethod = getString("advancePaymentMethod") ?: "CASH",
+            agreedPricePerNight = getDouble("agreedPricePerNight") ?: 0.0,
+            checkInManager = getString("checkInManager") ?: "",
+            checkOutManager = getString("checkOutManager") ?: "",
             ledgerAdvancePostedAtCheckIn = getBoolean("ledgerAdvancePostedAtCheckIn") ?: false,
             totalBilled = getDouble("totalBilled") ?: 0.0,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
@@ -210,6 +213,9 @@ object FirestoreStayRepository : StayRepository {
         "lateCheckOutCharge" to lateCheckOutCharge,
         "advancePaidAmount" to advancePaidAmount,
         "advancePaymentMethod" to advancePaymentMethod,
+        "agreedPricePerNight" to agreedPricePerNight,
+        "checkInManager" to checkInManager,
+        "checkOutManager" to checkOutManager,
         "ledgerAdvancePostedAtCheckIn" to ledgerAdvancePostedAtCheckIn,
         "totalBilled" to totalBilled,
         "createdAt" to createdAt,

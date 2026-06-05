@@ -177,8 +177,12 @@ data class WalkInState(
     val availableCategories: List<Room> = emptyList(),
     // categoryId -> available room count (Steps 1-5)
     val categoryAvailability: Map<String, Int> = emptyMap(),
-    // categoryId -> effective price (seasonal or base)
+    // categoryId -> default per-night price. Walk-ins: the offline rate (or pricePerNight
+    // fallback). Bookings: the standard effective (seasonal/base) price.
     val categoryPrices: Map<String, Double> = emptyMap(),
+    // categoryId -> raw price the receptionist typed at check-in (overrides the default).
+    // Survives availability recomputes so a manual edit is never lost.
+    val priceOverrides: Map<String, String> = emptyMap(),
     // Room instances for the currently viewed category
     val selectableInstances: List<RoomInstance> = emptyList(),   // normal, clickable
     val cleaningInstances: List<RoomInstance> = emptyList(),     // shown grayed, unclickable
@@ -211,6 +215,29 @@ data class WalkInState(
     val grc: GrcStepState = GrcStepState(),
     val purposeOptions: List<String> = emptyList(),   // from purposeType collection
 )
+
+/**
+ * Effective per-night rate for a category in the walk-in flow: the receptionist's
+ * typed override if present, else the seeded default (offline rate for walk-ins,
+ * standard price for bookings). Used by the live pricing preview.
+ */
+fun WalkInState.priceForCategory(catId: String): Double =
+    priceOverrides[catId]?.toDoubleOrNull()
+        ?: categoryPrices[catId]
+        ?: categories.find { it.id == catId }?.let { if (!isBookingMode && it.offlinePrice > 0.0) it.offlinePrice else it.pricePerNight }
+        ?: 0.0
+
+/**
+ * The rate to persist on a stay at check-in. Walk-ins always store the effective
+ * offline/edited rate so the bill uses it. Bookings store a rate ONLY when the
+ * receptionist adjusted it — otherwise 0, so checkout falls back to the category's
+ * current price (the original system, unchanged).
+ */
+fun WalkInState.agreedPriceForCategory(catId: String): Double {
+    val override = priceOverrides[catId]?.toDoubleOrNull()
+    return if (isBookingMode) (override ?: 0.0)
+    else (override ?: categoryPrices[catId] ?: 0.0)
+}
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
 
@@ -565,7 +592,8 @@ class StaysViewModel(
             val stay = _listState.value.stays.find { it.id == stayId } ?: return@launch
             if (stay.status != "ACTIVE") return@launch
             val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
-            val roomPricePerNight = room?.pricePerNight ?: 0.0
+            // Use the rate agreed at check-in (offline/edited) when set; else the category price.
+            val roomPricePerNight = stay.agreedPricePerNight.takeIf { it > 0.0 } ?: room?.pricePerNight ?: 0.0
             val taxPercentage = room?.taxPercentage ?: 0.0
             val checkOutDate = stay.checkOutActual ?: stay.expectedCheckOut
             val nights = java.time.temporal.ChronoUnit.DAYS
@@ -744,7 +772,8 @@ class StaysViewModel(
                 for (catId in allCatIds) {
                     val cat = ws.categories.find { it.id == catId }
                     val catName = cat?.type ?: ws.selectedInstanceDetails.values.find { it.categoryId == catId }?.categoryName ?: catId
-                    val pricePerNight = ws.categoryPrices[catId] ?: effectivePrice(cat ?: Room(), checkIn)
+                    // Honours any rate the receptionist adjusted in the dialog; else the standard price.
+                    val pricePerNight = ws.priceForCategory(catId)
                     val breakfastCharge = if (ws.breakfast) (cat?.breakfastPrice ?: 0.0) * ws.adults * nights else 0.0
                     val subtotalPerRoom = pricePerNight * nights + breakfastCharge
                     val taxRate = cat?.taxPercentage ?: 0.0
@@ -812,6 +841,12 @@ class StaysViewModel(
         if (_walkInState.value.expectedCheckOut != null) computeAvailability()
     }
     fun onWalkInChildren(count: Int) = _walkInState.update { it.copy(children = count.coerceAtLeast(0)) }
+
+    /** Receptionist edits the per-night rate for a category at check-in (digits + one dot). */
+    fun onCategoryPrice(categoryId: String, value: String) {
+        val cleaned = value.filter { it.isDigit() || it == '.' }
+        _walkInState.update { it.copy(priceOverrides = it.priceOverrides + (categoryId to cleaned)) }
+    }
     fun onWalkInCheckInTime(date: Date) {
         _walkInState.update { it.copy(checkInTime = date) }
         if (_walkInState.value.expectedCheckOut != null) computeAvailability()
@@ -1150,7 +1185,14 @@ class StaysViewModel(
                 val committed = (bookingsPerCat[cat.id] ?: 0) + (staysPerCat[cat.id] ?: 0)
                 val usable = usablePerCat[cat.id] ?: 0
                 availabilityMap[cat.id] = (usable - committed).coerceAtLeast(0)
-                pricesMap[cat.id] = effectivePrice(cat, checkIn)
+                // Walk-ins default to the offline rate (ignoring seasonal); bookings keep
+                // the original standard/seasonal price. Manual overrides are applied on top
+                // in the UI and survive this recompute (they live in priceOverrides).
+                pricesMap[cat.id] = if (ws.isBookingMode) {
+                    effectivePrice(cat, checkIn)
+                } else {
+                    cat.offlinePrice.takeIf { it > 0.0 } ?: cat.pricePerNight
+                }
             }
             val availableCats = ws.categories.filter { cat ->
                 val avail = availabilityMap[cat.id] ?: 0
@@ -1752,6 +1794,10 @@ class StaysViewModel(
                         earlyCheckInCharge = earlyCharge,
                         advancePaidAmount = (linkedBooking?.advancePaidAmount ?: 0.0) + advancePerRoom,
                         advancePaymentMethod = ws.advancePaymentMethod,
+                        // Walk-ins persist the offline/edited rate so the bill uses it;
+                        // un-adjusted bookings store 0 → checkout uses the category price.
+                        agreedPricePerNight = ws.agreedPriceForCategory(catId),
+                        checkInManager = AppContext.currentManager,
                         createdAt = Date(),
                         updatedAt = Date(),
                         guests = guestRecords,
@@ -2050,9 +2096,9 @@ class StaysViewModel(
             var pendingOrders = orders.filter { it.status != "COMPLETED" }
             val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
 
-            // Room price from rooms collection (source of truth)
+            // Room price: the rate agreed at check-in (offline/edited) when set, else the category price.
             val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
-            val roomPricePerNight = room?.pricePerNight ?: 0.0
+            val roomPricePerNight = stay.agreedPricePerNight.takeIf { it > 0.0 } ?: room?.pricePerNight ?: 0.0
 
             // Calculate room charges based on actual checkout date (today)
             val now = Date()
@@ -2111,7 +2157,7 @@ class StaysViewModel(
                     val bills = mutableMapOf<String, BillingInvoice>()
                     for (gs in groupStays) {
                         val r = runCatching { roomRepo.getById(gs.roomCategoryId) }.getOrNull()
-                        val rPrice = r?.pricePerNight ?: 0.0
+                        val rPrice = gs.agreedPricePerNight.takeIf { it > 0.0 } ?: r?.pricePerNight ?: 0.0
                         val nights = ChronoUnit.DAYS.between(gs.checkInActual.toInstant(), now.toInstant()).coerceAtLeast(1)
                         val rc = rPrice * nights
                         val bc = if (gs.breakfast) (r?.breakfastPrice ?: 0.0) * gs.adults * nights else 0.0
@@ -2142,7 +2188,7 @@ class StaysViewModel(
                     val bills = mutableMapOf<String, BillingInvoice>()
                     for (gs in siblings) {
                         val r = runCatching { roomRepo.getById(gs.roomCategoryId) }.getOrNull()
-                        val rPrice = r?.pricePerNight ?: 0.0
+                        val rPrice = gs.agreedPricePerNight.takeIf { it > 0.0 } ?: r?.pricePerNight ?: 0.0
                         val nights = ChronoUnit.DAYS.between(gs.checkInActual.toInstant(), now.toInstant()).coerceAtLeast(1)
                         val rc = rPrice * nights
                         val bc = if (gs.breakfast) (r?.breakfastPrice ?: 0.0) * gs.adults * nights else 0.0
@@ -2279,7 +2325,7 @@ class StaysViewModel(
                 }.distinctBy { it.first }
 
                 for (stay in staysToCheckOut) {
-                    stayRepo.checkOut(stay.id, checkoutTime, cos.lateCheckoutCharge)
+                    stayRepo.checkOut(stay.id, checkoutTime, cos.lateCheckoutCharge, checkOutManager = AppContext.currentManager)
                     instanceRepo.updateStatus(stay.roomInstanceId, "AVAILABLE", currentStayId = null)
                     runCatching { instanceRepo.markNeedsCleaning(stay.roomInstanceId, true) }
                     if (stay.bookingId.isNotBlank()) {
@@ -2338,7 +2384,8 @@ class StaysViewModel(
             val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
             val catName = (room?.type ?: stay.roomCategoryName).ifBlank { null }
             val prefix = "Room ${stay.roomNumber}${if (catName != null) " · $catName" else ""} — "
-            val roomPricePerNight = room?.pricePerNight ?: 0.0
+            // Bill the rate agreed at check-in (offline/edited) when set; else the category price.
+            val roomPricePerNight = stay.agreedPricePerNight.takeIf { it > 0.0 } ?: room?.pricePerNight ?: 0.0
             val nights = java.time.temporal.ChronoUnit.DAYS.between(
                 stay.checkInActual.toInstant(), checkoutTime.toInstant()
             ).coerceAtLeast(1)

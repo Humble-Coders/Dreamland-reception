@@ -15,6 +15,10 @@ data class Room(
     val floor: Int = 1,
     val capacity: Int = 2,
     val pricePerNight: Double = 0.0,
+    // Walk-in (offline) rate, stored beside `price` in Firestore as `offlinePrice`.
+    // Used as the default for offline walk-in check-ins; 0 means "not set" → the app
+    // falls back to [pricePerNight]. Bookings never use this.
+    val offlinePrice: Double = 0.0,
     val breakfastPrice: Double = 0.0,
     val status: String = "available",
     val available: Boolean = true,

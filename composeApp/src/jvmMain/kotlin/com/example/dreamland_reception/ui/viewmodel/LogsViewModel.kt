@@ -75,10 +75,15 @@ data class LogsState(
 ) {
     val filtered: List<Stay>
         get() = if (searchQuery.isBlank()) stays
-        else stays.filter {
-            it.guestName.contains(searchQuery, ignoreCase = true) ||
-                it.roomNumber.contains(searchQuery, ignoreCase = true) ||
-                it.guestPhone.contains(searchQuery, ignoreCase = true)
+        else stays.filter { stay ->
+            stay.guestName.contains(searchQuery, ignoreCase = true) ||
+                stay.roomNumber.contains(searchQuery, ignoreCase = true) ||
+                stay.guestPhone.contains(searchQuery, ignoreCase = true) ||
+                // Match any guest of the room, not just the primary.
+                stay.guests.any { g ->
+                    g.name.contains(searchQuery, ignoreCase = true) ||
+                        g.phone.contains(searchQuery, ignoreCase = true)
+                }
         }
 }
 
@@ -176,7 +181,9 @@ class LogsViewModel(
                     val checkIn = dtFull.format(stay.trueCheckIn ?: stay.checkInActual)
                     val checkOut = stay.checkOutActual?.let { dtFull.format(it) } ?: "In-house"
                     val guests = stay.guests.ifEmpty { listOf(GuestRecord(name = stay.guestName, phone = stay.guestPhone)) }
-                    guests.map { g ->
+                    // One row per guest, grouped under the room (first guest carries the
+                    // room number + check-in/out; the divider separates rooms).
+                    guests.mapIndexed { gi, g ->
                         LogsReportRow(
                             room = stay.roomNumber,
                             guestName = g.name.ifBlank { stay.guestName },
@@ -189,6 +196,11 @@ class LogsViewModel(
                             address = g.address,
                             checkIn = checkIn,
                             checkOut = checkOut,
+                            checkInBy = stay.checkInManager,
+                            checkOutBy = if (stay.checkOutActual != null) stay.checkOutManager else "",
+                            groupStart = gi == 0,
+                            guestPos = "${gi + 1}/${guests.size}",
+                            guestCount = guests.size,
                         )
                     }
                 }

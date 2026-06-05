@@ -101,6 +101,20 @@ object FirebaseManager {
             return creds to projectId
         }
 
+        // Reads the service account bundled inside the app jar (works on ANY machine,
+        // e.g. a fresh MSI install, regardless of working directory or home folder).
+        fun tryResource(resourcePath: String): Pair<GoogleCredentials, String>? {
+            tried.add("classpath:$resourcePath")
+            val bytes = (FirebaseManager::class.java.classLoader
+                ?.getResourceAsStream(resourcePath) ?: return null).use { it.readBytes() }
+            if (bytes.isEmpty()) return null
+            val text = String(bytes)
+            if (text.contains("\"project_info\"") && !text.contains("\"private_key\"")) return null
+            val projectId = runCatching { extractProjectId(text) }.getOrElse { DEFAULT_PROJECT_ID }
+            val creds = runCatching { GoogleCredentials.fromStream(bytes.inputStream()) }.getOrNull() ?: return null
+            return creds to projectId
+        }
+
         if (explicitPath != null) {
             return tryFile(explicitPath)
                 ?: throw IllegalArgumentException("Firebase credentials file not found at: $explicitPath")
@@ -112,6 +126,9 @@ object FirebaseManager {
         }
 
         tryFile(legacyHomeCredentialsFile.absolutePath)?.let { return it }
+
+        // Bundled-in-app fallback — makes the packaged app self-contained on any PC.
+        tryResource("firebase/service-account.json")?.let { return it }
 
         System.getenv("GOOGLE_APPLICATION_CREDENTIALS")?.let { tryFile(it) }?.let { return it }
 

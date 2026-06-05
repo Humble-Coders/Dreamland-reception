@@ -21,3 +21,6 @@ node_modules/
 # Firebase Admin service account keys (never commit)
 firebase-credentials.json
 composeApp/firebase/*.json
+
+# Bundled Firebase service-account key — kept on disk for local MSI builds, never committed (GitHub secret scanning).
+composeApp/src/jvmMain/resources/firebase/*.json

@@ -18,6 +18,15 @@ data class LogsReportRow(
     val address: String,
     val checkIn: String,
     val checkOut: String,
+    // Reception managers on duty at check-in / check-out (blank when not recorded).
+    val checkInBy: String = "",
+    val checkOutBy: String = "",
+    // Grouping: rows are emitted room-wise. `groupStart` marks the first guest of a
+    // room (room number + check-in/out are shown once per room and the group gets a
+    // divider); `guestPos` is the guest's position within the room, e.g. "1/2".
+    val groupStart: Boolean = true,
+    val guestPos: String = "",
+    val guestCount: Int = 1,
 )
 
 /**
@@ -39,10 +48,22 @@ object LogsReportRenderer {
             body.append("<tr><td colspan=\"11\" class=\"empty\">No stays in the selected period.</td></tr>")
         } else {
             rows.forEachIndexed { i, r ->
-                body.append("<tr>")
+                // Divider above the first guest of each room (except the very first row).
+                val trClass = if (r.groupStart && i != 0) " class=\"grp\"" else ""
+                body.append("<tr").append(trClass).append(">")
                 body.append("<td class=\"num\">").append(i + 1).append("</td>")
-                body.append("<td>").append(esc(r.room)).append("</td>")
-                body.append("<td>").append(esc(r.guestName)).append("</td>")
+                // Room number (+ guest count) is room-level: shown once on the first guest.
+                body.append("<td class=\"room\">")
+                if (r.groupStart) {
+                    body.append(esc(r.room))
+                    body.append("<br /><span class=\"cnt\">")
+                        .append(r.guestCount).append(if (r.guestCount == 1) " guest" else " guests")
+                        .append("</span>")
+                }
+                body.append("</td>")
+                body.append("<td>").append(esc(r.guestName))
+                if (r.guestPos.isNotBlank()) body.append("<br /><span class=\"pos\">Guest ").append(esc(r.guestPos)).append("</span>")
+                body.append("</td>")
                 body.append("<td>").append(esc(r.phone)).append("</td>")
                 body.append("<td>").append(esc(r.gender)).append("</td>")
                 body.append("<td>").append(esc(r.dobAge)).append("</td>")
@@ -50,8 +71,13 @@ object LogsReportRenderer {
                 if (r.idType.isNotBlank()) body.append("<b>").append(esc(r.idType)).append("</b><br />")
                 body.append(esc(r.idNumber)).append("</td>")
                 body.append("<td class=\"addr\">").append(esc(r.address)).append("</td>")
-                body.append("<td>").append(esc(r.checkIn)).append("</td>")
-                body.append("<td>").append(esc(r.checkOut)).append("</td>")
+                // Check-in/out (with the manager on duty) repeated for every guest of the room.
+                body.append("<td>").append(esc(r.checkIn))
+                if (r.checkInBy.isNotBlank()) body.append("<br /><span class=\"by\">by ").append(esc(r.checkInBy)).append("</span>")
+                body.append("</td>")
+                body.append("<td>").append(esc(r.checkOut))
+                if (r.checkOutBy.isNotBlank()) body.append("<br /><span class=\"by\">by ").append(esc(r.checkOutBy)).append("</span>")
+                body.append("</td>")
                 body.append("<td>").append(esc(r.purpose)).append("</td>")
                 body.append("</tr>")
             }
@@ -96,11 +122,19 @@ object LogsReportRenderer {
   .sub td { padding: 1px 0; }
   .sub td.r { text-align: right; }
   table.logs { width: 100%; border-collapse: collapse; }
+  /* Repeat the column header at the top of every page when the table spans pages. */
+  table.logs thead { display: table-header-group; }
   table.logs thead th { background: #14532d; color: #fff; font-size: 7.5px; text-transform: uppercase;
                         letter-spacing: 0.2px; padding: 5px 4px; text-align: left; border: 1px solid #14532d; }
   table.logs tbody td { padding: 4px 4px; border: 1px solid #e2e8f0; vertical-align: top; }
   table.logs tbody tr:nth-child(even) { background: #f1f5f9; }
   table.logs tbody tr { page-break-inside: avoid; }
+  /* Thicker rule above the first guest of each room, so rooms read as blocks. */
+  table.logs tbody tr.grp td { border-top: 2px solid #15603a; }
+  td.room { font-weight: 700; color: #15603a; }
+  .cnt { font-weight: 400; color: #64748b; font-size: 7px; }
+  .pos { color: #64748b; font-size: 7px; }
+  .by { color: #15603a; font-size: 7px; font-style: italic; }
   td.num { text-align: center; color: #64748b; }
   td.addr { font-size: 7.5px; }
   td.empty { text-align: center; color: #94a3b8; font-style: italic; padding: 14px; }

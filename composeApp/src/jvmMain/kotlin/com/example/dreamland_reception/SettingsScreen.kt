@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.data.model.Hotel
 import com.example.dreamland_reception.settings.ServicesPanel
 import com.example.dreamland_reception.ui.viewmodel.SettingsViewModel
+import com.example.dreamland_reception.ui.viewmodel.SettingsUiState
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsViewModel()) {
@@ -264,6 +265,10 @@ fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsVi
                             }
                         }
                     }
+                }
+
+                if (state.rooms.isNotEmpty()) {
+                    RoomPricesCard(state = state, vm = vm)
                 }
 
                 if (state.error != null) {
@@ -473,4 +478,87 @@ private fun InfoBoolRow(label: String, value: Boolean) {
         }
     }
     HorizontalDivider(color = DreamlandGold.copy(alpha = 0.08f))
+}
+
+// ── Room Prices editor ────────────────────────────────────────────────────────
+
+@Composable
+private fun RoomPricesCard(state: SettingsUiState, vm: SettingsViewModel) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("ROOM PRICES", style = MaterialTheme.typography.labelLarge, color = DreamlandGold)
+            Text(
+                "Standard price is used for bookings. Offline price is the default rate for walk-ins " +
+                    "(set 0 to reuse the standard price). The receptionist can still adjust the rate at check-in.",
+                color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+            )
+            state.rooms.forEach { room ->
+                val roomId = room.id
+                val displayName = room.type.ifBlank { room.number.ifBlank { "Room" } }
+                RoomPriceRow(
+                    name = displayName,
+                    initialStd = room.pricePerNight,
+                    initialOffline = room.offlinePrice,
+                    saved = state.roomPricesSavedId == roomId,
+                    onEdit = { vm.clearRoomPricesSaved() },
+                    onSave = { std, off -> vm.saveRoomPrices(roomId, std, off) },
+                )
+                HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoomPriceRow(
+    name: String,
+    initialStd: Double,
+    initialOffline: Double,
+    saved: Boolean,
+    onEdit: () -> Unit,
+    onSave: (std: Double, offline: Double) -> Unit,
+) {
+    var std by remember(name, initialStd) { mutableStateOf(if (initialStd > 0) initialStd.toLong().toString() else "") }
+    var off by remember(name, initialOffline) { mutableStateOf(if (initialOffline > 0) initialOffline.toLong().toString() else "") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            RoomPriceField("Standard / night", std, { std = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, Modifier.weight(1f))
+            RoomPriceField("Offline (walk-in)", off, { off = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (saved) {
+                Text("Saved ✓", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.width(10.dp))
+            }
+            Button(
+                onClick = { onSave(std.toDoubleOrNull() ?: 0.0, off.toDoubleOrNull() ?: 0.0) },
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                shape = RoundedCornerShape(8.dp),
+            ) { Text("Save", color = Color(0xFF0D1F17), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
+        }
+    }
+}
+
+@Composable
+private fun RoomPriceField(label: String, value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label, fontSize = 11.sp) },
+        singleLine = true,
+        prefix = { Text("₹", color = DreamlandMuted, fontSize = 12.sp) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+            focusedLabelColor = DreamlandGold, unfocusedLabelColor = DreamlandMuted, cursorColor = DreamlandOnDark,
+        ),
+    )
 }

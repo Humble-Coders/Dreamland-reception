@@ -22,13 +22,21 @@ import java.io.File
  */
 object AccountingConfig {
 
+    // Built-in defaults so a fresh install (e.g. a new PC via MSI) logs into
+    // accounting automatically with no manual setup. A `~/.dreamland/accounting.json`
+    // file always overrides these. Tokens auto-refresh and re-login on expiry, so the
+    // accounting connection never silently logs out as long as these stay valid.
+    private const val DEFAULT_BASE_URL = "http://68.183.86.89/api-server"
+    private const val DEFAULT_EMAIL = "dreamland@gmail.com"
+    private const val DEFAULT_PASSWORD = "114198"
+
     private val configFile: File by lazy {
         val dir = File(System.getProperty("user.home"), ".dreamland")
         dir.mkdirs()
         File(dir, "accounting.json")
     }
 
-    var baseUrl: String = "http://68.183.86.89/api-server"
+    var baseUrl: String = DEFAULT_BASE_URL
         private set
     var email: String = ""
         private set
@@ -66,16 +74,22 @@ object AccountingConfig {
     // ── Internal ──────────────────────────────────────────────────────────────
 
     fun load() {
-        if (!configFile.exists()) return
-        runCatching {
-            val text = configFile.readText()
-            baseUrl = parseString(text, "baseUrl") ?: baseUrl
-            email = parseString(text, "email") ?: ""
-            password = parseString(text, "password") ?: ""
-            accessToken = parseString(text, "accessToken") ?: ""
-            refreshToken = parseString(text, "refreshToken") ?: ""
-            tokenExpiryMs = parseLong(text, "tokenExpiryMs") ?: 0L
+        if (configFile.exists()) {
+            runCatching {
+                val text = configFile.readText()
+                baseUrl = parseString(text, "baseUrl") ?: baseUrl
+                email = parseString(text, "email") ?: ""
+                password = parseString(text, "password") ?: ""
+                accessToken = parseString(text, "accessToken") ?: ""
+                refreshToken = parseString(text, "refreshToken") ?: ""
+                tokenExpiryMs = parseLong(text, "tokenExpiryMs") ?: 0L
+            }
         }
+        // Seed built-in defaults when the file is absent or missing fields, so the app
+        // is configured out-of-the-box on a fresh machine. The file (if present) wins.
+        if (baseUrl.isBlank()) baseUrl = DEFAULT_BASE_URL
+        if (email.isBlank()) email = DEFAULT_EMAIL
+        if (password.isBlank()) password = DEFAULT_PASSWORD
     }
 
     private fun write() {

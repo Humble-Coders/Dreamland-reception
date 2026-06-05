@@ -222,29 +222,48 @@ private fun androidx.compose.foundation.layout.RowScope.HeaderCell(text: String,
 @Composable
 private fun LogRow(stay: Stay, onClick: () -> Unit) {
     val checkedIn = stay.trueCheckIn ?: stay.checkInActual
+    // Every guest of the room, primary first. Falls back to the stay-level guest
+    // when no per-guest records were captured (legacy stays).
+    val guests = stay.guests.ifEmpty {
+        listOf(GuestRecord(name = stay.guestName, phone = stay.guestPhone))
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         Text(
             stay.roomNumber.ifBlank { "—" },
             modifier = Modifier.weight(W_ROOM),
             color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium,
         )
+        // All guests of this room — one line each (primary emphasised).
         Column(Modifier.weight(W_GUEST).padding(end = 8.dp)) {
-            Text(stay.guestName.ifBlank { "Guest" }, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            guests.forEachIndexed { i, g ->
+                Text(
+                    g.name.ifBlank { if (i == 0) "Guest" else "—" },
+                    color = DreamlandOnDark,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (i == 0) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
             if (stay.roomCategoryName.isNotBlank()) {
                 Text(stay.roomCategoryName, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        Text(
-            stay.guestPhone.ifBlank { "—" },
-            modifier = Modifier.weight(W_PHONE).padding(end = 8.dp),
-            color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        // Matching phone per guest line, so the contact lines up with the name.
+        Column(Modifier.weight(W_PHONE).padding(end = 8.dp)) {
+            guests.forEach { g ->
+                Text(
+                    g.phone.ifBlank { "—" },
+                    color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         Text(
             dtShort.format(checkedIn),
             modifier = Modifier.weight(W_IN).padding(end = 8.dp),
@@ -319,13 +338,15 @@ private fun StayDetailDialog(stay: Stay, state: LogsState, vm: LogsViewModel) {
 
                     Section("Timeline") {
                         InfoGrid(
-                            listOf(
-                                "Checked in" to (stay.trueCheckIn?.let { dtFull.format(it) } ?: "—"),
-                                "Checked out" to (stay.checkOutActual?.let { dtFull.format(it) } ?: "In-house"),
-                                "Stay date" to dOnly.format(stay.checkInActual),
-                                "Expected check-out" to dOnly.format(stay.expectedCheckOut),
-                                "Nights" to (nights?.toString() ?: "—"),
-                            ),
+                            buildList {
+                                add("Checked in" to (stay.trueCheckIn?.let { dtFull.format(it) } ?: "—"))
+                                if (stay.checkInManager.isNotBlank()) add("Checked in by" to stay.checkInManager)
+                                add("Checked out" to (stay.checkOutActual?.let { dtFull.format(it) } ?: "In-house"))
+                                if (stay.checkOutManager.isNotBlank()) add("Checked out by" to stay.checkOutManager)
+                                add("Stay date" to dOnly.format(stay.checkInActual))
+                                add("Expected check-out" to dOnly.format(stay.expectedCheckOut))
+                                add("Nights" to (nights?.toString() ?: "—"))
+                            },
                         )
                     }
 

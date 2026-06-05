@@ -249,7 +249,8 @@ class StayBillingViewModel(
             // For COMPLETED stays: if no bill exists yet (edge case), compute and persist it.
             if (bill == null && stay != null) {
                 val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
-                val roomPricePerNight = room?.pricePerNight ?: 0.0
+                // Use the rate agreed at check-in (offline/edited) when set; else the category price.
+                val roomPricePerNight = stay.agreedPricePerNight.takeIf { it > 0.0 } ?: room?.pricePerNight ?: 0.0
                 val taxPercentage = room?.taxPercentage ?: 0.0
                 val checkOutDate = stay.checkOutActual ?: stay.expectedCheckOut
                 val nights = ChronoUnit.DAYS.between(

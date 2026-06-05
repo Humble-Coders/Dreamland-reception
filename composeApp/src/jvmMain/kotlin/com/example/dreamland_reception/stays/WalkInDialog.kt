@@ -96,6 +96,7 @@ import com.example.dreamland_reception.ui.viewmodel.GuestEntry
 import com.example.dreamland_reception.ui.viewmodel.RoomGuestAssignment
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import com.example.dreamland_reception.ui.viewmodel.WalkInState
+import com.example.dreamland_reception.ui.viewmodel.priceForCategory
 import com.example.dreamland_reception.util.dateFromPicker
 import com.example.dreamland_reception.util.toMidnightUtc
 import java.text.SimpleDateFormat
@@ -1022,7 +1023,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
     // Pricing preview
     WizardSectionLabel("PRICING PREVIEW")
     Spacer(Modifier.height(8.dp))
-    PricingPreviewCard(state)
+    PricingPreviewCard(state, onCategoryPrice = vm::onCategoryPrice)
 
     Spacer(Modifier.height(20.dp))
 
@@ -1890,78 +1891,79 @@ internal fun GuestEntryRow(
 // ── Pricing preview (multi-category aware) ────────────────────────────────────
 
 @Composable
-private fun PricingPreviewCard(state: WalkInState) {
+private fun PricingPreviewCard(state: WalkInState, onCategoryPrice: (String, String) -> Unit) {
     val checkOut = state.expectedCheckOut
     val nights = if (checkOut != null)
         ChronoUnit.DAYS.between(state.checkInTime.toMidnightUtc().toInstant(), checkOut.toMidnightUtc().toInstant()).coerceAtLeast(1)
     else 1L
 
+    // Unified list of the categories being priced: (categoryId, roomCount, categoryName).
     val grouped = state.selectedInstanceDetails.values.groupBy { it.categoryId }
+    val pricedCats: List<Triple<String, Int, String>> = when {
+        grouped.isNotEmpty() -> grouped.map { (catId, insts) ->
+            Triple(catId, insts.size, insts.first().categoryName.ifBlank { state.categories.find { it.id == catId }?.type ?: catId })
+        }
+        state.bookingRoomCountsByCategory.any { it.value > 0 } ->
+            state.bookingRoomCountsByCategory.filter { it.value > 0 }.map { (catId, count) ->
+                Triple(catId, count, state.categories.find { it.id == catId }?.type ?: catId)
+            }
+        state.selectedCategoryId.isNotBlank() ->
+            listOf(Triple(state.selectedCategoryId, 1, state.categories.find { it.id == state.selectedCategoryId }?.type ?: state.selectedCategoryName))
+        else -> emptyList()
+    }
+
+    data class RoomLine(val catId: String, val catName: String, val count: Int, val price: Double, val charge: Double)
     var roomTotal = 0.0
-    val roomRows = grouped.map { (catId, insts) ->
-        val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
-        val count = insts.size
+    val roomLines = pricedCats.map { (catId, count, catName) ->
+        val price = state.priceForCategory(catId)
         val charge = price * nights * count
         roomTotal += charge
-        val catName = insts.first().categoryName.ifBlank { state.categories.find { it.id == catId }?.type ?: catId }
-        val label = if (count > 1) "$catName × $count rooms × $nights nights" else "$catName × $nights night${if (nights != 1L) "s" else ""}"
-        label to charge
-    }.ifEmpty {
-        val countsToUse = state.bookingRoomCountsByCategory.filter { it.value > 0 }
-        if (countsToUse.isNotEmpty()) {
-            countsToUse.map { (catId, count) ->
-                val cat = state.categories.find { it.id == catId }
-                val price = state.categoryPrices[catId] ?: cat?.pricePerNight ?: 0.0
-                val charge = price * nights * count
-                roomTotal += charge
-                val catName = cat?.type ?: catId
-                val label = if (count > 1) "$catName × $count rooms × $nights nights"
-                            else "$catName × $nights night${if (nights != 1L) "s" else ""}"
-                label to charge
-            }
-        } else {
-            val cat = state.categories.find { it.id == state.selectedCategoryId }
-            val price = state.categoryPrices[state.selectedCategoryId] ?: cat?.pricePerNight ?: 0.0
-            roomTotal = price * nights
-            listOf("Room charges" to roomTotal)
-        }
+        RoomLine(catId, catName, count, price, charge)
     }
 
     val breakfastCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
     val subtotal = roomTotal + breakfastCharge
 
-    // Tax — per category using Room.taxPercentage
+    // Tax — per category using Room.taxPercentage, on the effective (possibly edited) charge.
     data class TaxLine(val label: String, val rate: Double, val amount: Double)
-    val taxLines = buildList {
-        val catIds = if (grouped.isNotEmpty()) grouped.keys
-            else state.bookingRoomCountsByCategory.keys.ifEmpty { listOfNotNull(state.selectedCategoryId.takeIf { it.isNotBlank() }) }.toSet()
-        for (catId in catIds) {
-            val cat = state.categories.find { it.id == catId } ?: continue
-            if (cat.taxPercentage <= 0.0) continue
-            val charge = when {
-                grouped.isNotEmpty() -> {
-                    val insts = grouped[catId] ?: continue
-                    val price = state.categoryPrices[catId] ?: cat.pricePerNight
-                    price * nights * insts.size
-                }
-                else -> {
-                    val count = state.bookingRoomCountsByCategory[catId] ?: 1
-                    val price = state.categoryPrices[catId] ?: cat.pricePerNight
-                    price * nights * count
-                }
-            }
-            add(TaxLine("Tax (${cat.taxPercentage.toInt()}%)", cat.taxPercentage, charge * cat.taxPercentage / 100.0))
-        }
+    val taxLines = roomLines.mapNotNull { rl ->
+        val cat = state.categories.find { it.id == rl.catId } ?: return@mapNotNull null
+        if (cat.taxPercentage <= 0.0) return@mapNotNull null
+        TaxLine("Tax (${cat.taxPercentage.toInt()}%)", cat.taxPercentage, rl.charge * cat.taxPercentage / 100.0)
     }
     val taxTotal = taxLines.sumOf { it.amount }
     val total = subtotal + taxTotal
 
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            roomRows.forEach { (label, charge) ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    Text("₹${"%,.2f".format(charge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+            roomLines.forEach { rl ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        val label = if (rl.count > 1) "${rl.catName} × ${rl.count} rooms × $nights night${if (nights != 1L) "s" else ""}"
+                                    else "${rl.catName} × $nights night${if (nights != 1L) "s" else ""}"
+                        Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        Text("₹${"%,.2f".format(rl.charge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                    }
+                    // Editable per-night rate — the receptionist can change it at check-in.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (state.isBookingMode) "Rate / night (adjust)" else "Rate / night",
+                            color = DreamlandGold, style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f),
+                        )
+                        OutlinedTextField(
+                            value = state.priceOverrides[rl.catId] ?: rl.price.let { if (it > 0) it.toLong().toString() else "" },
+                            onValueChange = { onCategoryPrice(rl.catId, it) },
+                            singleLine = true,
+                            prefix = { Text("₹", color = DreamlandMuted, fontSize = 12.sp) },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.width(130.dp),
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                                focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f), cursorColor = DreamlandGold,
+                            ),
+                        )
+                    }
                 }
             }
             if (state.breakfast) {

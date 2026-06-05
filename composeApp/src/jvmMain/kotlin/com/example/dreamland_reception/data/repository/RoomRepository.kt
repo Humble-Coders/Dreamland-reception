@@ -13,6 +13,8 @@ interface RoomRepository {
     suspend fun add(room: Room): String
     suspend fun update(room: Room)
     suspend fun updateStatus(id: String, status: String)
+    /** Targeted price update — writes only `price` + `offlinePrice`, preserving all other fields. */
+    suspend fun updatePrices(id: String, pricePerNight: Double, offlinePrice: Double)
 }
 
 object FirestoreRoomRepository : RoomRepository {
@@ -47,6 +49,11 @@ object FirestoreRoomRepository : RoomRepository {
         col.document(id).update("status", status).get(); Unit
     }
 
+    override suspend fun updatePrices(id: String, pricePerNight: Double, offlinePrice: Double) = withContext(Dispatchers.IO) {
+        // Partial update so seasonal pricing, tax, occupancy, etc. are never clobbered.
+        col.document(id).update(mapOf("price" to pricePerNight, "offlinePrice" to offlinePrice)).get(); Unit
+    }
+
     private fun com.google.cloud.firestore.DocumentSnapshot.toRoom() = runCatching {
         @Suppress("UNCHECKED_CAST")
         val seasonal = (get("seasonalPricing") as? List<Map<String, Any>>)?.map { s ->
@@ -74,6 +81,7 @@ object FirestoreRoomRepository : RoomRepository {
             capacity = (getLong("maxOccupancy") ?: getLong("capacity"))?.toInt() ?: 2,
             // "price" is the Firestore field; fall back to "pricePerNight"
             pricePerNight = getDouble("price") ?: getDouble("pricePerNight") ?: 0.0,
+            offlinePrice = getDouble("offlinePrice") ?: 0.0,
             breakfastPrice = getDouble("breakfastPrice") ?: 0.0,
             taxPercentage = getDouble("taxPercentage") ?: getDouble("tax") ?: getDouble("gstRate") ?: 0.0,
             status = getString("status") ?: "available",
@@ -91,6 +99,7 @@ object FirestoreRoomRepository : RoomRepository {
         "floor" to floor.toString(),
         "maxOccupancy" to capacity,
         "price" to pricePerNight,
+        "offlinePrice" to offlinePrice,
         "breakfastPrice" to breakfastPrice,
         "status" to status,
         "amenities" to amenities,
