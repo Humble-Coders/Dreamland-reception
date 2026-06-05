@@ -13,8 +13,8 @@ interface RoomRepository {
     suspend fun add(room: Room): String
     suspend fun update(room: Room)
     suspend fun updateStatus(id: String, status: String)
-    /** Targeted price update — writes only `price` + `offlinePrice`, preserving all other fields. */
-    suspend fun updatePrices(id: String, pricePerNight: Double, offlinePrice: Double)
+    /** Targeted update — writes ONLY `offlinePrice`, never the standard `price` or any other field. */
+    suspend fun updateOfflinePrice(id: String, offlinePrice: Double)
 }
 
 object FirestoreRoomRepository : RoomRepository {
@@ -49,9 +49,10 @@ object FirestoreRoomRepository : RoomRepository {
         col.document(id).update("status", status).get(); Unit
     }
 
-    override suspend fun updatePrices(id: String, pricePerNight: Double, offlinePrice: Double) = withContext(Dispatchers.IO) {
-        // Partial update so seasonal pricing, tax, occupancy, etc. are never clobbered.
-        col.document(id).update(mapOf("price" to pricePerNight, "offlinePrice" to offlinePrice)).get(); Unit
+    override suspend fun updateOfflinePrice(id: String, offlinePrice: Double) = withContext(Dispatchers.IO) {
+        // Partial update of ONLY offlinePrice — the standard `price`, seasonal pricing,
+        // tax, occupancy, etc. are never touched.
+        col.document(id).update(mapOf("offlinePrice" to offlinePrice)).get(); Unit
     }
 
     private fun com.google.cloud.firestore.DocumentSnapshot.toRoom() = runCatching {

@@ -492,8 +492,10 @@ private fun RoomPricesCard(state: SettingsUiState, vm: SettingsViewModel) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("ROOM PRICES", style = MaterialTheme.typography.labelLarge, color = DreamlandGold)
             Text(
-                "Standard price is used for bookings. Offline price is the default rate for walk-ins " +
-                    "(set 0 to reuse the standard price). The receptionist can still adjust the rate at check-in.",
+                "Only the offline (walk-in) price is editable here. The standard price (used for " +
+                    "bookings) is shown for reference and is managed elsewhere — it is never changed from " +
+                    "this screen. Set offline to 0 to reuse the standard price. The receptionist can still " +
+                    "adjust the rate at check-in.",
                 color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
             )
             state.rooms.forEach { room ->
@@ -501,11 +503,11 @@ private fun RoomPricesCard(state: SettingsUiState, vm: SettingsViewModel) {
                 val displayName = room.type.ifBlank { room.number.ifBlank { "Room" } }
                 RoomPriceRow(
                     name = displayName,
-                    initialStd = room.pricePerNight,
+                    standardPrice = room.pricePerNight,
                     initialOffline = room.offlinePrice,
                     saved = state.roomPricesSavedId == roomId,
                     onEdit = { vm.clearRoomPricesSaved() },
-                    onSave = { std, off -> vm.saveRoomPrices(roomId, std, off) },
+                    onSave = { off -> vm.saveOfflinePrice(roomId, off) },
                 )
                 HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
             }
@@ -516,28 +518,32 @@ private fun RoomPricesCard(state: SettingsUiState, vm: SettingsViewModel) {
 @Composable
 private fun RoomPriceRow(
     name: String,
-    initialStd: Double,
+    standardPrice: Double,
     initialOffline: Double,
     saved: Boolean,
     onEdit: () -> Unit,
-    onSave: (std: Double, offline: Double) -> Unit,
+    onSave: (offline: Double) -> Unit,
 ) {
-    var std by remember(name, initialStd) { mutableStateOf(if (initialStd > 0) initialStd.toLong().toString() else "") }
     var off by remember(name, initialOffline) { mutableStateOf(if (initialOffline > 0) initialOffline.toLong().toString() else "") }
 
+    fun fmt(p: Double) = if (p == p.toLong().toDouble()) "%,d".format(p.toLong()) else "%,.2f".format(p)
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            RoomPriceField("Standard / night", std, { std = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, Modifier.weight(1f))
-            RoomPriceField("Offline (walk-in)", off, { off = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+            // Standard price — read-only reference, never written from here.
+            Text(
+                "Standard: ₹${fmt(standardPrice)}",
+                color = DreamlandMuted, style = MaterialTheme.typography.labelMedium,
+            )
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            RoomPriceField("Offline (walk-in) / night", off, { off = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, Modifier.weight(1f))
             if (saved) {
                 Text("Saved ✓", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.width(10.dp))
             }
             Button(
-                onClick = { onSave(std.toDoubleOrNull() ?: 0.0, off.toDoubleOrNull() ?: 0.0) },
+                onClick = { onSave(off.toDoubleOrNull() ?: 0.0) },
                 colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
                 shape = RoundedCornerShape(8.dp),
             ) { Text("Save", color = Color(0xFF0D1F17), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }

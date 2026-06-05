@@ -90,6 +90,14 @@ import com.example.dreamland_reception.DreamlandForestSurface
 import com.example.dreamland_reception.DreamlandGold
 import com.example.dreamland_reception.DreamlandMuted
 import com.example.dreamland_reception.DreamlandOnDark
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.dreamland_reception.ui.viewmodel.MatchedGuestId
 import com.example.dreamland_reception.ui.viewmodel.GRC_SAVE_AS_PDF
 import com.example.dreamland_reception.ui.viewmodel.GrcPhase
 import com.example.dreamland_reception.ui.viewmodel.GuestEntry
@@ -139,10 +147,17 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
         onDismissRequest = vm::closeWalkIn,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        val matchedIds = state.matchedGuestIds
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(if (matchedIds.isNotEmpty()) 0.82f else 0.50f)
+                .fillMaxHeight(0.90f),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.50f)
-                .fillMaxHeight(0.90f)
+                .weight(if (matchedIds.isNotEmpty()) 0.62f else 1f)
+                .fillMaxHeight()
                 .clip(RoundedCornerShape(20.dp))
                 .background(DreamlandForestSurface),
         ) {
@@ -289,6 +304,15 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 }
             }
         }
+            // Returning-guest ID panel — to the right of the card, never overlapping it.
+            if (matchedIds.isNotEmpty()) {
+                GuestIdMatchPanel(
+                    matches = matchedIds,
+                    onApply = { vm.applyMatchedId(it) },
+                    modifier = Modifier.weight(0.38f).fillMaxHeight(),
+                )
+            }
+        }
     }
 
     state.groupChangeConfirmDialog?.let { d ->
@@ -307,6 +331,90 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
             onCancelUnmet = { vm.confirmCheckInMismatch(cancelUnmet = true) },
             onDismiss = vm::dismissCheckInMismatch,
         )
+    }
+}
+
+// ── Returning-guest ID panel ──────────────────────────────────────────────────
+
+@Composable
+private fun GuestIdMatchPanel(
+    matches: List<MatchedGuestId>,
+    onApply: (MatchedGuestId) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(DreamlandForestSurface)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("IDS ON RECORD", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+        Text(
+            "Previously scanned for this phone number (${matches.size}) · tap a card to auto-fill",
+            color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            matches.forEach { m ->
+                // The whole card (front + back images) is one button → auto-fills the guest.
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(DreamlandForestElevated)
+                        .border(1.dp, DreamlandGold.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                        .clickable { onApply(m) }
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (m.name.isNotBlank()) {
+                        Text(m.name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    val idLine = listOfNotNull(
+                        m.idType.takeIf { it.isNotBlank() },
+                        m.govIdNumber.takeIf { it.isNotBlank() },
+                    ).joinToString(" · ")
+                    if (idLine.isNotBlank()) {
+                        Text(idLine, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                    // Images are part of the same button — let clicks fall through to the card.
+                    m.pictures.forEach { url -> GuestIdImage(url, clickable = false) }
+                    Text("Tap to auto-fill", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuestIdImage(url: String, clickable: Boolean = true) {
+    val bitmap by produceState<ImageBitmap?>(initialValue = null, url) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { javax.imageio.ImageIO.read(java.net.URL(url))?.toComposeImageBitmap() }.getOrNull()
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 90.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF20302A))
+            .border(1.dp, DreamlandMuted.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+            .then(if (clickable) Modifier.clickable { runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(url)) } } else Modifier)
+            .padding(6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = bitmap
+        if (bmp != null) {
+            Image(bitmap = bmp, contentDescription = "ID image", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth())
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(12.dp)) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DreamlandGold)
+                Text("Loading…", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        }
     }
 }
 
@@ -422,8 +530,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
         label = "Room Category *",
         selectedText = if (state.selectedCategoryName.isBlank()) "Select category"
         else {
-            val effectivePrice = state.categoryPrices[state.selectedCategoryId]
-                ?: state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight ?: 0.0
+            val effectivePrice = state.priceForCategory(state.selectedCategoryId)
             val count = state.categoryAvailability[state.selectedCategoryId]
             buildString {
                 append(state.selectedCategoryName)
@@ -434,7 +541,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
             }
         },
         options = state.categories.map { room ->
-            val price = state.categoryPrices[room.id] ?: room.pricePerNight
+            val price = state.priceForCategory(room.id)
             val label = buildString {
                 append("${room.type}  ·  ₹${"%,.0f".format(price)}/night")
                 if (availChecked) {
@@ -1045,7 +1152,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Paid from booking:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+            Text("Paid on booking (pre-filled below):", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
             Text("₹${"%.2f".format(bookingAdvance)}", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(8.dp))
@@ -1064,7 +1171,9 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
         ),
     )
     Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
+    val modeMissing = advance > 0 && state.advancePaymentMethod.isBlank()
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf("CASH", "BANK").forEach { method ->
             val selected = state.advancePaymentMethod == method
             Box(
@@ -1076,21 +1185,24 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) { Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 13.sp) }
         }
+        if (modeMissing) {
+            Text("Select Cash or Bank *", color = Color(0xFFFFC107), style = MaterialTheme.typography.labelMedium)
+        }
     }
-    val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
     if (advance > 0 || bookingAdvance > 0) {
         val roomTotal = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
-            val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
-            price * nights * insts.size
-        }.let { if (it == 0.0) (state.categories.find { it.id == state.selectedCategoryId }?.pricePerNight ?: 0.0) * nights * state.selectedInstanceIds.size.coerceAtLeast(1) else it }
+            state.priceForCategory(catId) * nights * insts.size
+        }.let { if (it == 0.0) state.priceForCategory(state.selectedCategoryId) * nights * state.selectedInstanceIds.size.coerceAtLeast(1) else it }
         val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
         val taxAmount = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
-            val price = state.categoryPrices[catId] ?: state.categories.find { it.id == catId }?.pricePerNight ?: 0.0
+            val price = state.priceForCategory(catId)
             val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
             price * nights * insts.size * taxRate / 100.0
         }
         val total = roomTotal + bfCharge + taxAmount
-        val pending = (total - bookingAdvance - advance).coerceAtLeast(0.0)
+        // The advance field already includes any advance paid on the booking (auto-filled),
+        // so subtract only the field value — never the booking advance again.
+        val pending = (total - advance).coerceAtLeast(0.0)
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)

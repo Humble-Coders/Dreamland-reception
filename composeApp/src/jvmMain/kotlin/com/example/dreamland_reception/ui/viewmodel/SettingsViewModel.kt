@@ -209,24 +209,24 @@ class SettingsViewModel(
     // ── Services ──────────────────────────────────────────────────────────────
 
     /**
-     * Saves a room category's standard price and offline (walk-in) price. Uses a
-     * targeted partial update so seasonal pricing, tax, occupancy, etc. are preserved.
+     * Saves ONLY a room category's offline (walk-in) price. The standard price is the
+     * source of truth managed elsewhere and is never modified from here.
      */
-    fun saveRoomPrices(categoryId: String, pricePerNight: Double, offlinePrice: Double) {
+    fun saveOfflinePrice(categoryId: String, offlinePrice: Double) {
         if (categoryId.isBlank()) return
         viewModelScope.launch {
-            runCatching { roomRepo.updatePrices(categoryId, pricePerNight, offlinePrice) }
+            runCatching { roomRepo.updateOfflinePrice(categoryId, offlinePrice) }
                 .onSuccess {
                     _state.update { s ->
                         s.copy(
                             rooms = s.rooms.map { r ->
-                                if (r.id == categoryId) r.copy(pricePerNight = pricePerNight, offlinePrice = offlinePrice) else r
+                                if (r.id == categoryId) r.copy(offlinePrice = offlinePrice) else r
                             },
                             roomPricesSavedId = categoryId,
                         )
                     }
                 }
-                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Failed to save room prices") } }
+                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Failed to save offline price") } }
         }
     }
 

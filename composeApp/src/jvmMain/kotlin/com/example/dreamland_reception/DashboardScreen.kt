@@ -109,6 +109,10 @@ fun DashboardScreen(
     onRoomClick: (String) -> Unit = {},
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    // Hotel's configured check-out time (HH:mm) — room cards show this as the time,
+    // while keeping the check-out DATE from the stay.
+    val settingsState by DreamlandAppInitializer.getSettingsViewModel().state.collectAsStateWithLifecycle()
+    val hotelCheckOutTime = settingsState.selectedHotel?.checkOutTime?.takeIf { it.isNotBlank() } ?: "11:00"
     var showCheckAvailability by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
@@ -147,6 +151,7 @@ fun DashboardScreen(
                     RoomGridSection(
                         rooms = state.roomInstances,
                         stays = state.rawActiveStays,
+                        hotelCheckOutTime = hotelCheckOutTime,
                         onSetCleaning = vm::setRoomCleaning,
                         onSetAvailable = vm::setRoomAvailable,
                         onRoomClick = onRoomClick,
@@ -202,6 +207,7 @@ private fun roomStatusColor(status: String, isOccupied: Boolean): Color = when {
 private fun RoomGridSection(
     rooms: List<RoomInstance>,
     stays: List<Stay>,
+    hotelCheckOutTime: String,
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
     onRoomClick: (String) -> Unit,
@@ -227,6 +233,7 @@ private fun RoomGridSection(
                                 room = room,
                                 stay = stay,
                                 isOccupied = stay != null,
+                                hotelCheckOutTime = hotelCheckOutTime,
                                 onSetCleaning = onSetCleaning,
                                 onSetAvailable = onSetAvailable,
                                 onClick = { stay?.id?.let { onRoomClick(it) } },
@@ -242,18 +249,29 @@ private fun RoomGridSection(
     }
 }
 
+/** Formats the hotel's configured check-out time ("HH:mm") for display ("hh:mm a"); falls back to the raw value. */
+private fun formatHotelTime(hhmm: String): String = runCatching {
+    val parts = hhmm.trim().split(":")
+    val h = parts[0].toInt()
+    val m = parts.getOrNull(1)?.toInt() ?: 0
+    val cal = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, h); set(Calendar.MINUTE, m) }
+    SimpleDateFormat("hh:mm a", Locale.getDefault()).format(cal.time)
+}.getOrElse { hhmm }
+
 @Composable
 private fun RoomCard(
     room: RoomInstance,
     stay: Stay?,
     isOccupied: Boolean,
+    hotelCheckOutTime: String = "11:00",
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val statusColor = roomStatusColor(room.status, isOccupied)
-    val dateFmt = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()) }
+    // Date only — the time shown comes from the hotel's configured check-out time.
+    val dateFmt = remember { SimpleDateFormat("dd MMM", Locale.getDefault()) }
     val statusLabel = when {
         isOccupied -> "OCCUPIED"
         room.status == "CLEANING" -> "CLEANING"
@@ -296,7 +314,7 @@ private fun RoomCard(
                 Spacer(Modifier.weight(1f))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Icon(Icons.Filled.Schedule, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(13.dp))
-                    Text("Check-out · ${dateFmt.format(stay.expectedCheckOut)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Check-out · ${dateFmt.format(stay.expectedCheckOut)}, ${formatHotelTime(hotelCheckOutTime)}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             room.status == "MAINTENANCE" -> {

@@ -170,7 +170,9 @@ data class WalkInState(
     val children: Int = 0,
     val breakfast: Boolean = false,
     val advancePayment: String = "",
-    val advancePaymentMethod: String = "CASH",
+    // No default — the receptionist must explicitly pick Cash or Bank when an advance
+    // is being recorded (blank = nothing selected).
+    val advancePaymentMethod: String = "",
     // All categories from Firestore (unfiltered — used when no checkout date)
     val categories: List<Room> = emptyList(),
     // Categories passing Steps 5-6 (set once checkout date + guests are known)
@@ -214,30 +216,51 @@ data class WalkInState(
     val scannerMessage: String? = null,
     val grc: GrcStepState = GrcStepState(),
     val purposeOptions: List<String> = emptyList(),   // from purposeType collection
+    // Previously-scanned IDs for the primary guest's phone (pulled from the stays
+    // collection), shown beside the dialog so a returning guest's ID surfaces instantly.
+    val matchedGuestIds: List<MatchedGuestId> = emptyList(),
 )
 
 /**
- * Effective per-night rate for a category in the walk-in flow: the receptionist's
- * typed override if present, else the seeded default (offline rate for walk-ins,
- * standard price for bookings). Used by the live pricing preview.
+ * A unique past ID on record for a phone number — surfaced during check-in. Carries the
+ * same fields the ID scanner fills, so tapping the card can auto-fill the guest entry.
+ */
+data class MatchedGuestId(
+    val name: String,
+    val idType: String,
+    val govIdNumber: String,
+    val gender: String,
+    val dob: String,
+    val age: Int,
+    val pictures: List<String>,   // govIdPictures URLs (front, back)
+)
+
+/**
+ * A pure walk-in: no booking behind it (not "Add Booking" creation, not a single- or
+ * group-booking check-in). Only pure walk-ins use the offline price; booking check-ins
+ * use the rate locked in the booking document (seeded into [WalkInState.priceOverrides]).
+ */
+val WalkInState.isWalkInOnly: Boolean
+    get() = !isBookingMode && sourceBooking == null && !isGroupCheckIn
+
+/**
+ * Effective per-night rate for a category: the receptionist's typed value (or the rate
+ * seeded from a booking) if present, else the availability-seeded default, else the
+ * offline price (pure walk-ins only) or the standard price. Used by the live preview.
  */
 fun WalkInState.priceForCategory(catId: String): Double =
     priceOverrides[catId]?.toDoubleOrNull()
         ?: categoryPrices[catId]
-        ?: categories.find { it.id == catId }?.let { if (!isBookingMode && it.offlinePrice > 0.0) it.offlinePrice else it.pricePerNight }
+        ?: categories.find { it.id == catId }?.let { if (isWalkInOnly && it.offlinePrice > 0.0) it.offlinePrice else it.pricePerNight }
         ?: 0.0
 
 /**
- * The rate to persist on a stay at check-in. Walk-ins always store the effective
- * offline/edited rate so the bill uses it. Bookings store a rate ONLY when the
- * receptionist adjusted it — otherwise 0, so checkout falls back to the category's
- * current price (the original system, unchanged).
+ * The rate to persist on a stay at check-in (used by both walk-ins and booking
+ * check-ins). It's the effective rate: offline for pure walk-ins, the booked rate for
+ * booking check-ins, or whatever the receptionist adjusted. Stored so checkout bills
+ * exactly this. (Not used by the "Add Booking" creation flow, which makes bookings, not stays.)
  */
-fun WalkInState.agreedPriceForCategory(catId: String): Double {
-    val override = priceOverrides[catId]?.toDoubleOrNull()
-    return if (isBookingMode) (override ?: 0.0)
-    else (override ?: categoryPrices[catId] ?: 0.0)
-}
+fun WalkInState.agreedPriceForCategory(catId: String): Double = priceForCategory(catId)
 
 // ── From-booking dialog state ─────────────────────────────────────────────────
 
@@ -675,6 +698,7 @@ class StaysViewModel(
     fun closeWalkIn() {
         walkInAvailabilityJob?.cancel()
         walkInAvailabilityJob = null
+        idSearchStaysCache = null   // refresh the returning-guest ID scan next session
         _walkInState.value = WalkInState()
     }
 
@@ -892,6 +916,71 @@ class StaysViewModel(
                     }
                 }
             }
+            searchGuestIdsByPhone(phone)
+        } else if (index == 0) {
+            // Primary phone incomplete/changed → hide the IDs panel.
+            if (_walkInState.value.matchedGuestIds.isNotEmpty()) _walkInState.update { it.copy(matchedGuestIds = emptyList()) }
+        }
+    }
+
+    // Stays cached once per dialog session for the returning-guest ID lookup (Firestore
+    // can't query inside the guests array, so we scan client-side). Cleared on open/close.
+    private var idSearchStaysCache: List<Stay>? = null
+
+    /**
+     * Finds every distinct government ID previously scanned for [phone] across the stays
+     * collection (matched by the last 10 digits, deduped by govIdNumber+phone) and shows
+     * them beside the check-in dialog. Best-effort; stale results are discarded.
+     */
+    fun searchGuestIdsByPhone(phone: String) {
+        val target = (normalizePhoneE164(phone) ?: phone).filter { it.isDigit() }.takeLast(10)
+        if (target.length < 10) { _walkInState.update { it.copy(matchedGuestIds = emptyList()) }; return }
+        viewModelScope.launch {
+            val stays = idSearchStaysCache
+                ?: runCatching { stayRepo.getAll(AppContext.hotelId) }.getOrElse { emptyList() }
+                    .also { idSearchStaysCache = it }
+            val matches = LinkedHashMap<String, MatchedGuestId>()
+            for (stay in stays) {
+                for (g in stay.guests) {
+                    if (g.govIdPictures.isEmpty()) continue
+                    if (g.phone.filter { it.isDigit() }.takeLast(10) != target) continue
+                    val key = g.govIdNumber.trim().lowercase().ifBlank { g.govIdPictures.joinToString("|") } + "@" + target
+                    if (!matches.containsKey(key)) {
+                        matches[key] = MatchedGuestId(
+                            name = g.name, idType = g.idType, govIdNumber = g.govIdNumber,
+                            gender = g.gender, dob = g.dob, age = g.age, pictures = g.govIdPictures,
+                        )
+                    }
+                }
+            }
+            _walkInState.update { ws ->
+                val current = (ws.guestEntries.firstOrNull()?.phone ?: "").filter { it.isDigit() }.takeLast(10)
+                if (current == target) ws.copy(matchedGuestIds = matches.values.toList()) else ws
+            }
+        }
+    }
+
+    /**
+     * Auto-fills a guest entry from a previously-scanned ID on record (tapped in the IDs
+     * panel) — the same fields the ID scanner fills: name, DOB, gender, ID number, age, and
+     * both ID photos. Defaults to the primary guest, whose phone the panel is keyed to.
+     */
+    fun applyMatchedId(match: MatchedGuestId, index: Int = 0) {
+        val age = if (match.age > 0) match.age else calculateAgeFromDob(match.dob) ?: 0
+        updateGuestEntry(index) { entry ->
+            entry.copy(
+                name = match.name.ifBlank { entry.name },
+                dob = match.dob.ifBlank { entry.dob },
+                gender = match.gender.ifBlank { entry.gender },
+                idType = match.idType.ifBlank { entry.idType },
+                govIdNumber = match.govIdNumber.ifBlank { entry.govIdNumber },
+                age = if (age > 0) age else entry.age,
+                govIdPicture1 = match.pictures.getOrElse(0) { entry.govIdPicture1 },
+                govIdPicture2 = match.pictures.getOrElse(1) { entry.govIdPicture2 },
+            )
+        }
+        if (index == 0 && match.name.isNotBlank()) {
+            _walkInState.update { ws -> ws.copy(guestName = match.name) }
         }
     }
     fun onGuestIdProof(index: Int, verified: Boolean) = _walkInState.update { ws ->
@@ -972,6 +1061,7 @@ class StaysViewModel(
                     name = doc.name.ifBlank { entry.name },
                     dob = doc.dob.ifBlank { entry.dob },
                     gender = doc.gender.ifBlank { entry.gender },
+                    idType = doc.idType.ifBlank { entry.idType },
                     govIdNumber = doc.govIdNumber.ifBlank { entry.govIdNumber },
                     age = if (age > 0) age else entry.age,
                     govIdPicture1 = doc.govIdPictures.getOrElse(0) { entry.govIdPicture1 },
@@ -1188,10 +1278,13 @@ class StaysViewModel(
                 // Walk-ins default to the offline rate (ignoring seasonal); bookings keep
                 // the original standard/seasonal price. Manual overrides are applied on top
                 // in the UI and survive this recompute (they live in priceOverrides).
-                pricesMap[cat.id] = if (ws.isBookingMode) {
-                    effectivePrice(cat, checkIn)
-                } else {
+                // Only pure walk-ins default to the offline rate. Booking check-ins use
+                // the rate seeded from the booking doc (in priceOverrides, which wins over
+                // this); "Add Booking" creation uses the standard/seasonal price.
+                pricesMap[cat.id] = if (ws.isWalkInOnly) {
                     cat.offlinePrice.takeIf { it > 0.0 } ?: cat.pricePerNight
+                } else {
+                    effectivePrice(cat, checkIn)
                 }
             }
             val availableCats = ws.categories.filter { cat ->
@@ -1571,6 +1664,13 @@ class StaysViewModel(
             _walkInState.update { it.copy(error = "Check-out must be after check-in") }
             return
         }
+        // A payment mode is mandatory whenever an advance is being recorded (no default
+        // mode is pre-selected). Applies to walk-ins and booking check-ins alike.
+        val advanceAmount = ws.advancePayment.toDoubleOrNull() ?: 0.0
+        if (advanceAmount > 0.0 && ws.advancePaymentMethod.isBlank()) {
+            _walkInState.update { it.copy(error = "Select Cash or Bank for the advance") }
+            return
+        }
 
         _walkInState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
@@ -1731,8 +1831,8 @@ class StaysViewModel(
                     val cat = ws.categories.find { it.id == catId }
                     val checkOutNormalized = checkOutNorm
                     val nights = ChronoUnit.DAYS.between(now.toInstant(), checkOutNormalized.toInstant()).coerceAtLeast(1)
-                    val pricePerNight = ws.categoryPrices[catId]
-                        ?: effectivePrice(cat ?: Room(), now)
+                    // Effective rate: offline (walk-in), booked rate (booking check-in), or edited.
+                    val pricePerNight = ws.priceForCategory(catId)
                     val roomCharge = pricePerNight * nights
                     val breakfastCharge = if (ws.breakfast) ws.selectedCategoryBreakfastPrice * ws.adults * nights else 0.0
                     // Early check-in charge only on first room
@@ -1792,7 +1892,10 @@ class StaysViewModel(
                         breakfast = ws.breakfast,
                         earlyCheckIn = isEarlyCheckIn && roomIndex == 0,
                         earlyCheckInCharge = earlyCharge,
-                        advancePaidAmount = (linkedBooking?.advancePaidAmount ?: 0.0) + advancePerRoom,
+                        // The advance field is auto-filled with the booking's advance, so it
+                        // already includes it — use the field value alone (don't add the
+                        // booking advance again, which previously doubled the amount).
+                        advancePaidAmount = advancePerRoom,
                         advancePaymentMethod = ws.advancePaymentMethod,
                         // Walk-ins persist the offline/edited rate so the bill uses it;
                         // un-adjusted bookings store 0 → checkout uses the category price.
@@ -1906,6 +2009,45 @@ class StaysViewModel(
         _fromBookingState.value = FromBookingState()
     }
 
+    /**
+     * Per-night room rate locked in a booking: backs tax out of the booking total so the
+     * checkout bill reproduces the exact amount the guest booked, regardless of any later
+     * change to the category's price. Folds any breakfast into the rate (a booking check-in
+     * does not separately re-add breakfast).
+     */
+    /** Formats a money amount for a text field: blank for 0, no decimals when whole, else 2dp. */
+    private fun formatAmountField(amount: Double): String =
+        if (amount <= 0.0) ""
+        else if (amount == amount.toLong().toDouble()) amount.toLong().toString()
+        else "%.2f".format(amount)
+
+    private fun bookingRatePerNight(booking: Booking, cat: Room?): Double {
+        if (booking.totalAmount <= 0.0) return 0.0
+        val nights = ChronoUnit.DAYS.between(booking.checkIn.toInstant(), booking.checkOut.toInstant()).coerceAtLeast(1)
+        val tax = cat?.taxPercentage ?: 0.0
+        return booking.totalAmount / (1.0 + tax / 100.0) / nights
+    }
+
+    /**
+     * Builds the per-category rate map (as text, for [WalkInState.priceOverrides]) from the
+     * booking doc(s) of a check-in, so the rate box and total show — and the bill uses —
+     * the booked price rather than the offline or current category price. Group bookings
+     * are combined by groupBookingId; the first booking per category sets the rate.
+     */
+    private fun bookingPriceOverrides(bookings: List<Booking>, categories: List<Room>): Map<String, String> {
+        val out = mutableMapOf<String, String>()
+        for (b in bookings) {
+            val catId = b.roomCategoryId
+            if (catId.isBlank() || out.containsKey(catId)) continue
+            val rate = bookingRatePerNight(b, categories.find { it.id == catId })
+            if (rate > 0.0) {
+                val rounded = Math.round(rate * 100.0) / 100.0
+                out[catId] = if (rounded == rounded.toLong().toDouble()) rounded.toLong().toString() else rounded.toString()
+            }
+        }
+        return out
+    }
+
     fun prefillGroupBooking(group: List<Booking>) {
         if (group.isEmpty()) return
         _fromBookingState.value = FromBookingState()
@@ -1999,9 +2141,15 @@ class StaysViewModel(
                 availableInstances = primaryInsts?.selectable ?: emptyList(),
                 availableCount = categoryAvailability[primaryCatId] ?: primaryInsts?.selectable?.size ?: 0,
                 categoryAvailability = categoryAvailability,
+                // Per-category rate locked in the group's booking docs (combined by groupBookingId).
+                priceOverrides = bookingPriceOverrides(group, categories),
+                // Auto-fill the combined advance already paid across the group's bookings.
+                advancePayment = formatAmountField(group.sumOf { it.advancePaidAmount }),
             )
             // Populate full category availability map for all categories
             computeAvailability()
+            // Surface any previously-scanned IDs for the (pre-filled) primary phone.
+            searchGuestIdsByPhone(toNationalPhone(primaryBooking.guestPhone))
         }
     }
 
@@ -2077,9 +2225,15 @@ class StaysViewModel(
                 else emptyMap(),
                 availableCount = selectable.size,
                 sourceBooking = booking,
+                // Rate locked in the booking (not offline, not current category price).
+                priceOverrides = bookingPriceOverrides(listOf(booking), categories),
+                // Auto-fill the advance already paid on the booking (editable; mode still required).
+                advancePayment = formatAmountField(booking.advancePaidAmount),
             )
             // Populate full category availability map for all categories
             computeAvailability()
+            // Surface any previously-scanned IDs for the (pre-filled) primary phone.
+            searchGuestIdsByPhone(toNationalPhone(booking.guestPhone))
         }
     }
 

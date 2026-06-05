@@ -10,6 +10,7 @@ data class ScannerDocument(
     val dob: String = "",
     val gender: String = "",
     val govIdNumber: String = "",
+    val idType: String = "",   // e.g. Aadhaar | PAN | Passport | Driving Licence | Voter ID
     val govIdPictures: List<String> = emptyList(),
 )
 
@@ -31,6 +32,7 @@ object FirestoreScannerRepository : ScannerRepository {
             dob = doc.getString("dob") ?: "",
             gender = doc.getString("gender") ?: "",
             govIdNumber = doc.getString("govIdNumber") ?: "",
+            idType = doc.getString("idType") ?: "",
             govIdPictures = (doc.get("govIdPictures") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
         )
         doc.reference.delete().get()
