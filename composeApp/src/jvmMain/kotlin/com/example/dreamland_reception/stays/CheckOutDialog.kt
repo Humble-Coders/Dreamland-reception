@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import java.text.SimpleDateFormat
+import java.time.temporal.ChronoUnit
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
@@ -325,6 +326,9 @@ fun CheckOutDialog(
                         Text("Bill Summary", style = MaterialTheme.typography.titleMedium, color = DreamlandGold, fontWeight = FontWeight.SemiBold)
                         HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
 
+                        // Walk-ins (no booking behind the stay) hide tax — it's revealed only at
+                        // the billing screen. Bookings show tax as normal.
+                        val isWalkIn = (state.stay?.bookingId ?: "").isBlank()
                         // For group: aggregate bills for checked stays; for single: use the primary bill
                         val isGroup = state.groupStays.size > 1
                         val checkedBills = if (isGroup)
@@ -338,14 +342,34 @@ fun CheckOutDialog(
                             val totalEarlyCI = checkedBills.sumOf { it.earlyCheckInCharge }
                             val totalAmountPaid = checkedBills.sumOf { it.amountPaid }
 
+                            // Nights actually billed = full days between check-in and now
+                            // (matches the bill engine), so the room charge is never ambiguous.
+                            val nowForNights = Date()
+                            fun nightsFor(s: Stay?): Long = s?.let {
+                                ChronoUnit.DAYS.between(it.checkInActual.toInstant(), nowForNights.toInstant())
+                            }?.coerceAtLeast(1L) ?: 1L
+                            fun nightsSublabel(nights: Long, charge: Double): String {
+                                val perNight = if (nights > 0) charge / nights else charge
+                                return "$nights night${if (nights > 1) "s" else ""} × ₹${"%.0f".format(perNight)}"
+                            }
+
                             if (isGroup) {
                                 // Per-room breakdown
                                 checkedBills.forEach { b ->
-                                    CheckOutBillRow("Room ${b.roomNumber} charges", b.roomCharges + b.serviceCharges + b.earlyCheckInCharge)
+                                    val n = nightsFor(state.groupStays.find { it.id == b.stayId })
+                                    CheckOutBillRow(
+                                        "Room ${b.roomNumber} charges",
+                                        b.roomCharges + b.serviceCharges + b.earlyCheckInCharge,
+                                        sublabel = if (b.roomCharges > 0) nightsSublabel(n, b.roomCharges) else null,
+                                    )
                                 }
                                 HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
                             } else {
-                                CheckOutBillRow("Room Charges", totalRoomCharges)
+                                val n = nightsFor(state.stay)
+                                CheckOutBillRow(
+                                    "Room Charges", totalRoomCharges,
+                                    sublabel = if (totalRoomCharges > 0) nightsSublabel(n, totalRoomCharges) else null,
+                                )
                                 if (totalService > 0) CheckOutBillRow("Service Charges", totalService)
                                 if (totalEarlyCI > 0) CheckOutBillRow("Early Check-in", totalEarlyCI)
                             }
@@ -354,13 +378,15 @@ fun CheckOutDialog(
                             val lateCharge = if (state.lateCheckoutCharge > 0) state.lateCheckoutCharge else checkedBills.sumOf { it.lateCheckOutCharge }
                             if (lateCharge > 0) CheckOutBillRow("Late Check-out", lateCharge)
                             val totalTax = checkedBills.sumOf { it.tax }
-                            if (totalTax > 0) CheckOutBillRow("Tax", totalTax)
+                            if (!isWalkIn && totalTax > 0) CheckOutBillRow("Tax", totalTax)
                             val firstBill = checkedBills.first()
                             if (firstBill.discount > 0) CheckOutBillRow("Discount", -firstBill.discount)
 
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.3f))
                             val extraLate = if (state.lateCheckoutCharge > 0 && checkedBills.all { it.lateCheckOutCharge == 0.0 }) state.lateCheckoutCharge else 0.0
-                            val displayTotal = checkedBills.sumOf { it.totalAmount } + extraLate + state.ordersTotal
+                            val fullTotal = checkedBills.sumOf { it.totalAmount } + extraLate + state.ordersTotal
+                            // Walk-ins show the pre-tax total (tax added at the billing screen).
+                            val displayTotal = if (isWalkIn) (fullTotal - totalTax) else fullTotal
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 Text("₹${"%.2f".format(displayTotal)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 20.sp)
@@ -549,9 +575,18 @@ private fun GroupRoomsSection(state: CheckOutState, vm: StaysViewModel) {
 }
 
 @Composable
-private fun CheckOutBillRow(label: String, amount: Double) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+private fun CheckOutBillRow(label: String, amount: Double, sublabel: String? = null) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+            if (!sublabel.isNullOrBlank()) {
+                Text(sublabel, color = DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
+            }
+        }
         Text(
             text = if (amount < 0) "-₹${"%.2f".format(-amount)}" else "₹${"%.2f".format(amount)}",
             color = DreamlandOnDark,

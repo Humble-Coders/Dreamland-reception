@@ -49,6 +49,7 @@ import com.example.dreamland_reception.stays.CheckOutDialog
 import com.example.dreamland_reception.stays.ExtendStayDialog
 import com.example.dreamland_reception.stays.ChangeRoomDialog
 import com.example.dreamland_reception.stays.FromBookingDialog
+import com.example.dreamland_reception.stays.GrcPrintDialog
 import com.example.dreamland_reception.stays.StayDetailPanel
 import com.example.dreamland_reception.stays.StayDetailPlaceholder
 import com.example.dreamland_reception.stays.WalkInDialog
@@ -75,6 +76,7 @@ fun StaysScreen(
     val addOrderState by vm.addOrderState.collectAsStateWithLifecycle()
     val addComplaintState by vm.addComplaintState.collectAsStateWithLifecycle()
     val changeRoomState by vm.changeRoomState.collectAsStateWithLifecycle()
+    val grcPrintState by vm.grcPrintState.collectAsStateWithLifecycle()
 
     // Real-time stays listener — active while this screen is in the composition
     DisposableEffect(Unit) {
@@ -121,6 +123,7 @@ fun StaysScreen(
     if (addOrderState.isOpen) AddOrderDialog(addOrderState, vm)
     if (addComplaintState.isOpen) AddComplaintDialog(addComplaintState, vm)
     ChangeRoomDialog(changeRoomState, vm)
+    GrcPrintDialog(grcPrintState, vm)
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────

@@ -121,6 +121,13 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
                     ) {
                         Text("Change Room", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
                     }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { vm.openGrcPrint(stay.id) },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.7f)),
+                    ) {
+                        Text("Print GRC", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                    }
                     Button(
                         onClick = { vm.openCheckOut(stay.id) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
@@ -190,7 +197,7 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
             }
         } else {
             when (selectedTab) {
-                0 -> BillingTab(detailState.bill)
+                0 -> BillingTab(detailState.bill, isWalkIn = stay.bookingId.isBlank())
                 1 -> OrdersTab(detailState.orders, vm, stay.status == "ACTIVE", onNavigateToOrder)
                 /* 2 -> ComplaintsTab(detailState.complaints, vm, stay.status == "ACTIVE") HIDDEN */
             }
@@ -309,7 +316,7 @@ private fun GuestsSection(guests: List<GuestRecord>, totalAdults: Int) {
 // ── Billing tab ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun BillingTab(bill: Bill?) {
+private fun BillingTab(bill: Bill?, isWalkIn: Boolean = false) {
     if (bill == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Bill generated at checkout", color = DreamlandMuted, style = MaterialTheme.typography.bodyMedium)
@@ -319,8 +326,10 @@ private fun BillingTab(bill: Bill?) {
 
     val roomCharges = bill.items.filter { it.type == "ROOM" }.sumOf { it.total }
     val serviceCharges = bill.items.filter { it.type == "SERVICE" }.sumOf { it.total }
-    // orderCharges includes tax since order tax is shown inside the orders section, not separately
-    val orderCharges = bill.items.filter { it.type == "ORDER" }.sumOf { it.total * (1 + it.taxPercentage / 100.0) }
+    // orderCharges includes tax (shown inside the orders section) — except for walk-ins,
+    // where tax is hidden until the billing screen, so we show the pre-tax amount.
+    val orderCharges = bill.items.filter { it.type == "ORDER" }
+        .sumOf { if (isWalkIn) it.total else it.total * (1 + it.taxPercentage / 100.0) }
     val customCharges = bill.items.filter { it.type == "CUSTOM" }.sumOf { it.total }
     val amountPaid = bill.totalPaid + bill.advancePayment
 
@@ -350,7 +359,7 @@ private fun BillingTab(bill: Bill?) {
                                 Text("₹${"%.2f".format(item.total)}", color = DreamlandMuted.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
                             }
                             val taxAmt = item.total * item.taxPercentage / 100.0
-                            if (taxAmt > 0.005) {
+                            if (!isWalkIn && taxAmt > 0.005) {
                                 val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}" else "%.1f".format(item.taxPercentage)
                                 Row(Modifier.fillMaxWidth().padding(start = 22.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text("Tax ($rateLabel%)", color = DreamlandMuted.copy(alpha = 0.5f), style = MaterialTheme.typography.labelSmall)
@@ -360,28 +369,34 @@ private fun BillingTab(bill: Bill?) {
                         }
                     }
                     if (customCharges > 0) BillRow("Other", customCharges)
-                    // Show per-rate tax rows (same logic as BillSummaryCard)
+                    // Show per-rate tax rows (same logic as BillSummaryCard) — hidden for
+                    // walk-ins, where tax is revealed only at the billing screen.
                     // Exclude ORDER items from tax rows — their tax is already included in orderCharges
-                    val taxByRate = bill.items.filter { it.taxPercentage > 0 && it.type != "ORDER" }.groupBy { it.taxPercentage }
-                    if (taxByRate.isNotEmpty()) {
-                        taxByRate.forEach { (rate, items) ->
-                            val rateAmt = items.sumOf { it.total * rate / 100.0 }
-                            if (rateAmt > 0) BillRow("Tax (${rate.toInt()}%)", rateAmt)
+                    if (!isWalkIn) {
+                        val taxByRate = bill.items.filter { it.taxPercentage > 0 && it.type != "ORDER" }.groupBy { it.taxPercentage }
+                        if (taxByRate.isNotEmpty()) {
+                            taxByRate.forEach { (rate, items) ->
+                                val rateAmt = items.sumOf { it.total * rate / 100.0 }
+                                if (rateAmt > 0) BillRow("Tax (${rate.toInt()}%)", rateAmt)
+                            }
+                        } else if (bill.taxAmount > 0) {
+                            BillRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
                         }
-                    } else if (bill.taxAmount > 0) {
-                        BillRow("Tax (${bill.taxPercentage.toInt()}%)", bill.taxAmount)
                     }
                     if (bill.discountAmount > 0) BillRow("Discount", -bill.discountAmount)
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.3f))
+                    // Walk-ins show pre-tax total + pending; tax is added at the billing screen.
+                    val displayTotal = if (isWalkIn) (bill.totalAmount - bill.taxAmount) else bill.totalAmount
+                    val displayPending = if (isWalkIn) (displayTotal - amountPaid).coerceAtLeast(0.0) else bill.pendingAmount
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Text("₹${"%.2f".format(bill.totalAmount)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text("₹${"%.2f".format(displayTotal)}", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     }
                     BillRow("Amount Paid", amountPaid)
-                    if (bill.pendingAmount > 0) {
+                    if (displayPending > 0) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Pending", color = Color(0xFFEF5350), fontWeight = FontWeight.SemiBold)
-                            Text("₹${"%.2f".format(bill.pendingAmount)}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
+                            Text("₹${"%.2f".format(displayPending)}", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
                         }
                     }
                 }

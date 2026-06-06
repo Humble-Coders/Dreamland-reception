@@ -165,7 +165,6 @@ data class StayBillingState(
     // Guest's current Humble Ledger balance (null = none / not configured / new guest).
     val guestLedgerBalance: com.example.dreamland_reception.data.accounting.CustomerBalanceInfo? = null,
     val pendingGuestNameOverride: String = "",  // set before load(); applied on bill load then cleared
-    val editableTaxPct: String = "",         // inline-editable tax percentage in summary
     val editableAdvancePaid: String = "",    // inline-editable advance paid in summary
     val editableDiscountType: String = "FLAT",  // FLAT | PERCENT
     val editableDiscountValue: String = "",      // inline-editable discount value
@@ -226,7 +225,6 @@ class StayBillingViewModel(
             val foods = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val svcs = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone, pendingGuestNameOverride = "",
-                editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
@@ -285,7 +283,10 @@ class StayBillingViewModel(
                 val advance = stay.advancePaidAmount
                 val subtotal = items.sumOf { it.total }
                 val taxEnabled = taxPercentage > 0
-                val taxAmount = if (taxEnabled) subtotal * taxPercentage / 100.0 else 0.0
+                val taxAmount = if (taxEnabled) {
+                    val perItemTax = items.sumOf { it.total * it.taxPercentage / 100.0 }
+                    if (perItemTax > 0.0) perItemTax else subtotal * taxPercentage / 100.0
+                } else 0.0
                 val total = subtotal + taxAmount
                 val pending = (total - advance).coerceAtLeast(0.0)
                 val status = when {
@@ -322,7 +323,6 @@ class StayBillingViewModel(
             val foods2 = runCatching { foodRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val svcs2 = runCatching { serviceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone2, pendingGuestNameOverride = "",
-                editableTaxPct = bill?.taxPercentage?.let { if (it > 0) "%.0f".format(it) else "" } ?: "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
@@ -334,25 +334,28 @@ class StayBillingViewModel(
     }
 
     private suspend fun migrateRoomItemTaxRates(bill: Bill): Bill {
-        if (bill.items.none { it.type == "ROOM" && it.taxPercentage == 0.0 }) return bill
+        if (bill.items.none { it.type == "ROOM" }) return bill
         val stayIds = bill.stayIds.ifEmpty { listOfNotNull(bill.stayId.takeIf { it.isNotBlank() }) }
         val stays = stayIds.mapNotNull { id -> runCatching { stayRepo.getById(id) }.getOrNull() }
         if (stays.isEmpty()) return bill
+        // Read each room's CURRENT tax from its category in the backend (source of truth).
         val roomTaxMap = mutableMapOf<String, Double>()
         for (stay in stays) {
             val room = runCatching { roomRepo.getById(stay.roomCategoryId) }.getOrNull()
-            if (room != null && room.taxPercentage > 0) roomTaxMap[stay.roomNumber] = room.taxPercentage
+            if (room != null) roomTaxMap[stay.roomNumber] = room.taxPercentage
         }
         if (roomTaxMap.isEmpty()) return bill
+        var changed = false
         val updatedItems = bill.items.map { item ->
-            if (item.type != "ROOM" || item.taxPercentage > 0) item
-            else {
-                val roomNum = if (item.name.startsWith("Room ")) {
-                    item.name.removePrefix("Room ").trim().split(" ", "·", "—").firstOrNull()?.trim() ?: ""
-                } else ""
-                item.copy(taxPercentage = roomTaxMap[roomNum] ?: 0.0)
-            }
+            if (item.type != "ROOM") return@map item
+            val roomNum = if (item.name.startsWith("Room ")) {
+                item.name.removePrefix("Room ").trim().split(" ", "·", "—").firstOrNull()?.trim() ?: ""
+            } else ""
+            // Unknown room (couldn't match the category) → keep the stored value untouched.
+            val catTax = roomTaxMap[roomNum] ?: return@map item
+            if (catTax != item.taxPercentage) { changed = true; item.copy(taxPercentage = catTax) } else item
         }
+        if (!changed) return bill
         val updatedBill = recalculate(bill.copy(items = updatedItems))
         if (bill.id.isNotBlank()) {
             runCatching {
@@ -589,6 +592,14 @@ class StayBillingViewModel(
                 val catPart = if (d.roomCategory.isNotBlank()) " · ${d.roomCategory.trim()}" else ""
                 "Room ${d.roomNumber.trim()}$catPart — ${d.name.trim()}"
             } else d.name.trim()
+            // GST rate: prefer the auto-filled value; otherwise resolve from the catalog/room
+            // by name so a typed (not dropdown-selected) catalog item still gets its GST.
+            val resolvedTax = d.taxPct.toDoubleOrNull() ?: when (d.type) {
+                "ORDER" -> _state.value.foodItems.firstOrNull { it.name.equals(d.name.trim(), ignoreCase = true) }?.taxPercentage
+                "SERVICE" -> _state.value.services.firstOrNull { it.name.equals(d.name.trim(), ignoreCase = true) }?.taxPercentage
+                "ROOM" -> _state.value.rooms.firstOrNull { it.type.equals(d.roomCategory.trim(), ignoreCase = true) }?.taxPercentage
+                else -> null
+            } ?: 0.0
             val newItem = BillItem(
                 id = UUID.randomUUID().toString(),
                 name = itemName,
@@ -596,7 +607,7 @@ class StayBillingViewModel(
                 quantity = qty,
                 unitPrice = price,
                 total = price * qty,
-                taxPercentage = d.taxPct.toDoubleOrNull() ?: 0.0,
+                taxPercentage = resolvedTax,
                 notes = d.notes.trim(),
             )
             val updatedItems = bill.items + newItem
@@ -912,15 +923,8 @@ class StayBillingViewModel(
 
     fun payViaQr() {
         val bill = _state.value.bill ?: return
-        // Compute tax using per-item rates first (same logic as BillSummaryCard)
-        // This handles multi-rate bills (e.g. 12% ROOM + 18% ORDER) correctly
-        val perItemTax = bill.items.filter { it.taxPercentage > 0 }.sumOf { it.total * it.taxPercentage / 100.0 }
-        val liveTax = if (perItemTax > 0) {
-            perItemTax
-        } else {
-            val liveRate = _state.value.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-            bill.subtotal * liveRate / 100.0
-        }
+        // Tax is authoritative on the bill (recalculate handles inclusive/exclusive).
+        val liveTax = bill.taxAmount
         val discV = _state.value.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
         val discA = when (_state.value.editableDiscountType) {
             "PERCENT" -> bill.subtotal * discV / 100.0
@@ -938,38 +942,25 @@ class StayBillingViewModel(
 
     fun onBillGuestPhone(v: String) = _state.update { it.copy(billGuestPhone = v.filter { c -> c.isDigit() }.take(10)) }
 
-    fun saveTaxRateForGroup(oldRate: Double, newRate: Double) {
-        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
-        val updatedItems = bill.items.map { item ->
-            if (item.taxPercentage == oldRate) item.copy(taxPercentage = newRate) else item
-        }
-        val updatedBill = recalculate(bill.copy(taxEnabled = updatedItems.any { it.taxPercentage > 0 }, items = updatedItems))
-        _state.update { it.copy(bill = updatedBill) }
-        viewModelScope.launch {
-            runCatching {
-                billRepo.updateItems(bill.id, updatedItems, updatedBill.subtotal, updatedBill.taxAmount,
-                    updatedBill.discountAmount, updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+    /**
+     * Toggle whether the bill's prices are treated as GST-inclusive or GST-added-on-top.
+     * Recomputes totals and persists. This is the ONLY tax control on the billing screen —
+     * the rate itself comes from each item's category and is not editable here.
+     */
+    fun setTaxInclusive(inclusive: Boolean) {
+        val current = _state.value.bill ?: return
+        val totals = recalculate(current.copy(taxInclusive = inclusive))
+        _state.update { it.copy(bill = totals) }
+        if (current.id.isNotBlank()) {
+            viewModelScope.launch {
+                runCatching {
+                    billRepo.updateTaxInclusive(
+                        current.id, inclusive,
+                        totals.subtotal, totals.taxAmount, totals.discountAmount,
+                        totals.totalAmount, totals.pendingAmount, totals.status,
+                    )
+                }
             }
-        }
-    }
-
-    fun onTaxPctInline(v: String) = _state.update { it.copy(editableTaxPct = v.filter { c -> c.isDigit() || c == '.' }) }
-
-    fun saveTaxPctInline() {
-        val pct = _state.value.editableTaxPct.toDoubleOrNull() ?: return
-        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
-        val updatedItems = bill.items.map { item ->
-            if (pct > 0) item.copy(taxPercentage = if (item.type == "ROOM") pct else item.taxPercentage)
-            else item.copy(taxPercentage = 0.0)
-        }
-        val updatedBill = bill.copy(taxEnabled = pct > 0, taxPercentage = pct, items = updatedItems)
-        val totals = recalculate(updatedBill)
-        viewModelScope.launch {
-            runCatching {
-                billRepo.updateTaxDiscount(bill.id, pct > 0, pct, bill.discountType, bill.discountValue,
-                    totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
-                billRepo.updateItems(bill.id, updatedItems, totals.subtotal, totals.taxAmount, totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
-            }.onSuccess { _state.update { s -> s.copy(bill = totals) } }
         }
     }
 
@@ -1538,12 +1529,23 @@ class StayBillingViewModel(
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun recalculate(bill: Bill): Bill {
-        val subtotal = bill.items.sumOf { it.total }
-        // Use per-item tax rates when items carry them; fall back to bill-level rate if all items have 0
+        // gross = sum of the entered item prices (what's shown on each row).
+        val gross = bill.items.sumOf { it.total }
+        // GST per item, honouring the bill-level inclusive/exclusive toggle.
+        //   exclusive → tax is added on top:  tax = price × rate
+        //   inclusive → price already contains tax:  tax = price − price/(1+rate)
+        // Falls back to the bill-level rate only when no item carries a per-item rate.
         val taxAmount = if (bill.taxEnabled) {
-            val perItemTax = bill.items.sumOf { it.total * it.taxPercentage / 100.0 }
-            if (perItemTax > 0.0) perItemTax else subtotal * bill.taxPercentage / 100.0
+            if (bill.taxInclusive) {
+                val t = bill.items.sumOf { it.total - it.total / (1.0 + it.taxPercentage / 100.0) }
+                if (t > 0.0) t else gross - gross / (1.0 + bill.taxPercentage / 100.0)
+            } else {
+                val t = bill.items.sumOf { it.total * it.taxPercentage / 100.0 }
+                if (t > 0.0) t else gross * bill.taxPercentage / 100.0
+            }
         } else 0.0
+        // Taxable base: exclusive → the gross prices; inclusive → gross minus the embedded tax.
+        val subtotal = if (bill.taxEnabled && bill.taxInclusive) gross - taxAmount else gross
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0
             else -> bill.discountValue

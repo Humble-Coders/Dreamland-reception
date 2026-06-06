@@ -150,6 +150,18 @@ data class GrcStepState(
     val numbers: Map<Int, String> = emptyMap(),      // guestEntry index -> issued GRC number (allocated at print)
 )
 
+/** State for the "Print GRC" dialog opened from an active stay on the stays screen. */
+data class GrcPrintState(
+    val isOpen: Boolean = false,
+    val stayId: String = "",
+    val roomNumber: String = "",
+    val guests: List<GuestRecord> = emptyList(),
+    val availablePrinters: List<String> = emptyList(),
+    val selectedPrinter: String = "",
+    val statuses: Map<Int, GrcPhase> = emptyMap(),   // guest index -> phase
+    val errors: Map<Int, String> = emptyMap(),       // guest index -> error message
+)
+
 data class WalkInState(
     val isOpen: Boolean = false,
     // primary guest info (synced from guestEntries[0])
@@ -505,6 +517,9 @@ class StaysViewModel(
 
     private val _addComplaintState = MutableStateFlow(AddComplaintState())
     val addComplaintState: StateFlow<AddComplaintState> = _addComplaintState.asStateFlow()
+
+    private val _grcPrintState = MutableStateFlow(GrcPrintState())
+    val grcPrintState: StateFlow<GrcPrintState> = _grcPrintState.asStateFlow()
 
     init {
         loadActive()
@@ -1250,6 +1265,133 @@ class StaysViewModel(
         )
     }
 
+    // ── Print GRC for an active stay (from the stays screen) ───────────────────
+
+    fun openGrcPrint(stayId: String) {
+        val stay = _listState.value.stays.find { it.id == stayId } ?: return
+        _grcPrintState.value = GrcPrintState(
+            isOpen = true,
+            stayId = stay.id,
+            roomNumber = stay.roomNumber,
+            guests = stay.guests,
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            val names = javax.print.PrintServiceLookup.lookupPrintServices(null, null).map { it.name }
+            _grcPrintState.update {
+                if (!it.isOpen || it.stayId != stayId) it else it.copy(
+                    availablePrinters = names + GRC_SAVE_AS_PDF,
+                    selectedPrinter = it.selectedPrinter.ifBlank { names.firstOrNull() ?: GRC_SAVE_AS_PDF },
+                )
+            }
+        }
+    }
+
+    fun closeGrcPrint() { _grcPrintState.value = GrcPrintState() }
+
+    fun selectGrcPrintPrinter(name: String) =
+        _grcPrintState.update { it.copy(selectedPrinter = name) }
+
+    /** Renders and prints the GRC for one guest of the active stay (by guests index). */
+    fun printStayGrc(index: Int) {
+        val st = _grcPrintState.value
+        val guest = st.guests.getOrNull(index) ?: return
+        val printer = st.selectedPrinter
+        if (printer.isBlank()) {
+            _grcPrintState.update { it.copy(
+                statuses = it.statuses + (index to GrcPhase.ERROR),
+                errors = it.errors + (index to "Select a printer first"),
+            ) }
+            return
+        }
+        _grcPrintState.update { it.copy(
+            statuses = it.statuses + (index to GrcPhase.WORKING),
+            errors = it.errors - index,
+        ) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val stay = stayRepo.getById(st.stayId) ?: error("Stay not found")
+                val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
+                // Reuse the guest's GRC number if one was already issued; otherwise allocate
+                // a new serial and persist it back to the stay so reprints reuse it.
+                var grcNumber = guest.grcNumber
+                if (grcNumber.isBlank()) {
+                    grcNumber = allocateGrcNumber()
+                    val updated = stay.guests.toMutableList().also {
+                        if (index in it.indices) it[index] = it[index].copy(grcNumber = grcNumber)
+                    }
+                    runCatching { stayRepo.updateGuests(stay.id, updated) }
+                    _grcPrintState.update { s ->
+                        val g = s.guests.toMutableList().also { gl ->
+                            if (index in gl.indices) gl[index] = gl[index].copy(grcNumber = grcNumber)
+                        }
+                        s.copy(guests = g)
+                    }
+                }
+                val pdf = GrcRenderer.renderPdf(hotel?.grcTemplateHtml ?: "", buildGrcDataForStay(stay, guest, hotel, grcNumber))
+                if (printer == GRC_SAVE_AS_PDF) {
+                    val safe = guest.name.ifBlank { "guest" }.replace(Regex("[^A-Za-z0-9]+"), "_").trim('_').ifBlank { "guest" }
+                    val file = java.io.File(System.getProperty("java.io.tmpdir"), "GRC-$safe-${System.currentTimeMillis()}.pdf")
+                    file.writeBytes(pdf)
+                    runCatching { java.awt.Desktop.getDesktop().open(file) }
+                } else {
+                    GrcRenderer.print(pdf, printer)
+                }
+            }.onSuccess {
+                _grcPrintState.update { it.copy(statuses = it.statuses + (index to GrcPhase.DONE)) }
+            }.onFailure { e ->
+                _grcPrintState.update { it.copy(
+                    statuses = it.statuses + (index to GrcPhase.ERROR),
+                    errors = it.errors + (index to (e.message ?: "Print failed")),
+                ) }
+            }
+        }
+    }
+
+    private fun buildGrcDataForStay(
+        stay: Stay,
+        guest: GuestRecord,
+        hotel: com.example.dreamland_reception.data.model.Hotel?,
+        grcNumber: String,
+    ): GrcData {
+        val dateFmt = java.text.SimpleDateFormat("dd MMM yyyy", java.util.Locale.getDefault())
+        val dateTimeFmt = java.text.SimpleDateFormat("dd MMM yyyy, hh:mm a", java.util.Locale.getDefault())
+        val nights = java.util.concurrent.TimeUnit.MILLISECONDS
+            .toDays(stay.expectedCheckOut.time - stay.checkInActual.time).coerceAtLeast(1)
+        val hotelAddress = listOfNotNull(
+            hotel?.address?.takeIf { it.isNotBlank() },
+            hotel?.city?.takeIf { it.isNotBlank() },
+        ).joinToString(", ")
+        val advanceStr = if (stay.advancePaidAmount > 0) {
+            val a = stay.advancePaidAmount
+            if (a == a.toLong().toDouble()) a.toLong().toString() else a.toString()
+        } else "0"
+        return GrcData(
+            logoUrl = hotel?.grcLogoUrl?.takeIf { it.isNotBlank() } ?: GrcRenderer.DEFAULT_LOGO_URL,
+            hotelName = hotel?.name?.takeIf { it.isNotBlank() } ?: AppContext.hotelName,
+            hotelAddress = hotelAddress,
+            hotelPhone = hotel?.contactPhone ?: "",
+            hotelEmail = hotel?.contactEmail ?: "",
+            folioNo = grcNumber,
+            date = dateFmt.format(Date()),
+            guestName = guest.name.trim(),
+            guestPhone = guest.phone.trim(),
+            gender = guest.gender,
+            dob = guest.dob,
+            idType = guest.idType,
+            idNumber = guest.govIdNumber,
+            purpose = guest.purpose,
+            nationality = "As per Government ID (attached below)",
+            address = guest.address,
+            roomNumber = stay.roomNumber,
+            roomCategory = stay.roomCategoryName,
+            checkIn = dateTimeFmt.format(stay.trueCheckIn ?: stay.checkInActual),
+            checkOut = dateFmt.format(stay.expectedCheckOut),
+            nights = nights.toString(),
+            advance = advanceStr,
+            idImageUrls = guest.govIdPictures.filter { it.isNotBlank() },
+        )
+    }
+
     fun onCategorySelected(categoryId: String) {
         val cat = _walkInState.value.categories.find { it.id == categoryId } ?: return
         _walkInState.update { ws -> ws.copy(
@@ -1302,9 +1444,13 @@ class StaysViewModel(
                 .filter { it.id !in checkedInBookingIds && it.id !in sourceBookingIds && it.checkIn.before(checkOut) && it.checkOut.after(checkIn) }
                 .groupingBy { it.roomCategoryId }.eachCount()
 
-            // Step 4 — usable physical rooms per category (not MAINTENANCE, not CLEANING)
+            // Step 4 — usable physical rooms per category. Only MAINTENANCE is excluded:
+            // CLEANING is transient (the room is still real capacity for a date-ranged stay)
+            // and is only greyed-out in the instance picker, not removed from the count —
+            // otherwise a cleaning room is subtracted from supply while demand stays full,
+            // which wrongly blocks other free rooms.
             val allInstances = runCatching { instanceRepo.getAll() }.getOrElse { emptyList() }
-                .filter { it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING") }
+                .filter { it.hotelId == hotelId && it.status != "MAINTENANCE" }
             val usablePerCat = allInstances.groupingBy { it.categoryId }.eachCount()
 
             // Steps 5-6 — compute availability for all categories; always populate the map
@@ -1762,9 +1908,11 @@ class StaysViewModel(
                     }.getOrElse { emptyList() }
                     val checkedInBkIds = freshCatStays.map { it.bookingId }.filter { it.isNotBlank() }.toSet()
                     for ((catId, selectedInsts) in selectedByCat) {
+                        // Match computeAvailability: only MAINTENANCE reduces capacity;
+                        // CLEANING rooms still count (they're greyed in the picker, not assignable now).
                         val usable = freshAllInstances.count {
                             it.hotelId == hotelId && it.categoryId == catId &&
-                            it.status !in setOf("MAINTENANCE", "CLEANING")
+                            it.status != "MAINTENANCE"
                         }
                         val committedBookings = freshCatBookings.count { b ->
                             b.id !in sourceIds && b.id !in checkedInBkIds &&
@@ -2528,8 +2676,10 @@ class StaysViewModel(
 
                 for (stay in staysToCheckOut) {
                     stayRepo.checkOut(stay.id, checkoutTime, cos.lateCheckoutCharge, checkOutManager = AppContext.currentManager)
-                    instanceRepo.updateStatus(stay.roomInstanceId, "AVAILABLE", currentStayId = null)
-                    runCatching { instanceRepo.markNeedsCleaning(stay.roomInstanceId, true) }
+                    // On checkout the room goes to CLEANING (housekeeping marks it Available
+                    // again from the dashboard). Cleaning rooms stay greyed-out in the picker
+                    // but still count toward category capacity (see computeAvailability).
+                    instanceRepo.updateStatus(stay.roomInstanceId, "CLEANING", currentStayId = null)
                     if (stay.bookingId.isNotBlank()) {
                         val booking = runCatching { bookingRepo.getById(stay.bookingId) }.getOrNull()
                         if (booking != null) bookingRepo.update(booking.copy(status = "COMPLETED"))
@@ -2901,8 +3051,12 @@ class StaysViewModel(
             // ── Step 1: Category-level capacity check (same algorithm as walk-in) ──
             val catBookingCount = confirmedInWindow.count { it.roomCategoryId == stay.roomCategoryId }
             val catStayCount = activeInWindow.count { it.roomCategoryId == stay.roomCategoryId }
+            // Capacity counts CLEANING rooms (transient — only MAINTENANCE is truly out of
+            // service), so a room being cleaned doesn't wrongly mark the category "full".
+            // The alternatives list below still filters CLEANING out so a dirty room is never
+            // offered as a move-in option.
             val usableCatInstances = allInstances.filter {
-                it.categoryId == stay.roomCategoryId && it.status !in setOf("MAINTENANCE", "CLEANING")
+                it.categoryId == stay.roomCategoryId && it.status != "MAINTENANCE"
             }
             val categoryAvail = usableCatInstances.size - (catBookingCount + catStayCount)
 
@@ -2912,7 +3066,7 @@ class StaysViewModel(
                 return categories.mapNotNull { cat ->
                     val bookingCount = confirmedInWindow.count { it.roomCategoryId == cat.id }
                     val stayCount = activeInWindow.count { it.roomCategoryId == cat.id }
-                    val usable = allInstances.count { it.categoryId == cat.id && it.status !in setOf("MAINTENANCE", "CLEANING") }
+                    val usable = allInstances.count { it.categoryId == cat.id && it.status != "MAINTENANCE" }
                     val avail = usable - bookingCount - stayCount
                     if (avail > 0 && cat.available) ExtendAvailableCategory(cat.type, avail, cat.pricePerNight) else null
                 }.sortedByDescending { it.availableCount }
@@ -2938,6 +3092,7 @@ class StaysViewModel(
             // ── Step 3: Alternatives within same category if specific room is taken ─
             val alternatives = if (!roomFree) {
                 usableCatInstances.filter { inst ->
+                    inst.status != "CLEANING" &&   // never offer a room that's being cleaned
                     inst.id != stay.roomInstanceId &&
                     inst.id !in bookedInstanceIds &&
                     inst.id !in occupiedInstanceIds

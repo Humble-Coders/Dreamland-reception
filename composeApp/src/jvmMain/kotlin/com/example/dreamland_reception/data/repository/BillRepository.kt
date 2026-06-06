@@ -21,6 +21,7 @@ interface BillRepository {
     suspend fun addTransaction(id: String, tx: PaymentTransaction, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTransactions(id: String, transactions: List<PaymentTransaction>, totalPaid: Double, pendingAmount: Double, status: String)
     suspend fun updateTaxDiscount(id: String, taxEnabled: Boolean, taxPercentage: Double, discountType: String, discountValue: Double, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
+    suspend fun updateTaxInclusive(id: String, taxInclusive: Boolean, subtotal: Double, taxAmount: Double, discountAmount: Double, totalAmount: Double, pendingAmount: Double, status: String)
     suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
     suspend fun updateGuestName(id: String, name: String)
     suspend fun updateGuestPhone(id: String, phone: String)
@@ -126,6 +127,23 @@ object FirestoreBillRepository : BillRepository {
         )).get(); Unit
     }
 
+    override suspend fun updateTaxInclusive(
+        id: String, taxInclusive: Boolean,
+        subtotal: Double, taxAmount: Double, discountAmount: Double,
+        totalAmount: Double, pendingAmount: Double, status: String,
+    ) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "taxInclusive" to taxInclusive,
+            "subtotal" to subtotal,
+            "taxAmount" to taxAmount,
+            "discountAmount" to discountAmount,
+            "totalAmount" to totalAmount,
+            "pendingAmount" to pendingAmount,
+            "status" to status,
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
     override suspend fun updateTaxDiscount(
         id: String, taxEnabled: Boolean, taxPercentage: Double,
         discountType: String, discountValue: Double,
@@ -170,6 +188,7 @@ object FirestoreBillRepository : BillRepository {
             items = itemsList.map { it.toBillItem() },
             taxEnabled = getBoolean("taxEnabled") ?: false,
             taxPercentage = getDouble("taxPercentage") ?: 18.0,
+            taxInclusive = getBoolean("taxInclusive") ?: false,
             discountType = getString("discountType") ?: "FLAT",
             discountValue = getDouble("discountValue") ?: 0.0,
             subtotal = getDouble("subtotal") ?: 0.0,
@@ -308,6 +327,7 @@ object FirestoreBillRepository : BillRepository {
         "items" to items.map { it.toMap() },
         "taxEnabled" to taxEnabled,
         "taxPercentage" to taxPercentage,
+        "taxInclusive" to taxInclusive,
         "discountType" to discountType,
         "discountValue" to discountValue,
         "subtotal" to subtotal,

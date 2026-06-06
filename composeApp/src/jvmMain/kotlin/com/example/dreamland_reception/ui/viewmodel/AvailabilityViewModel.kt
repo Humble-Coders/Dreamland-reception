@@ -158,9 +158,12 @@ class AvailabilityViewModel(
                     .filter { it.expectedCheckOut.after(checkIn) }
                     .groupingBy { it.roomCategoryId }.eachCount()
 
-                // Step 4 — usable instances (not MAINTENANCE, not CLEANING)
+                // Step 4 — usable instances. Only MAINTENANCE is excluded from capacity;
+                // CLEANING is transient (the room is still real capacity for a date-ranged
+                // stay), so counting it avoids deflating availability while a room is being
+                // cleaned. This matches the walk-in check-in availability logic.
                 val usable = instances.filter {
-                    it.hotelId == hotelId && it.status !in setOf("MAINTENANCE", "CLEANING")
+                    it.hotelId == hotelId && it.status != "MAINTENANCE"
                 }
                 val usableByCat = usable.groupingBy { it.categoryId }.eachCount()
 

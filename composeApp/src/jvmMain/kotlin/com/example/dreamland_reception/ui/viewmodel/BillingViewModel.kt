@@ -70,10 +70,16 @@ class BillingViewModel(
                 .catch { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
                 .collect { bills ->
                     val normalized = bills.map { bill ->
-                        val perItemTax = bill.items.filter { it.taxPercentage > 0 }
-                            .sumOf { it.total * it.taxPercentage / 100.0 }
                         val taxAmount = if (bill.taxEnabled) {
-                            if (perItemTax > 0) perItemTax else bill.subtotal * bill.taxPercentage / 100.0
+                            if (bill.taxInclusive) {
+                                // Prices already include GST → back it out of each line.
+                                val t = bill.items.sumOf { it.total - it.total / (1.0 + it.taxPercentage / 100.0) }
+                                if (t > 0) t else bill.subtotal - bill.subtotal / (1.0 + bill.taxPercentage / 100.0)
+                            } else {
+                                val perItemTax = bill.items.filter { it.taxPercentage > 0 }
+                                    .sumOf { it.total * it.taxPercentage / 100.0 }
+                                if (perItemTax > 0) perItemTax else bill.subtotal * bill.taxPercentage / 100.0
+                            }
                         } else 0.0
                         val discountAmount = when (bill.discountType) {
                             "PERCENT" -> bill.subtotal * bill.discountValue / 100.0

@@ -37,6 +37,9 @@ data class Bill(
     val items: List<BillItem> = emptyList(),
     val taxEnabled: Boolean = false,
     val taxPercentage: Double = 18.0,
+    // When true, item prices already INCLUDE GST (tax is backed out of the price);
+    // when false, GST is added ON TOP of the prices. Default false = added on top.
+    val taxInclusive: Boolean = false,
     val discountType: String = "FLAT",   // FLAT | PERCENT
     val discountValue: Double = 0.0,
     val subtotal: Double = 0.0,

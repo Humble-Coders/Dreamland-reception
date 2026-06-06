@@ -48,6 +48,7 @@ object FirestoreVendorRepository : VendorRepository {
             phone = getString("phone") ?: "",
             email = getString("email") ?: "",
             gstin = getString("gstin") ?: "",
+            discountPercent = getDouble("discountPercent") ?: 0.0,
             createdAt = getTimestamp("createdAt")?.toDate() ?: Date(),
         )
     }.getOrNull()
@@ -58,6 +59,7 @@ object FirestoreVendorRepository : VendorRepository {
         "phone" to phone,
         "email" to email,
         "gstin" to gstin,
+        "discountPercent" to discountPercent,
         "createdAt" to createdAt,
     )
 }

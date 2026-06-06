@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -54,6 +55,59 @@ private val AMBER = Color(0xFFFFC107)
 private val GREEN = Color(0xFF4CAF50)
 
 /**
+ * First step of "Mark Done": choose how the order was fulfilled.
+ *  • In-house  → hotel made/served it (cold drink, water, tea…). Completes immediately.
+ *  • Vendor    → bought from an outside supplier; opens the vendor & payment dialog.
+ */
+@Composable
+fun MarkDoneChoiceDialog(
+    order: Order,
+    onInHouse: () -> Unit,
+    onVendor: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.34f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .padding(24.dp),
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Text("Mark Done", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ChoiceCard("In-house", "water, cold drink…", GREEN, onInHouse, Modifier.weight(1f))
+                    ChoiceCard("Vendor", "outside supplier", DreamlandGold, onVendor, Modifier.weight(1f))
+                }
+                Spacer(Modifier.height(12.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Cancel", color = DreamlandMuted)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceCard(title: String, hint: String, accent: Color, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(DreamlandForestElevated)
+            .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 20.dp, horizontal = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(title, color = accent, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(hint, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/**
  * "Mark Done" dialog for an order. Captures the outside **vendor** and the **cash/bank
  * split** paid to them now, showing the vendor's **current balance** up front. The
  * vendor's running balance is updated in Humble Ledger. **Skip** completes an in-house
@@ -63,26 +117,39 @@ private val GREEN = Color(0xFF4CAF50)
 fun MarkOrderDoneDialog(
     order: Order,
     vendors: List<Vendor>,
-    onAddVendor: (name: String, phone: String, onCreated: (Vendor) -> Unit) -> Unit,
+    onAddVendor: (name: String, phone: String, discountPercent: Double, onCreated: (Vendor) -> Unit) -> Unit,
     onLoadBalance: suspend (externalId: String) -> VendorBalanceInfo?,
     onConfirm: (vendor: Vendor, cost: Double, cashPaid: Double, bankPaid: Double) -> Unit,
     onSkip: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // The guest's actual (pre-tax) price for this order. Tax is applied on the final bill,
+    // not here, so the vendor side works entirely off the actual price.
+    val actualPrice = order.subtotalAmount
+
     var selectedVendor by remember { mutableStateOf<Vendor?>(null) }
     var dropdownOpen by remember { mutableStateOf(false) }
     var showAddVendor by remember { mutableStateOf(false) }
 
-    var costText by remember { mutableStateOf(fmtMoney(order.totalAmount)) }
-    var cashText by remember { mutableStateOf(fmtMoney(order.totalAmount)) }
+    var costText by remember { mutableStateOf(fmtMoney(actualPrice)) }
+    var costEdited by remember { mutableStateOf(false) }
+    var cashText by remember { mutableStateOf(fmtMoney(actualPrice)) }
+    var cashEdited by remember { mutableStateOf(false) }
     var bankText by remember { mutableStateOf("0") }
 
     // Current balance of the selected vendor, fetched from Humble Ledger.
     var currentBalance by remember { mutableStateOf<VendorBalanceInfo?>(null) }
     var loadingBalance by remember { mutableStateOf(false) }
     LaunchedEffect(selectedVendor?.id) {
-        currentBalance = null
         val v = selectedVendor
+        // Auto-fill the vendor cost from the vendor's discount on the actual price.
+        // Respects a manual edit — once the user changes the cost we keep their value.
+        if (v != null && !costEdited) {
+            val computed = round2(actualPrice * (1 - v.discountPercent / 100.0))
+            costText = fmtMoney(computed)
+            if (!cashEdited) cashText = fmtMoney(computed)
+        }
+        currentBalance = null
         if (v != null) {
             loadingBalance = true
             currentBalance = onLoadBalance(v.id)
@@ -115,7 +182,7 @@ fun MarkOrderDoneDialog(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Room ${order.roomNumber}  ·  ${order.guestName}  ·  ₹${fmtMoney(order.totalAmount)}",
+                    "Room ${order.roomNumber}  ·  ${order.guestName}  ·  ₹${fmtMoney(actualPrice)}",
                     color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -189,7 +256,16 @@ fun MarkOrderDoneDialog(
                     Spacer(Modifier.height(18.dp))
                     Text("VENDOR COST", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp)
                     Spacer(Modifier.height(6.dp))
-                    DialogField(value = costText, onChange = { costText = it.filterMoney() }, label = "What the vendor charged")
+                    DialogField(value = costText, onChange = { costText = it.filterMoney(); costEdited = true }, label = "What the vendor charged")
+                    selectedVendor?.let { v ->
+                        if (v.discountPercent > 0 && !costEdited) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Auto: ${fmtMoney(v.discountPercent)}% off the ₹${fmtMoney(actualPrice)} actual price",
+                                style = MaterialTheme.typography.labelSmall, color = DreamlandMuted,
+                            )
+                        }
+                    }
 
                     Spacer(Modifier.height(12.dp))
                     Text("PAID TO VENDOR NOW", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted, letterSpacing = 1.sp)
@@ -198,7 +274,7 @@ fun MarkOrderDoneDialog(
                         Column(Modifier.weight(1f)) {
                             Text("Cash (₹)", style = MaterialTheme.typography.labelMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(4.dp))
-                            DialogField(value = cashText, onChange = { cashText = it.filterMoney() }, label = "Cash amount")
+                            DialogField(value = cashText, onChange = { cashText = it.filterMoney(); cashEdited = true }, label = "Cash amount")
                         }
                         Column(Modifier.weight(1f)) {
                             Text("Bank (₹)", style = MaterialTheme.typography.labelMedium, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
@@ -246,8 +322,8 @@ fun MarkOrderDoneDialog(
     // ── Add-vendor dialog (stacked above) ──────────────────────────────────────
     if (showAddVendor) {
         AddVendorDialog(
-            onSubmit = { name, phone ->
-                onAddVendor(name, phone) { created ->
+            onSubmit = { name, phone, discountPercent ->
+                onAddVendor(name, phone, discountPercent) { created ->
                     selectedVendor = created
                     showAddVendor = false
                 }
@@ -258,9 +334,10 @@ fun MarkOrderDoneDialog(
 }
 
 @Composable
-private fun AddVendorDialog(onSubmit: (name: String, phone: String) -> Unit, onDismiss: () -> Unit) {
+private fun AddVendorDialog(onSubmit: (name: String, phone: String, discountPercent: Double) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
+    var discount by remember { mutableStateOf("") }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(
             modifier = Modifier
@@ -278,9 +355,16 @@ private fun AddVendorDialog(onSubmit: (name: String, phone: String) -> Unit, onD
                 DialogField(value = name, onChange = { name = it }, label = "Vendor name")
                 Spacer(Modifier.height(10.dp))
                 DialogField(value = phone, onChange = { phone = it }, label = "Phone (optional)")
+                Spacer(Modifier.height(10.dp))
+                DialogField(value = discount, onChange = { discount = it.filterMoney() }, label = "Discount % off actual price")
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Discount the hotel gets from this vendor — used to auto-fill the vendor cost.",
+                    style = MaterialTheme.typography.labelSmall, color = DreamlandMuted,
+                )
                 Spacer(Modifier.height(18.dp))
                 Button(
-                    onClick = { onSubmit(name.trim(), phone.trim()) },
+                    onClick = { onSubmit(name.trim(), phone.trim(), discount.toDoubleOrNull() ?: 0.0) },
                     enabled = name.trim().isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(44.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold, disabledContainerColor = DreamlandGold.copy(alpha = 0.3f)),

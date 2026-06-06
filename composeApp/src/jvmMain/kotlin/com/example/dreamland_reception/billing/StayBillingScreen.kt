@@ -337,6 +337,7 @@ fun StayBillingScreen(
                                 BillItemRow(
                                     item = item,
                                     readOnly = isPreview,
+                                    taxInclusive = bill.taxInclusive,
                                     onDelete = { vm.removeItem(item.id) },
                                     onEdit = { vm.openEditItem(item) },
                                 )
@@ -363,13 +364,10 @@ fun StayBillingScreen(
                             bill = bill,
                             previewCash = pd.cashAmount.toDoubleOrNull() ?: 0.0,
                             previewBank = pd.bankAmount.toDoubleOrNull() ?: 0.0,
-                            editableTaxPct = state.editableTaxPct,
                             editableAdvancePaid = state.editableAdvancePaid,
                             editableDiscountType = state.editableDiscountType,
                             editableDiscountValue = state.editableDiscountValue,
-                            onTaxPctChange = vm::onTaxPctInline,
-                            onTaxPctSave = vm::saveTaxPctInline,
-                            onTaxRateSave = { old, new -> vm.saveTaxRateForGroup(old, new) },
+                            onTaxInclusiveChange = vm::setTaxInclusive,
                             onAdvancePaidChange = vm::onAdvancePaidInline,
                             onAdvancePaidSave = vm::saveAdvancePaidInline,
                             onDiscountTypeChange = vm::onDiscountTypeInline,
@@ -427,14 +425,12 @@ fun StayBillingScreen(
 
                         // "Paid via QR" — fills BANK with the full balance due (disabled when already PAID)
                         if (!isPreview) {
-                            val liveRateForBtn = state.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-                            val liveTaxForBtn = bill.subtotal * liveRateForBtn / 100.0
                             val liveDiscValForBtn = state.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
                             val liveDiscAmtForBtn = when (state.editableDiscountType) {
                                 "PERCENT" -> bill.subtotal * liveDiscValForBtn / 100.0
                                 else -> liveDiscValForBtn
                             }
-                            val liveTotalForBtn = (bill.subtotal + liveTaxForBtn - liveDiscAmtForBtn).coerceAtLeast(0.0)
+                            val liveTotalForBtn = (bill.subtotal + bill.taxAmount - liveDiscAmtForBtn).coerceAtLeast(0.0)
                             val liveAdvForBtn = state.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
                             val livePendingForBtn = (liveTotalForBtn - liveAdvForBtn - (pd.cashAmount.toDoubleOrNull() ?: 0.0) - (pd.bankAmount.toDoubleOrNull() ?: 0.0)).coerceAtLeast(0.0)
                             val hasBalanceDue = livePendingForBtn > 0
@@ -569,13 +565,7 @@ fun StayBillingScreen(
     val cpd = state.confirmPaymentDialog
     if (cpd.show) {
         val bill4Dialog = state.bill
-        val liveRateD = if (bill4Dialog != null) state.editableTaxPct.toDoubleOrNull() ?: bill4Dialog.taxPercentage else 0.0
-        val perItemTaxD = bill4Dialog?.items?.filter { it.taxPercentage > 0 }?.sumOf { it.total * it.taxPercentage / 100.0 } ?: 0.0
-        val liveTaxForDialog = when {
-            perItemTaxD > 0 -> perItemTaxD
-            bill4Dialog != null -> bill4Dialog.subtotal * liveRateD / 100.0
-            else -> 0.0
-        }
+        val liveTaxForDialog = bill4Dialog?.taxAmount ?: 0.0
         val liveTotalForDialog = if (bill4Dialog != null) {
             val liveDiscVD = state.editableDiscountValue.toDoubleOrNull() ?: bill4Dialog.discountValue
             val liveDiscD = when (state.editableDiscountType) {
@@ -609,9 +599,7 @@ fun StayBillingScreen(
     if (showBackConfirm) {
         val bill = state.bill
         val liveStatusForBack = if (bill != null) {
-            val liveRate = state.editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-            val perItemTax = bill.items.filter { it.taxPercentage > 0 }.sumOf { it.total * it.taxPercentage / 100.0 }
-            val liveTax = if (perItemTax > 0) perItemTax else bill.subtotal * liveRate / 100.0
+            val liveTax = bill.taxAmount
             val discV = state.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
             val discA = when (state.editableDiscountType) { "PERCENT" -> bill.subtotal * discV / 100.0; else -> discV }
             val liveTotal = (bill.subtotal + liveTax - discA).coerceAtLeast(0.0)
@@ -718,7 +706,7 @@ private fun EditableInfoCell(label: String, value: String, editable: Boolean, on
 }
 
 @Composable
-private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onDelete: () -> Unit, onEdit: () -> Unit) {
+private fun BillItemRow(item: BillItem, readOnly: Boolean = false, taxInclusive: Boolean = false, onDelete: () -> Unit, onEdit: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
         shape = RoundedCornerShape(8.dp),
@@ -729,14 +717,39 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onDelete: () 
         ) {
             TypeChip(item.type)
             Spacer(Modifier.width(10.dp))
+            // Mode-aware figures: when GST is inclusive the entered price is gross, so we back
+            // the tax out and show the taxable BASE on the row (so the rows reconcile with the
+            // Subtotal in the summary). When exclusive, the entered price IS the base.
+            val taxed = item.taxPercentage > 0
+            val divisor = 1.0 + item.taxPercentage / 100.0
+            val baseTotal = if (taxInclusive && taxed) item.total / divisor else item.total
+            val baseUnit = if (taxInclusive && taxed) item.unitPrice / divisor else item.unitPrice
+            val gst = if (taxInclusive && taxed) item.total - baseTotal
+                      else if (taxed) item.total * item.taxPercentage / 100.0
+                      else 0.0
             Column(Modifier.weight(1f)) {
                 Text(item.name, color = DreamlandOnDark, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.bodyMedium)
                 if (item.notes.isNotBlank()) Text(item.notes, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                Text("${item.quantity} × ₹${item.unitPrice.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
-                if (item.taxPercentage > 0)
-                    Text("Tax ${item.taxPercentage.fmtRate()}", color = DreamlandMuted.copy(alpha = 0.7f), style = MaterialTheme.typography.labelSmall)
+                Text("${item.quantity} × ₹${baseUnit.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                if (taxed) {
+                    // GST pill: rate + the GST rupees for this line.
+                    Spacer(Modifier.height(3.dp))
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(DreamlandGold.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            "GST ${item.taxPercentage.fmtRate()} · ₹${gst.fmtAmt()}",
+                            color = DreamlandGold,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
             }
-            Text("₹${item.total.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+            Text("₹${baseTotal.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
             if (!readOnly) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "Edit item", tint = DreamlandGold.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
@@ -836,13 +849,10 @@ internal fun BillSummaryCard(
     previewCash: Double = 0.0,
     previewBank: Double = 0.0,
     readOnly: Boolean = false,
-    editableTaxPct: String = "",
     editableAdvancePaid: String = "",
     editableDiscountType: String = "FLAT",
     editableDiscountValue: String = "",
-    onTaxPctChange: (String) -> Unit = {},
-    onTaxPctSave: () -> Unit = {},
-    onTaxRateSave: (oldRate: Double, newRate: Double) -> Unit = { _, _ -> },
+    onTaxInclusiveChange: (Boolean) -> Unit = {},
     onAdvancePaidChange: (String) -> Unit = {},
     onAdvancePaidSave: () -> Unit = {},
     onDiscountTypeChange: (String) -> Unit = {},
@@ -858,122 +868,54 @@ internal fun BillSummaryCard(
             HorizontalDivider(color = DreamlandGold.copy(alpha = 0.2f))
             SummaryRow("Subtotal", bill.subtotal)
 
-            // ── Tax rows — per-rate when mixed, single editable pill when uniform ──
+            // ── GST: read-only per-rate breakdown + Include/Exclude toggle ──
+            // The rate comes from each item's category (shown as a pill on every row in the
+            // left list) and is NOT editable here. The only control is whether the prices are
+            // GST-inclusive (tax backed out of the price) or GST-added-on-top.
             val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
-            val hasMultipleRates = taxByRate.size > 1
-            val liveRate = editableTaxPct.toDoubleOrNull() ?: bill.taxPercentage
-            val liveTaxAmount = if (hasMultipleRates) {
-                taxByRate.entries.sumOf { (rate, items) -> items.sumOf { it.total * rate / 100.0 } }
-            } else {
-                if (liveRate > 0) bill.subtotal * liveRate / 100.0 else 0.0
+            fun itemGst(item: BillItem): Double = when {
+                !bill.taxEnabled || item.taxPercentage <= 0.0 -> 0.0
+                bill.taxInclusive -> item.total - item.total / (1.0 + item.taxPercentage / 100.0)
+                else -> item.total * item.taxPercentage / 100.0
             }
-            var taxFocused by remember { mutableStateOf(false) }
+            val liveTaxAmount = bill.items.sumOf { itemGst(it) }
 
-            if (readOnly) {
-                // Read-only tax display — no editable pills
-                if (hasMultipleRates) {
-                    taxByRate.forEach { (rate, rateItems) ->
-                        val rateAmt = rateItems.sumOf { it.total * rate / 100.0 }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Tax (${rate.fmtRate()})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                            Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                } else if (bill.taxEnabled || liveRate > 0) {
+            if (taxByRate.isNotEmpty()) {
+                taxByRate.toSortedMap().forEach { (rate, rateItems) ->
+                    val rateAmt = rateItems.sumOf { itemGst(it) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Tax (${liveRate.toInt()}%)", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                        Text("₹${liveTaxAmount.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                        Text("GST (${rate.fmtRate()})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                     }
                 }
-            } else if (hasMultipleRates) {
-                // One editable pill per distinct tax rate
-                taxByRate.forEach { (rate, rateItems) ->
-                    var rateStr by remember(rate) { mutableStateOf(if (rate % 1.0 == 0.0) "${rate.toInt()}" else "%.2f".format(rate)) }
-                    var rateFocused by remember { mutableStateOf(false) }
-                        val rateAmt = rateItems.sumOf { it.total * (rateStr.toDoubleOrNull() ?: rate) / 100.0 }
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text("Tax", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .border(1.dp, if (rateFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                                        .background(if (rateFocused) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
-                                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    BasicTextField(
-                                        value = rateStr,
-                                        onValueChange = { rateStr = it.filter { c -> c.isDigit() || c == '.' } },
-                                        singleLine = true,
-                                        cursorBrush = SolidColor(DreamlandOnDark),
-                                        textStyle = MaterialTheme.typography.bodySmall.copy(
-                                            color = if (rateFocused) DreamlandOnDark else DreamlandMuted,
-                                            textAlign = TextAlign.End,
-                                            fontWeight = if (rateFocused) FontWeight.SemiBold else FontWeight.Normal,
-                                        ),
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                        keyboardActions = KeyboardActions(onDone = { onTaxRateSave(rate, rateStr.toDoubleOrNull() ?: rate) }),
-                                        modifier = Modifier.width(30.dp).onFocusChanged { fs ->
-                                            rateFocused = fs.isFocused
-                                            if (!fs.isFocused) onTaxRateSave(rate, rateStr.toDoubleOrNull() ?: rate)
-                                        },
-                                        decorationBox = { inner ->
-                                            Box(contentAlignment = Alignment.CenterEnd) {
-                                                if (rateStr.isEmpty()) Text("0", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
-                                                inner()
-                                            }
-                                        },
-                                    )
-                                    Text("%", color = if (rateFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
-                                }
-                                Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-            } else if (bill.taxEnabled || liveRate > 0) {
-                // Single uniform rate — existing editable pill
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Tax", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .border(1.dp, if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                                .background(if (taxFocused) DreamlandGold.copy(alpha = 0.06f) else Color.Transparent)
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            BasicTextField(
-                                value = editableTaxPct,
-                                onValueChange = onTaxPctChange,
-                                singleLine = true,
-                                cursorBrush = SolidColor(DreamlandOnDark),
-                                textStyle = MaterialTheme.typography.bodySmall.copy(
-                                    color = if (taxFocused) DreamlandOnDark else DreamlandMuted,
-                                    textAlign = TextAlign.End,
-                                    fontWeight = if (taxFocused) FontWeight.SemiBold else FontWeight.Normal,
-                                ),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { onTaxPctSave() }),
-                                modifier = Modifier.width(30.dp).onFocusChanged { fs ->
-                                    taxFocused = fs.isFocused
-                                    if (!fs.isFocused) onTaxPctSave()
-                                },
-                                decorationBox = { inner ->
-                                    Box(contentAlignment = Alignment.CenterEnd) {
-                                        if (editableTaxPct.isEmpty()) Text("%.0f".format(liveRate), color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall)
-                                        inner()
-                                    }
-                                },
+                if (readOnly) {
+                    Text(
+                        if (bill.taxInclusive) "GST included in price" else "GST added on top of prices",
+                        color = DreamlandMuted, style = MaterialTheme.typography.labelSmall,
+                    )
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("GST included in price", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                if (bill.taxInclusive) "Prices already include GST" else "GST added on top of prices",
+                                color = DreamlandMuted, style = MaterialTheme.typography.labelSmall,
                             )
-                            Text("%", color = if (taxFocused) DreamlandGold else DreamlandMuted.copy(alpha = 0.6f), style = MaterialTheme.typography.labelSmall)
                         }
-                        Text("₹${liveTaxAmount.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                        Switch(
+                            checked = bill.taxInclusive,
+                            onCheckedChange = onTaxInclusiveChange,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = DreamlandGold,
+                                checkedTrackColor = DreamlandGold.copy(alpha = 0.4f),
+                                uncheckedThumbColor = DreamlandMuted,
+                                uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.25f),
+                            ),
+                        )
                     }
                 }
             }
@@ -1338,10 +1280,9 @@ private fun AddItemDialog(d: AddBillItemDialog, vm: StayBillingViewModel, state:
                         BillingTextField("Unit Price (₹)", d.unitPrice, onValueChange = vm::onAddItemPrice, keyboard = KeyboardType.Decimal, modifier = Modifier.weight(1f))
                     }
 
-                    // Tax field for CUSTOM and editable override for ORDER/SERVICE
-                    if (d.type != "ROOM") {
-                        BillingTextField("Tax (%)", d.taxPct, onValueChange = vm::onAddItemTaxPct, keyboard = KeyboardType.Decimal)
-                    }
+                    // GST is taken automatically from the item's category/catalog — not editable
+                    // here. It's shown as a pill on each line and controlled only by the
+                    // Include/Exclude GST toggle in the summary.
 
                     BillingTextField("Notes (optional)", d.notes, onValueChange = vm::onAddItemNotes)
 
@@ -1616,7 +1557,7 @@ private fun EditBillItemDialogUI(ed: EditBillItemDialog, vm: StayBillingViewMode
                     BillingTextField("Quantity", ed.quantity, onValueChange = vm::onEditItemQty, keyboard = KeyboardType.Number, modifier = Modifier.weight(1f))
                     BillingTextField("Unit Price (₹)", ed.unitPrice, onValueChange = vm::onEditItemPrice, keyboard = KeyboardType.Decimal, modifier = Modifier.weight(1f))
                 }
-                BillingTextField("Tax (%)", ed.taxPct, onValueChange = vm::onEditItemTaxPct, keyboard = KeyboardType.Decimal)
+                // GST rate is inherited from the item's category/catalog and not editable here.
                 BillingTextField("Notes (optional)", ed.notes, onValueChange = vm::onEditItemNotes)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = { vm.closeEditItem() }, modifier = Modifier.weight(1f).height(48.dp)) {
@@ -1784,8 +1725,8 @@ private fun ConfirmPaymentDialogUI(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             ConfirmRow("Subtotal", "₹${bill.subtotal.fmtAmt()}", DreamlandOnDark)
-                            if (bill.taxEnabled)
-                                ConfirmRow("Tax (${bill.taxPercentage.toInt()}%)", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
+                            if (bill.taxEnabled && liveTaxAmount > 0)
+                                ConfirmRow(if (bill.taxInclusive) "GST (incl.)" else "GST", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
                             if (bill.discountAmount > 0)
                                 ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))

@@ -66,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.orders.AssignStaffDialog
 import com.example.dreamland_reception.orders.CreateOrderDialog
+import com.example.dreamland_reception.orders.MarkDoneChoiceDialog
 import com.example.dreamland_reception.orders.MarkOrderDoneDialog
 import com.example.dreamland_reception.ui.viewmodel.OrdersViewModel
 import java.text.SimpleDateFormat
@@ -88,6 +89,7 @@ fun OrdersScreen(
         if (initialOrderId.isNotBlank()) vm.selectOrder(initialOrderId)
     }
 
+    var markDoneChoiceId by remember { mutableStateOf<String?>(null) }
     var confirmMarkDoneId by remember { mutableStateOf<String?>(null) }
     var confirmDeleteId by remember { mutableStateOf<String?>(null) }
 
@@ -200,7 +202,7 @@ fun OrdersScreen(
                     OrderTableRow(
                         order = order,
                         stayPhoneMap = stayPhoneMap,
-                        onMarkDone = { confirmMarkDoneId = order.id },
+                        onMarkDone = { markDoneChoiceId = order.id },
                         onDelete = { confirmDeleteId = order.id },
                     )
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f))
@@ -209,14 +211,29 @@ fun OrdersScreen(
         }
     }
 
-    // ── Mark Done — vendor & payment ───────────────────────────────────────────
+    // ── Mark Done — step 1: choose in-house or vendor ──────────────────────────
+    markDoneChoiceId?.let { orderId ->
+        val order = screenState.orders.find { it.id == orderId }
+        if (order != null) {
+            MarkDoneChoiceDialog(
+                order = order,
+                onInHouse = { markDoneChoiceId = null; vm.markOrderDoneInHouse(orderId) },
+                onVendor = { markDoneChoiceId = null; confirmMarkDoneId = orderId },
+                onDismiss = { markDoneChoiceId = null },
+            )
+        } else {
+            markDoneChoiceId = null
+        }
+    }
+
+    // ── Mark Done — step 2 (vendor): vendor & payment ──────────────────────────
     confirmMarkDoneId?.let { orderId ->
         val order = screenState.orders.find { it.id == orderId }
         if (order != null) {
             MarkOrderDoneDialog(
                 order = order,
                 vendors = vendors,
-                onAddVendor = { name, phone, onCreated -> vm.addVendor(name, phone, onCreated = onCreated) },
+                onAddVendor = { name, phone, discountPercent, onCreated -> vm.addVendor(name, phone, discountPercent = discountPercent, onCreated = onCreated) },
                 onLoadBalance = { externalId -> vm.vendorBalance(externalId) },
                 onConfirm = { vendor, cost, cash, bank ->
                     confirmMarkDoneId = null
@@ -328,7 +345,8 @@ private fun OrderTableRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(W_PHONE).padding(end = 8.dp, top = 2.dp),
         )
-        // Items & price — name fills, price right-aligned so prices line up down the column.
+        // Items & price — name fills, actual (pre-tax) price right-aligned. Tax is applied
+        // on the final bill, so it's intentionally not shown here.
         Column(Modifier.weight(W_ITEMS).padding(end = 12.dp)) {
             order.items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -346,17 +364,10 @@ private fun OrderTableRow(
                         color = DreamlandOnDark,
                     )
                 }
-                if (item.taxAmount > 0.005) {
-                    val rateLabel = if (item.taxPercentage % 1.0 == 0.0) "${item.taxPercentage.toInt()}%" else "${"%.1f".format(item.taxPercentage)}%"
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Tax $rateLabel", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f), modifier = Modifier.weight(1f))
-                        Text("+₹${"%.2f".format(item.taxAmount)}", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.55f))
-                    }
-                }
             }
         }
         Text(
-            if (order.totalAmount > 0) "₹${"%.2f".format(order.totalAmount)}" else "—",
+            if (order.subtotalAmount > 0) "₹${"%.2f".format(order.subtotalAmount)}" else "—",
             style = MaterialTheme.typography.bodySmall,
             color = DreamlandGold,
             fontWeight = FontWeight.SemiBold,

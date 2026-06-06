@@ -106,6 +106,7 @@ import com.example.dreamland_reception.ui.viewmodel.RoomGuestAssignment
 import com.example.dreamland_reception.ui.viewmodel.StaysViewModel
 import com.example.dreamland_reception.ui.viewmodel.WalkInState
 import com.example.dreamland_reception.ui.viewmodel.priceForCategory
+import com.example.dreamland_reception.ui.viewmodel.isWalkInOnly
 import com.example.dreamland_reception.util.dateFromPicker
 import com.example.dreamland_reception.util.toMidnightUtc
 import java.text.SimpleDateFormat
@@ -1146,23 +1147,6 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
 
     Spacer(Modifier.height(20.dp))
 
-    // Options
-    WizardSectionLabel("OPTIONS")
-    Spacer(Modifier.height(8.dp))
-    Card(
-        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
-        shape = RoundedCornerShape(10.dp),
-    ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            val breakfastPriceLabel = if (state.selectedCategoryBreakfastPrice > 0)
-                "₹${"%.2f".format(state.selectedCategoryBreakfastPrice)} per person per night"
-            else "Price set per room category"
-            OptionToggle("Breakfast Included", breakfastPriceLabel, state.breakfast, vm::onWalkInBreakfast)
-        }
-    }
-
-    Spacer(Modifier.height(20.dp))
-
     // Pricing preview
     WizardSectionLabel("PRICING PREVIEW")
     Spacer(Modifier.height(8.dp))
@@ -1170,79 +1154,104 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
 
     Spacer(Modifier.height(20.dp))
 
-    // Advance payment — show booking's existing advance if checking in from booking
+    // Advance payment
     val bookingAdvance = when {
         state.sourceBooking != null -> state.sourceBooking.advancePaidAmount
         state.groupBookings.isNotEmpty() -> state.groupBookings.sumOf { it.advancePaidAmount }
         else -> 0.0
     }
-    WizardSectionLabel("ADVANCE PAYMENT")
-    Spacer(Modifier.height(8.dp))
-    if (bookingAdvance > 0) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF4CAF50).copy(alpha = 0.08f))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Paid on booking (pre-filled below):", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-            Text("₹${"%.2f".format(bookingAdvance)}", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-        }
-        Spacer(Modifier.height(8.dp))
-    }
-    OutlinedTextField(
-        value = state.advancePayment,
-        onValueChange = vm::onWalkInAdvancePayment,
-        label = { Text("Advance Amount (₹)", color = DreamlandMuted, fontSize = 13.sp) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
-            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
-            cursorColor = DreamlandGold,
-        ),
-    )
-    Spacer(Modifier.height(8.dp))
     val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
     val modeMissing = advance > 0 && state.advancePaymentMethod.isBlank()
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("CASH", "BANK").forEach { method ->
-            val selected = state.advancePaymentMethod == method
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
-                    .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
-                    .clickable { vm.onWalkInAdvancePaymentMethod(method) }
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            ) { Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 13.sp) }
-        }
-        if (modeMissing) {
-            Text("Select Cash or Bank *", color = Color(0xFFFFC107), style = MaterialTheme.typography.labelMedium)
-        }
-    }
-    if (advance > 0 || bookingAdvance > 0) {
-        val roomTotal = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
-            state.priceForCategory(catId) * nights * insts.size
-        }.let { if (it == 0.0) state.priceForCategory(state.selectedCategoryId) * nights * state.selectedInstanceIds.size.coerceAtLeast(1) else it }
-        val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
-        val taxAmount = state.selectedInstanceDetails.values.groupBy { it.categoryId }.entries.sumOf { (catId, insts) ->
-            val price = state.priceForCategory(catId)
-            val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
-            price * nights * insts.size * taxRate / 100.0
-        }
-        val total = roomTotal + bfCharge + taxAmount
-        // The advance field already includes any advance paid on the booking (auto-filled),
-        // so subtract only the field value — never the booking advance again.
-        val pending = (total - advance).coerceAtLeast(0.0)
-        Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Remaining at check-out:", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-            Text("₹${"%.2f".format(pending)}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+    WizardSectionLabel("ADVANCE PAYMENT")
+    Spacer(Modifier.height(8.dp))
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (bookingAdvance > 0) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF4CAF50).copy(alpha = 0.10f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Already paid on booking", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    Text("₹${"%,.2f".format(bookingAdvance)}", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            OutlinedTextField(
+                value = state.advancePayment,
+                onValueChange = vm::onWalkInAdvancePayment,
+                label = { Text("Advance collected (₹)", color = DreamlandMuted, fontSize = 13.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                    cursorColor = DreamlandGold,
+                ),
+            )
+            // Payment mode — equal-width segmented buttons (no default; required when an advance is entered).
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Paid via", color = DreamlandMuted, fontSize = 11.sp, letterSpacing = 0.5.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf("CASH", "BANK").forEach { method ->
+                        val selected = state.advancePaymentMethod == method
+                        Box(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) DreamlandGold.copy(alpha = 0.18f) else Color.Transparent)
+                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                                .clickable { vm.onWalkInAdvancePaymentMethod(method) }
+                                .padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp)
+                        }
+                    }
+                }
+                if (modeMissing) {
+                    Text("Select Cash or Bank to record the advance *", color = Color(0xFFFFC107), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+            if (advance > 0 || bookingAdvance > 0) {
+                // Resolve the priced categories exactly like PricingPreviewCard so room
+                // total AND tax are always computed over the SAME set. In booking mode no
+                // specific instances are assigned, so we fall back to the reserved room
+                // counts (or the selected category) — otherwise tax would collapse to 0
+                // and the "remaining" would be understated.
+                val grouped = state.selectedInstanceDetails.values.groupBy { it.categoryId }
+                val pricedCats: List<Pair<String, Int>> = when {
+                    grouped.isNotEmpty() -> grouped.map { (catId, insts) -> catId to insts.size }
+                    state.bookingRoomCountsByCategory.any { it.value > 0 } ->
+                        state.bookingRoomCountsByCategory.filter { it.value > 0 }.map { (catId, count) -> catId to count }
+                    state.selectedCategoryId.isNotBlank() -> listOf(state.selectedCategoryId to 1)
+                    else -> emptyList()
+                }
+                val roomTotal = pricedCats.sumOf { (catId, count) -> state.priceForCategory(catId) * nights * count }
+                val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
+                val taxAmount = pricedCats.sumOf { (catId, count) ->
+                    val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
+                    state.priceForCategory(catId) * nights * count * taxRate / 100.0
+                }
+                // Pure walk-ins show pre-tax (tax revealed only at the billing screen); bookings include tax.
+                val total = roomTotal + bfCharge + (if (state.isWalkInOnly) 0.0 else taxAmount)
+                // The advance field already includes any advance paid on the booking (auto-filled),
+                // so subtract only the field value — never the booking advance again.
+                val pending = (total - advance).coerceAtLeast(0.0)
+                HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Remaining at check-out", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    Text("₹${"%,.2f".format(pending)}", color = if (pending > 0) Color(0xFFFFC107) else Color(0xFF4CAF50), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                }
+            }
         }
     }
     Spacer(Modifier.height(20.dp))
@@ -2080,7 +2089,9 @@ private fun PricingPreviewCard(state: WalkInState, onCategoryPrice: (String, Str
         TaxLine("Tax (${cat.taxPercentage.toInt()}%)", cat.taxPercentage, rl.charge * cat.taxPercentage / 100.0)
     }
     val taxTotal = taxLines.sumOf { it.amount }
-    val total = subtotal + taxTotal
+    // Tax is hidden for pure walk-ins (shown only at the billing screen). Bookings show it.
+    val showTax = !state.isWalkInOnly
+    val total = subtotal + (if (showTax) taxTotal else 0.0)
 
     Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated), shape = RoundedCornerShape(10.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2121,7 +2132,7 @@ private fun PricingPreviewCard(state: WalkInState, onCategoryPrice: (String, Str
                     Text("₹${"%,.2f".format(breakfastCharge)}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            if (taxLines.isNotEmpty()) {
+            if (showTax && taxLines.isNotEmpty()) {
                 HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.15f))
                 taxLines.forEach { tx ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

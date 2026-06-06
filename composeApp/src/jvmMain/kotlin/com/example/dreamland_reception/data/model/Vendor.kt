@@ -18,5 +18,9 @@ data class Vendor(
     val phone: String = "",
     val email: String = "",
     val gstin: String = "",
+    // Discount % the hotel gets off the guest's actual (pre-tax) price when buying from
+    // this vendor. Used to pre-fill the vendor cost in the Mark Done dialog:
+    //   vendorCost = actualPrice × (1 − discountPercent/100)
+    val discountPercent: Double = 0.0,
     val createdAt: Date = Date(),
 )

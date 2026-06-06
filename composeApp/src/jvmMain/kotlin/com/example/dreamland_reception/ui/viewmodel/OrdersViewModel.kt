@@ -241,13 +241,13 @@ class OrdersViewModel(
     }
 
     /** Creates a new vendor in the `vendors` collection and selects it via [onCreated]. */
-    fun addVendor(name: String, phone: String = "", email: String = "", onCreated: (Vendor) -> Unit) {
+    fun addVendor(name: String, phone: String = "", email: String = "", discountPercent: Double = 0.0, onCreated: (Vendor) -> Unit) {
         val hotelId = AppContext.hotelId
         val trimmed = name.trim()
         if (hotelId.isBlank() || trimmed.isBlank()) return
         viewModelScope.launch {
             runCatching {
-                val v = Vendor(hotelId = hotelId, name = trimmed, phone = phone.trim(), email = email.trim())
+                val v = Vendor(hotelId = hotelId, name = trimmed, phone = phone.trim(), email = email.trim(), discountPercent = discountPercent)
                 v.copy(id = vendorRepo.add(v))
             }.onSuccess { created ->
                 _vendors.update { list -> (list + created).sortedBy { it.name.lowercase() } }

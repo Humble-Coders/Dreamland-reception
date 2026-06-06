@@ -20,6 +20,8 @@ interface StayRepository {
     suspend fun checkInBatch(stay: Stay, roomInstanceId: String): String
     suspend fun checkOut(id: String, checkOutTime: Date, lateCheckOutCharge: Double = 0.0, checkOutManager: String = "")
     suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date)
+    /** Persists the guests array (e.g. to store a GRC number allocated when printing later). */
+    suspend fun updateGuests(id: String, guests: List<GuestRecord>)
     suspend fun changeRoom(
         stayId: String, oldInstanceId: String,
         newInstanceId: String, newRoomNumber: String,
@@ -97,6 +99,18 @@ object FirestoreStayRepository : StayRepository {
 
     override suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("expectedCheckOut" to newCheckOut, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateGuests(id: String, guests: List<GuestRecord>) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "guests" to guests.map { g ->
+                mapOf("name" to g.name, "phone" to g.phone, "idProofVerified" to g.idProofVerified,
+                    "gender" to g.gender, "idType" to g.idType, "govIdNumber" to g.govIdNumber,
+                    "govIdPictures" to g.govIdPictures, "purpose" to g.purpose,
+                    "address" to g.address, "dob" to g.dob, "age" to g.age, "grcNumber" to g.grcNumber)
+            },
+            "updatedAt" to Date(),
+        )).get(); Unit
     }
 
     override suspend fun changeRoom(
