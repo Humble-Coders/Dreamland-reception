@@ -9,9 +9,12 @@ import com.example.dreamland_reception.data.model.Hotel
 import com.example.dreamland_reception.data.model.Room
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
+import com.example.dreamland_reception.data.firebase.CloudFunctionClient
 import com.example.dreamland_reception.data.repository.BookingRepository
 import com.example.dreamland_reception.data.repository.BookingSourceRepository
+import com.example.dreamland_reception.data.repository.CancelBookingResult
 import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
+import com.example.dreamland_reception.data.repository.ReceptionRefundMode
 import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRepository
 import com.example.dreamland_reception.data.repository.FirestoreHotelRepository
 import com.example.dreamland_reception.data.repository.FirestoreRoomInstanceRepository
@@ -48,6 +51,33 @@ data class NoShowRefundDialogState(
     val error: String? = null,
 )
 
+/** Surfaced inline in the cancel dialog (error banner). */
+data class CancelDialogError(
+    val title: String,
+    val message: String,
+    val retrySafe: Boolean,
+)
+
+/** Drives the new reception cancel + refund dialog. */
+data class CancelDialogState(
+    val primary: Booking,                          // used for guest name, dates, etc.
+    val groupBookings: List<Booking>,              // all bookings sharing primary.groupBookingId (or just [primary])
+    val reason: String = "",
+    val refundMode: ReceptionRefundMode = ReceptionRefundMode.POLICY,
+    val fixedRefundRupeesInput: String = "",       // raw text from the ₹ field
+    val isLoading: Boolean = false,
+    val error: CancelDialogError? = null,
+    /**
+     * Computed POLICY-mode refund preview (in paise).
+     *   null   → still loading the room policies from Firestore
+     *   value  → final amount, even if 0 (no refund per policy)
+     * Shown as a hint under the "As per cancellation policy" radio.
+     */
+    val policyPreviewPaise: Long? = null,
+) {
+    val totalAdvancePaise: Long get() = groupBookings.sumOf { it.advancePaidAmountPaise }
+}
+
 data class RoomCategoryEntry(
     val categoryId: String = "",
     val categoryName: String = "",
@@ -81,8 +111,8 @@ data class RoomsAndBookingsUiState(
     val assignRoomDialogBooking: Booking? = null,
     val availableRoomsForAssign: List<RoomInstance> = emptyList(),
     val assignRoomLoading: Boolean = false,
-    // Cancel confirmation
-    val cancelConfirmBooking: Booking? = null,
+    // Cancel + refund dialog (single AND group flows share this state)
+    val cancelDialog: CancelDialogState? = null,
     // General error / snackbar
     val error: String? = null,
     val operationMessage: String? = null,
@@ -98,8 +128,7 @@ data class RoomsAndBookingsUiState(
     // Group no-show (mark all bookings in a group at once)
     val groupNoShowBookings: List<Booking>? = null,
     val groupNoShowSelectedIds: Set<String> = emptySet(),
-    // Group cancel (cancel all bookings in a group at once)
-    val groupCancelBookings: List<Booking>? = null,
+    // (Group cancel is now folded into cancelDialog above — the dialog handles 1..N bookings.)
     // Add booking dialog
     val showAddBookingDialog: Boolean = false,
     val bookingSources: List<BookingSource> = emptyList(),
@@ -387,60 +416,281 @@ class RoomsAndBookingsViewModel(
         }
     }
 
-    // ── Cancel booking ────────────────────────────────────────────────────────
+    // ── Cancel + refund (via cancelBookingByReceptionHttp Cloud Function) ─────
 
-    fun promptCancelBooking(booking: Booking) = _uiState.update { it.copy(cancelConfirmBooking = booking) }
-    fun dismissCancelBooking() = _uiState.update { it.copy(cancelConfirmBooking = null) }
+    fun promptCancelBooking(booking: Booking) {
+        openCancelDialogFor(booking, fromGroupEntry = false)
+    }
 
-    fun confirmCancelBooking() {
-        val booking = _uiState.value.cancelConfirmBooking ?: return
-        launchWithGlobalLoading {
-            runCatching {
-                val active = stayRepo.getActive(AppContext.hotelId)
-                // Only block if this specific booking's guest is checked in (matched by bookingId).
-                // A different guest occupying the same room should not prevent cancelling this booking.
-                if (booking.id.isNotBlank() && active.any { it.bookingId == booking.id && it.status == "ACTIVE" }) {
-                    throw Exception("Guest is already checked in — check out the guest first")
-                }
-                bookingRepo.cancelWithTransaction(booking.id)
-            }
-            .onSuccess { _uiState.update { it.copy(cancelConfirmBooking = null, operationMessage = "Booking for ${booking.guestName} cancelled") } }
-            .onFailure { e -> _uiState.update { it.copy(cancelConfirmBooking = null, error = e.message) } }
+    /** Group-level Cancel button on a multi-room booking row. */
+    fun promptCancelGroupBooking(group: List<Booking>) {
+        val primary = group.firstOrNull { it.status == "CONFIRMED" } ?: return
+        openCancelDialogFor(primary, fromGroupEntry = true)
+    }
+
+    fun dismissCancelDialog() {
+        _uiState.update { it.copy(cancelDialog = null) }
+    }
+
+    fun onCancelReasonChanged(reason: String) {
+        _uiState.update { s ->
+            val d = s.cancelDialog ?: return@update s
+            s.copy(cancelDialog = d.copy(reason = reason.take(500), error = null))
         }
     }
 
-    fun promptCancelGroupBooking(group: List<Booking>) {
-        val cancellable = group.filter { it.status == "CONFIRMED" }
-        if (cancellable.isEmpty()) return
-        _uiState.update { it.copy(groupCancelBookings = cancellable) }
+    fun onCancelRefundModeChanged(mode: ReceptionRefundMode) {
+        _uiState.update { s ->
+            val d = s.cancelDialog ?: return@update s
+            val cleared = if (mode != ReceptionRefundMode.FIXED) "" else d.fixedRefundRupeesInput
+            s.copy(cancelDialog = d.copy(refundMode = mode, fixedRefundRupeesInput = cleared, error = null))
+        }
     }
 
-    fun dismissGroupCancelBooking() = _uiState.update { it.copy(groupCancelBookings = null) }
-
-    fun confirmCancelGroupBooking() {
-        val group = _uiState.value.groupCancelBookings ?: return
-        _uiState.update { it.copy(groupCancelBookings = null) }
-        launchWithGlobalLoading {
-            val active = runCatching { stayRepo.getActive(AppContext.hotelId) }.getOrElse { emptyList() }
-            val checkedInRoomIds = active.map { it.roomInstanceId }.toSet()
-            var cancelledCount = 0
-            var errorMsg: String? = null
-            for (booking in group) {
-                if (booking.roomInstanceId.isNotBlank() && booking.roomInstanceId in checkedInRoomIds) {
-                    errorMsg = "Some rooms are currently checked in — check out guests first"
-                    continue
+    fun onCancelFixedRupeesChanged(text: String) {
+        // Accept digits + at most one '.' + max 2 decimal places.
+        val sanitized = buildString {
+            var seenDot = false
+            var decimals = 0
+            for (c in text) {
+                when {
+                    c.isDigit() -> {
+                        if (seenDot) {
+                            if (decimals < 2) { append(c); decimals++ }
+                        } else append(c)
+                    }
+                    c == '.' && !seenDot -> { append(c); seenDot = true }
                 }
-                runCatching { bookingRepo.cancelWithTransaction(booking.id) }
-                    .onSuccess { cancelledCount++ }
-                    .onFailure { e -> errorMsg = e.message }
             }
-            _uiState.update {
-                it.copy(
-                    operationMessage = if (cancelledCount > 0) "$cancelledCount booking${if (cancelledCount != 1) "s" else ""} cancelled" else null,
-                    error = errorMsg,
+        }
+        _uiState.update { s ->
+            val d = s.cancelDialog ?: return@update s
+            s.copy(cancelDialog = d.copy(fixedRefundRupeesInput = sanitized, error = null))
+        }
+    }
+
+    fun confirmCancelByReception() {
+        val dialog = _uiState.value.cancelDialog ?: return
+        val booking = dialog.primary
+
+        // Guard: reason length.
+        if (dialog.reason.trim().length !in 10..500) {
+            _uiState.update { it.copy(cancelDialog = dialog.copy(
+                error = CancelDialogError("Reason required", "Please enter at least 10 characters.", retrySafe = false)
+            ))}
+            return
+        }
+
+        // Guard: FIXED amount valid + ≤ total advance.
+        var fixedPaise: Long? = null
+        if (dialog.refundMode == ReceptionRefundMode.FIXED) {
+            val rupees = dialog.fixedRefundRupeesInput.toDoubleOrNull()
+            val paise = rupees?.let { (it * 100).toLong() } ?: -1L
+            if (paise <= 0L) {
+                _uiState.update { it.copy(cancelDialog = dialog.copy(
+                    error = CancelDialogError("Invalid amount", "Enter an amount greater than ₹0.", retrySafe = false)
+                ))}
+                return
+            }
+            if (paise > dialog.totalAdvancePaise) {
+                _uiState.update { it.copy(cancelDialog = dialog.copy(
+                    error = CancelDialogError(
+                        "Amount too high",
+                        "Must be at most ₹${"%.2f".format(dialog.totalAdvancePaise / 100.0)}.",
+                        retrySafe = false,
+                    )
+                ))}
+                return
+            }
+            fixedPaise = paise
+        }
+
+        val staffId = AppContext.currentManager.ifBlank { "reception_unknown" }
+
+        _uiState.update { it.copy(cancelDialog = dialog.copy(isLoading = true, error = null)) }
+
+        viewModelScope.launch {
+            val result = runCatching {
+                bookingRepo.cancelByReception(
+                    userId = booking.userId,
+                    groupBookingId = booking.groupBookingId.ifBlank { booking.id },
+                    reason = dialog.reason.trim(),
+                    refundMode = dialog.refundMode,
+                    fixedRefundPaise = fixedPaise,
+                    cancelledByReceptionUserId = staffId,
                 )
             }
+            result.onSuccess { res ->
+                _uiState.update {
+                    it.copy(
+                        cancelDialog = null,
+                        operationMessage = buildSuccessMessage(res, booking.guestName),
+                    )
+                }
+            }.onFailure { e ->
+                val err = mapCancelError(e)
+                _uiState.update { s ->
+                    val d = s.cancelDialog ?: return@update s
+                    s.copy(cancelDialog = d.copy(isLoading = false, error = err))
+                }
+            }
         }
+    }
+
+    private fun openCancelDialogFor(booking: Booking, fromGroupEntry: Boolean) {
+        // Resolve the full group (the Cloud Function will cancel every booking sharing this groupBookingId).
+        val all = _uiState.value.bookings
+        val group = if (booking.groupBookingId.isNotBlank()) {
+            all.filter { it.groupBookingId == booking.groupBookingId && it.status == "CONFIRMED" }
+                .ifEmpty { listOf(booking) }
+        } else {
+            listOf(booking)
+        }
+
+        // Cheap synchronous checks first — show the dialog optimistically while the
+        // suspend active-stay check runs in the background. Late "checked-in" failure
+        // surfaces as a dialog error before the function fires.
+        val syncError = syncPreflight(group)
+        if (syncError != null) {
+            _uiState.update { it.copy(operationMessage = null, error = syncError) }
+            return
+        }
+
+        _uiState.update {
+            it.copy(cancelDialog = CancelDialogState(
+                primary = booking,
+                groupBookings = group,
+            ))
+        }
+
+        viewModelScope.launch {
+            val active = runCatching { stayRepo.getActive(AppContext.hotelId) }.getOrElse { emptyList() }
+            if (group.any { b -> active.any { it.bookingId == b.id && it.status == "ACTIVE" } }) {
+                _uiState.update {
+                    val d = it.cancelDialog ?: return@update it
+                    it.copy(cancelDialog = d.copy(error = CancelDialogError(
+                        "Cannot cancel",
+                        "Guest is already checked in — check out the guest first.",
+                        retrySafe = false,
+                    )))
+                }
+            }
+        }
+
+        // Compute the POLICY-mode refund preview in the background so staff can
+        // see the amount before committing. Mirrors functions/src/cancellationRefundCalculator.ts.
+        viewModelScope.launch {
+            val previewPaise = runCatching { computePolicyRefundPaise(group) }.getOrDefault(0L)
+            _uiState.update { s ->
+                val d = s.cancelDialog ?: return@update s
+                s.copy(cancelDialog = d.copy(policyPreviewPaise = previewPaise))
+            }
+        }
+    }
+
+    /**
+     * Client-side port of `functions/src/cancellationRefundCalculator.ts` —
+     * computes the POLICY-mode refund total in paise across [group]. One
+     * Firestore read per unique room category. Result is a *preview only*; the
+     * server recomputes against the live policies at refund time.
+     */
+    private suspend fun computePolicyRefundPaise(group: List<com.example.dreamland_reception.data.model.Booking>): Long =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val fs = com.example.dreamland_reception.data.repository.FirestoreRepositorySupport.get()
+            val now = System.currentTimeMillis()
+            val hourMs = 3_600_000L
+            // Fetch each unique roomCategoryId once.
+            val categoryIds = group.map { it.roomCategoryId }.toSet()
+            val policies: Map<String, Triple<Boolean, Long, Double>> = categoryIds.mapNotNull { id ->
+                val snap = runCatching { fs.collection("rooms").document(id).get().get() }.getOrNull()
+                if (snap == null || !snap.exists()) return@mapNotNull null
+                val freeCancellation = snap.getBoolean("freeCancellation") ?: false
+                val policy = snap.get("cancellationPolicy") as? Map<*, *>
+                val freeBefore = (policy?.get("freeBefore") as? Number)?.toLong() ?: 0L
+                val refundPercent = (policy?.get("refundPercent") as? Number)?.toDouble() ?: 0.0
+                id to Triple(freeCancellation, freeBefore, refundPercent)
+            }.toMap()
+
+            var total = 0L
+            for (b in group) {
+                val advance = b.advancePaidAmountPaise
+                if (advance <= 0L) continue
+                val p = policies[b.roomCategoryId] ?: continue
+                val (freeCancellation, freeBefore, refundPercent) = p
+                val hoursUntilCheckIn = (b.checkIn.time - now) / hourMs
+                val refund = when {
+                    freeCancellation && hoursUntilCheckIn >= freeBefore -> advance
+                    refundPercent > 0.0 -> kotlin.math.floor(advance * refundPercent / 100.0).toLong()
+                    else -> 0L
+                }
+                total += refund
+            }
+            total
+        }
+
+    private fun syncPreflight(group: List<Booking>): String? {
+        if (group.any { it.status != "CONFIRMED" }) {
+            return "Only CONFIRMED bookings can be cancelled."
+        }
+        if (group.any { it.paymentOrderId.isBlank() }) {
+            return "Walk-in bookings have no online payment — handle refund manually at the desk."
+        }
+        val now = System.currentTimeMillis()
+        val graceMs = 10L * 60L * 1000L
+        if (group.any { b ->
+                val locked = b.cancellationLockedAt?.time ?: 0L
+                locked > 0L && now - locked < graceMs
+            }) {
+            return "Guest is currently cancelling from the app. Wait 10 minutes and retry."
+        }
+        return null
+    }
+
+    private fun buildSuccessMessage(res: CancelBookingResult, guestName: String): String {
+        val rupees = "%.2f".format(res.totalRefundPaise / 100.0)
+        return when {
+            res.totalRefundPaise > 0 && res.refundId.isNotBlank() ->
+                "Cancelled for $guestName. Refund of ₹$rupees initiated (Razorpay: ${res.refundId})."
+            res.totalRefundPaise > 0 ->
+                "Cancelled for $guestName. Refund of ₹$rupees initiated."
+            else ->
+                "Cancelled for $guestName. No refund per policy."
+        }
+    }
+
+    private fun mapCancelError(e: Throwable): CancelDialogError {
+        if (e !is CloudFunctionClient.CancelByReceptionException) {
+            return CancelDialogError("Network error", e.message ?: "Could not reach server.", retrySafe = true)
+        }
+        // Parse {code, message} from the server. Fall back to raw body on parse failure.
+        val (code, msg) = parseCodeAndMessage(e.body)
+        return when (e.httpStatus) {
+            401 -> CancelDialogError("Auth failed", "Service account token rejected. Contact admin.", retrySafe = false)
+            403 -> CancelDialogError("Not allowed", "This reception machine is not authorized for cancellations.", retrySafe = false)
+            400 -> CancelDialogError("Invalid input", msg.ifBlank { "Check the request fields." }, retrySafe = false)
+            404 -> CancelDialogError("Not found", "Booking or payment record missing.", retrySafe = false)
+            412 -> CancelDialogError("Cannot cancel", humanizeBlock(msg, code), retrySafe = false)
+            429 -> CancelDialogError("Slow down", "Too many cancellations this minute. Wait 60s.", retrySafe = true)
+            500, 502, 503, 504 -> CancelDialogError("Refund failed", "Razorpay rejected the refund. Safe to retry.", retrySafe = true)
+            else -> CancelDialogError("Error ${e.httpStatus}", msg.ifBlank { "Unexpected error." }, retrySafe = false)
+        }
+    }
+
+    private fun parseCodeAndMessage(body: String): Pair<String, String> {
+        return runCatching {
+            val o = com.google.gson.JsonParser.parseString(body).asJsonObject
+            (o.get("code")?.asString.orEmpty()) to (o.get("message")?.asString.orEmpty())
+        }.getOrElse { "" to body }
+    }
+
+    private fun humanizeBlock(message: String, code: String): String = when (message) {
+        "ALREADY_CHECKED_IN" -> "Guest is already checked in. Check out first."
+        "ALREADY_CANCELLED"  -> "Booking is already cancelled."
+        "PAST_CHECKIN"       -> "Check-in date has passed. Pick Full or Custom refund mode to override."
+        "LOCK_HELD"          -> "Guest is cancelling from the app. Wait 10 minutes."
+        "no_payment_link"    -> "No online payment on this booking — handle refund manually."
+        "PENDING_PAYMENT"    -> "Booking payment hasn't completed yet."
+        else -> message.ifBlank { code }
     }
 
     // ── No-show ───────────────────────────────────────────────────────────────

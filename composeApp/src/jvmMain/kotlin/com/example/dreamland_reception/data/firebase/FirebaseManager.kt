@@ -46,12 +46,16 @@ object FirebaseManager {
     val isConnected: Boolean
         get() = isInitialized && initError == null
 
+    // Cached credentials so CloudFunctionClient can mint ID tokens without re-parsing the JSON.
+    private var cachedCredentials: GoogleCredentials? = null
+
     fun initialize(explicitPath: String? = null) {
         if (isInitialized) return
         initError = null
 
         runCatching {
             val (credentials, projectId) = resolveCredentials(explicitPath)
+            cachedCredentials = credentials
             FirebaseApp.initializeApp(
                 FirebaseOptions.builder()
                     .setCredentials(credentials)
@@ -62,6 +66,19 @@ object FirebaseManager {
             initError = e.message ?: e.toString()
         }
     }
+
+    /**
+     * The service-account [GoogleCredentials] loaded by [initialize]. Used by
+     * [com.example.dreamland_reception.data.firebase.CloudFunctionClient] to mint
+     * Google-signed ID tokens for the HTTPS sibling Cloud Function.
+     *
+     * Throws [IllegalStateException] if Firebase hasn't been initialized yet, or
+     * if no real service-account JSON was loaded (e.g. only application-default
+     * credentials were available — which lack the private key needed to sign tokens).
+     */
+    fun serviceAccountCredentials(): GoogleCredentials =
+        cachedCredentials
+            ?: error(initError ?: "Firebase service-account credentials not loaded. " + credentialHelpText())
 
     fun firestore(): Firestore? {
         if (!isInitialized) return null
