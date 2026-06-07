@@ -64,6 +64,8 @@ data class Booking(
     val cancelledByReceptionUserId: String = "",
     val cancellationRefundId: String = "",           // Razorpay refund_id
     val cancellationRefundAmountPaise: Long = 0L,
-    val cancellationRefundStatus: String = "",       // "" | "INITIATED" | "COMPLETED" | "FAILED"
+    val cancellationRefundStatus: String = "",       // "" | "INITIATED" | "COMPLETED" | "FAILED" | "MANUAL"
     val cancellationRefundMode: String = "",         // "" | "POLICY" | "FULL" | "FIXED"
+    // Hotel-side (walk-in) cancellation: how the manual refund was paid out at the desk.
+    val cancellationManualRefundMethod: String = "", // "" | "CASH" | "BANK"
 )

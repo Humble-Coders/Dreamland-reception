@@ -93,6 +93,7 @@ import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.roomsbookings.AssignRoomDialog
 import com.example.dreamland_reception.stays.WalkInDialog
+import com.example.dreamland_reception.data.repository.ManualRefundMethod
 import com.example.dreamland_reception.data.repository.ReceptionRefundMode
 import com.example.dreamland_reception.ui.viewmodel.BookingDateFilter
 import com.example.dreamland_reception.ui.viewmodel.CancelDialogState
@@ -224,7 +225,8 @@ fun RoomsAndBookingsScreen(
             dialog = dialog,
             onReasonChanged = vm::onCancelReasonChanged,
             onRefundModeChanged = vm::onCancelRefundModeChanged,
-            onFixedRupeesChanged = vm::onCancelFixedRupeesChanged,
+            onRefundAmountChanged = vm::onCancelRefundAmountChanged,
+            onPaidViaChanged = vm::onPaidViaChanged,
             onConfirm = vm::confirmCancelByReception,
             onDismiss = vm::dismissCancelDialog,
         )
@@ -1882,12 +1884,22 @@ private fun BookingCard(
                             booking.cancellationRefundMode.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
                     booking.cancellationRefundStatus == "FAILED" ->
                         "Refund failed — contact admin"
+                    booking.cancellationRefundStatus == "MANUAL" -> {
+                        val method = booking.cancellationManualRefundMethod.ifBlank { "manual" }
+                        if (booking.cancellationRefundAmountPaise == 0L)
+                            "Cancelled — no refund"
+                        else
+                            "Manual refund logged — ₹$refundRupees ($method)"
+                    }
                     booking.cancellationRefundAmountPaise == 0L ->
                         "Cancelled — no refund per policy"
                     else -> "Cancelled by reception"
                 }
-                val badgeColor = if (booking.cancellationRefundStatus == "FAILED")
-                    Color(0xFFE74C3C) else DreamlandGold
+                val badgeColor = when (booking.cancellationRefundStatus) {
+                    "FAILED" -> Color(0xFFE74C3C)
+                    "MANUAL" -> DreamlandMuted
+                    else -> DreamlandGold
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1965,7 +1977,8 @@ private fun CancelConfirmDialog(
     dialog: CancelDialogState,
     onReasonChanged: (String) -> Unit,
     onRefundModeChanged: (ReceptionRefundMode) -> Unit,
-    onFixedRupeesChanged: (String) -> Unit,
+    onRefundAmountChanged: (String) -> Unit,
+    onPaidViaChanged: (ManualRefundMethod) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1974,11 +1987,24 @@ private fun CancelConfirmDialog(
     val totalAdvanceRupees = "%.2f".format(dialog.totalAdvancePaise / 100.0)
     val checkInFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(primary.checkIn)
     val reasonValid = dialog.reason.trim().length in 10..500
-    val fixedAmountValid = dialog.refundMode != ReceptionRefundMode.FIXED || run {
-        val paise = (dialog.fixedRefundRupeesInput.toDoubleOrNull()?.times(100))?.toLong() ?: -1L
-        paise in 1L..dialog.totalAdvancePaise
+    val isManual = dialog.isManual
+
+    // Amount field validity.
+    //   Manual flow → required for every mode; must be > 0 and ≤ total advance.
+    //   Razorpay flow → only required for FIXED.
+    val amountPaise: Long? = run {
+        val r = dialog.refundAmountRupeesInput.toDoubleOrNull() ?: return@run null
+        (r * 100.0).toLong()
     }
-    val canConfirm = !dialog.isLoading && reasonValid && fixedAmountValid
+    val amountValid = when {
+        isManual -> amountPaise != null && amountPaise in 0L..dialog.totalAdvancePaise
+        dialog.refundMode == ReceptionRefundMode.FIXED ->
+            amountPaise != null && amountPaise in 1L..dialog.totalAdvancePaise
+        else -> true
+    }
+    val paidViaValid = !isManual || dialog.paidVia != null
+
+    val canConfirm = !dialog.isLoading && reasonValid && amountValid && paidViaValid
 
     AlertDialog(
         onDismissRequest = { if (!dialog.isLoading) onDismiss() },
@@ -1986,9 +2012,30 @@ private fun CancelConfirmDialog(
         titleContentColor = DreamlandOnDark,
         textContentColor = DreamlandMuted,
         shape = RoundedCornerShape(16.dp),
-        title = { Text("Cancel Booking + Refund", fontWeight = FontWeight.SemiBold) },
+        title = {
+            Text(
+                if (isManual) "Cancel Booking + Log Refund" else "Cancel Booking + Refund",
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
         text = {
             Column(modifier = Modifier.widthIn(min = 460.dp, max = 600.dp).verticalScroll(rememberScrollState())) {
+                if (isManual) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DreamlandGold.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                            .border(1.dp, DreamlandGold.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            "Hotel-side booking — no online payment. Refund will be logged for accounting; staff hands over the cash or initiates the bank transfer manually.",
+                            color = DreamlandOnDark, fontSize = 12.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+
                 // Booking summary
                 CancelSummaryRow("Guest", "${primary.guestName.ifBlank { "—" }}${primary.guestPhone.takeIf { it.isNotBlank() }?.let { "  ($it)" }.orEmpty()}")
                 if (primary.groupBookingId.isNotBlank()) {
@@ -2032,25 +2079,33 @@ private fun CancelConfirmDialog(
                     subtitle = "Manager enters a specific refund amount.",
                     onClick = { onRefundModeChanged(ReceptionRefundMode.FIXED) },
                 )
-                if (dialog.refundMode == ReceptionRefundMode.FIXED) {
-                    Spacer(Modifier.height(6.dp))
+
+                // Amount field: shown ALWAYS on the manual flow; only on FIXED for Razorpay.
+                val showAmount = isManual || dialog.refundMode == ReceptionRefundMode.FIXED
+                if (showAmount) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (isManual) "Refund amount" else "Custom amount",
+                        color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(4.dp))
                     OutlinedTextField(
-                        value = dialog.fixedRefundRupeesInput,
-                        onValueChange = onFixedRupeesChanged,
+                        value = dialog.refundAmountRupeesInput,
+                        onValueChange = onRefundAmountChanged,
                         enabled = !dialog.isLoading,
-                        label = { Text("Amount", color = DreamlandMuted) },
+                        placeholder = { Text("Refund amount (₹)", color = DreamlandMuted) },
                         prefix = { Text("₹", color = DreamlandOnDark) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth().padding(start = 32.dp),
-                        isError = !fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = !amountValid && dialog.refundAmountRupeesInput.isNotBlank(),
                         supportingText = {
                             Text(
-                                if (!fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank())
-                                    "Must be greater than ₹0 and at most ₹$totalAdvanceRupees."
+                                if (!amountValid && dialog.refundAmountRupeesInput.isNotBlank())
+                                    "Must be at most ₹$totalAdvanceRupees."
                                 else
                                     "Max ₹$totalAdvanceRupees.",
-                                color = if (!fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank())
+                                color = if (!amountValid && dialog.refundAmountRupeesInput.isNotBlank())
                                     Color(0xFFE74C3C) else DreamlandMuted,
                                 fontSize = 12.sp,
                             )
@@ -2064,6 +2119,39 @@ private fun CancelConfirmDialog(
                             cursorColor = DreamlandGold,
                         ),
                     )
+                }
+
+                // Paid-via toggle (manual flow only)
+                if (isManual) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("Paid via", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PaidViaButton(
+                            label = "CASH",
+                            selected = dialog.paidVia == ManualRefundMethod.CASH,
+                            enabled = !dialog.isLoading,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onPaidViaChanged(ManualRefundMethod.CASH) },
+                        )
+                        PaidViaButton(
+                            label = "BANK",
+                            selected = dialog.paidVia == ManualRefundMethod.BANK,
+                            enabled = !dialog.isLoading,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onPaidViaChanged(ManualRefundMethod.BANK) },
+                        )
+                    }
+                    if (dialog.paidVia == null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Pick CASH or BANK to confirm the manual refund.",
+                            color = DreamlandMuted, fontSize = 11.sp,
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -2136,7 +2224,12 @@ private fun CancelConfirmDialog(
                     disabledContainerColor = Color(0xFFE74C3C).copy(alpha = 0.4f),
                 ),
                 shape = RoundedCornerShape(8.dp),
-            ) { Text("Cancel + Refund", fontWeight = FontWeight.SemiBold) }
+            ) {
+                Text(
+                    if (isManual) "Cancel + Log refund" else "Cancel + Refund",
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
         },
         dismissButton = {
             TextButton(onClick = onDismiss, enabled = !dialog.isLoading) {
@@ -2144,6 +2237,33 @@ private fun CancelConfirmDialog(
             }
         },
     )
+}
+
+@Composable
+private fun PaidViaButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val borderColor = if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.5f)
+    val bgColor = if (selected) DreamlandGold.copy(alpha = 0.18f) else Color.Transparent
+    val textColor = if (selected) DreamlandGold else DreamlandOnDark
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = bgColor,
+            contentColor = textColor,
+        ),
+        contentPadding = PaddingValues(vertical = 12.dp),
+    ) {
+        Text(label, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 0.5.sp)
+    }
 }
 
 @Composable
