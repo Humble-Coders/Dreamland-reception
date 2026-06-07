@@ -233,6 +233,33 @@ data class WalkInState(
     val matchedGuestIds: List<MatchedGuestId> = emptyList(),
     // Primary guest's current Humble Ledger balance (null = none / not configured / new guest).
     val guestBalance: com.example.dreamland_reception.data.accounting.CustomerBalanceInfo? = null,
+    // ── Find-by-name (returning guest who may have given a new phone) ──────────────
+    val guestNameQuery: String = "",                       // what the receptionist typed
+    val guestNameMatches: List<GuestNameMatch> = emptyList(), // candidates to pick from
+    val isSearchingByName: Boolean = false,
+    // When a candidate is picked, their existing ledger account UID is PINNED here and
+    // wins over phone resolution at submit — so the correct account flows to the bill/ledger
+    // even though the phone is different today. Blank = no pin (normal phone-based flow).
+    val pinnedGuestUid: String = "",
+)
+
+/**
+ * A returning guest matched by NAME (from past stays). Carries their existing account [uid]
+ * (for balance + pinning), their on-file [phone], the scanned ID (for face-matching and
+ * auto-fill), and last-visit context so the receptionist can pick the right person.
+ */
+data class GuestNameMatch(
+    val uid: String,                 // ledger/account UID — blank if none resolvable
+    val name: String,
+    val phone: String,               // their on-file (old) phone
+    val idType: String,
+    val govIdNumber: String,
+    val gender: String,
+    val dob: String,
+    val age: Int,
+    val pictures: List<String>,      // govIdPictures URLs (front, back) — for face match
+    val lastStayMillis: Long,        // most recent stay, for sorting + display
+    val lastRoom: String,
 )
 
 /**
@@ -715,7 +742,7 @@ class StaysViewModel(
                 else -> "PENDING"
             }
             val previewBill = com.example.dreamland_reception.data.model.Bill(
-                hotelId = stay.hotelId, stayId = stayId,
+                hotelId = stay.hotelId, stayId = stayId, userId = stay.userId,
                 guestName = stay.guestName, roomNumber = stay.roomNumber,
                 checkInDate = stay.checkInActual, checkOutDate = checkOutDate,
                 items = items, taxEnabled = taxPercentage > 0, taxPercentage = taxPercentage,
@@ -935,9 +962,13 @@ class StaysViewModel(
         ws.copy(
             guestEntries = updated,
             guestName = if (index == 0) name else ws.guestName,
+            // A manual edit to the PRIMARY name unlinks any name-pin, so we never settle
+            // against a pinned account that no longer matches the typed guest.
+            pinnedGuestUid = if (index == 0) "" else ws.pinnedGuestUid,
         )
     }
     fun onGuestPhone(index: Int, phone: String) {
+        val pinned = _walkInState.value.pinnedGuestUid.isNotBlank()
         _walkInState.update { ws ->
             val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(phone = phone) }
             ws.copy(
@@ -945,6 +976,10 @@ class StaysViewModel(
                 guestPhone = if (index == 0) phone else ws.guestPhone,
             )
         }
+        // When the primary guest was PINNED by name, their identity/balance/ID come from the
+        // pinned account — the (possibly new) phone entered now must NOT overwrite the name,
+        // re-fetch a balance, or repopulate the ID panel from that phone.
+        if (index == 0 && pinned) return
         // When the primary guest's phone is fully entered, auto-fetch their registered
         // name from the users collection (if any) to pre-fill the Full Name field.
         if (index == 0 && phone.length == 10) {
@@ -1034,10 +1069,119 @@ class StaysViewModel(
                 govIdPicture2 = match.pictures.getOrElse(1) { entry.govIdPicture2 },
             )
         }
-        if (index == 0 && match.name.isNotBlank()) {
-            _walkInState.update { ws -> ws.copy(guestName = match.name) }
+        if (index == 0) {
+            // Phone-ID autofill identifies by phone, so drop any name-pin to avoid a stale link.
+            _walkInState.update { ws -> ws.copy(guestName = match.name.ifBlank { ws.guestName }, pinnedGuestUid = "") }
         }
     }
+
+    // ── Find by name (returning guest, possibly new phone) ──────────────────────
+
+    /** Called as the receptionist types in the "Find by name" box. */
+    fun onGuestNameSearch(query: String) {
+        _walkInState.update { it.copy(guestNameQuery = query) }
+        val q = query.trim()
+        if (q.length < 2) {
+            _walkInState.update { it.copy(guestNameMatches = emptyList(), isSearchingByName = false) }
+            return
+        }
+        searchGuestsByName(q)
+    }
+
+    fun clearGuestNameSearch() = _walkInState.update {
+        it.copy(guestNameQuery = "", guestNameMatches = emptyList(), isSearchingByName = false)
+    }
+
+    /**
+     * Finds returning guests whose name matches [query], from the cached stays. Each candidate
+     * carries their existing account UID (when they were the account holder of a past stay),
+     * their on-file phone, scanned ID (for face-matching), and last-visit context. Deduped by
+     * person (ID number → UID → name+phone), newest stay first. Best-effort; stale results
+     * are discarded.
+     */
+    fun searchGuestsByName(query: String) {
+        val q = query.trim().lowercase()
+        if (q.length < 2) { _walkInState.update { it.copy(guestNameMatches = emptyList()) }; return }
+        _walkInState.update { it.copy(isSearchingByName = true) }
+        viewModelScope.launch {
+            val stays = idSearchStaysCache
+                ?: runCatching { stayRepo.getAll(AppContext.hotelId) }.getOrElse { emptyList() }
+                    .also { idSearchStaysCache = it }
+            // Newest first so the first occurrence we keep has the latest visit details.
+            val sorted = stays.sortedByDescending { it.checkInActual.time }
+            val byKey = LinkedHashMap<String, GuestNameMatch>()
+            fun last10(p: String) = p.filter { it.isDigit() }.takeLast(10)
+            for (stay in sorted) {
+                for ((gi, g) in stay.guests.withIndex()) {
+                    if (g.name.isBlank() || !g.name.lowercase().contains(q)) continue
+                    // Reliable UID only for the stay's account holder (the primary/owner).
+                    val isOwner = g.name.equals(stay.guestName, ignoreCase = true) &&
+                        (gi == 0 || last10(g.phone) == last10(stay.guestPhone))
+                    val uid = if (isOwner) stay.userId else ""
+                    // Stable person key: ID number first, then UID, then name+phone.
+                    val key = g.govIdNumber.trim().lowercase()
+                        .ifBlank { uid.ifBlank { g.name.trim().lowercase() + "@" + last10(g.phone) } }
+                    val existing = byKey[key]
+                    if (existing == null) {
+                        byKey[key] = GuestNameMatch(
+                            uid = uid, name = g.name, phone = g.phone, idType = g.idType,
+                            govIdNumber = g.govIdNumber, gender = g.gender, dob = g.dob, age = g.age,
+                            pictures = g.govIdPictures, lastStayMillis = stay.checkInActual.time, lastRoom = stay.roomNumber,
+                        )
+                    } else if (existing.uid.isBlank() && uid.isNotBlank()) {
+                        byKey[key] = existing.copy(uid = uid)   // upgrade with the owner UID
+                    }
+                }
+            }
+            val results = byKey.values.sortedByDescending { it.lastStayMillis }.take(8)
+            _walkInState.update { ws ->
+                if (ws.guestNameQuery.trim().lowercase() == q) ws.copy(guestNameMatches = results, isSearchingByName = false) else ws
+            }
+        }
+    }
+
+    /**
+     * Receptionist picked a returning guest from the name search: auto-fill the primary guest
+     * (name + ID + photos), PIN their existing account UID (wins over phone at submit), and
+     * show their balance by UID. The new phone they give today is captured normally and the
+     * pinned account is what flows to the stay/bill/ledger.
+     */
+    fun applyGuestNameMatch(match: GuestNameMatch) {
+        val age = if (match.age > 0) match.age else calculateAgeFromDob(match.dob) ?: 0
+        updateGuestEntry(0) { entry ->
+            entry.copy(
+                name = match.name.ifBlank { entry.name },
+                dob = match.dob.ifBlank { entry.dob },
+                gender = match.gender.ifBlank { entry.gender },
+                idType = match.idType.ifBlank { entry.idType },
+                govIdNumber = match.govIdNumber.ifBlank { entry.govIdNumber },
+                age = if (age > 0) age else entry.age,
+                govIdPicture1 = match.pictures.getOrElse(0) { entry.govIdPicture1 },
+                govIdPicture2 = match.pictures.getOrElse(1) { entry.govIdPicture2 },
+            )
+        }
+        _walkInState.update { ws ->
+            ws.copy(
+                guestName = match.name.ifBlank { ws.guestName },
+                guestNameQuery = match.name,
+                guestNameMatches = emptyList(),
+                pinnedGuestUid = match.uid,   // blank when no account resolvable (still autofills)
+                guestBalance = null,
+            )
+        }
+        // Show the pinned account's balance (by UID; today's phone may be new/different).
+        viewModelScope.launch {
+            val bal = when {
+                match.uid.isNotBlank() -> accountingRepo.fetchCustomerBalanceByUid(match.uid)
+                match.phone.isNotBlank() -> accountingRepo.fetchCustomerBalance(match.phone)
+                else -> null
+            }
+            _walkInState.update { ws ->
+                if (ws.pinnedGuestUid == match.uid && ws.guestName == match.name) ws.copy(guestBalance = bal) else ws
+            }
+        }
+    }
+
     fun onGuestIdProof(index: Int, verified: Boolean) = _walkInState.update { ws ->
         val updated = ws.guestEntries.toMutableList().also { it[index] = it[index].copy(idProofVerified = verified) }
         ws.copy(guestEntries = updated)
@@ -1996,14 +2140,29 @@ class StaysViewModel(
                         if (phoned != null) resolveUid(phoned.first.name.trim().ifBlank { primaryName }, phoned.second) else ""
                     }
                 }
+                // Find-by-name: if a returning guest's account was PINNED (identified by name,
+                // possibly with a new phone today), it owns the primary guest's room — overriding
+                // phone resolution so the correct ledger account flows to the stay → bill → ledger.
+                val pinnedUid = ws.pinnedGuestUid
+                if (pinnedUid.isNotBlank()) {
+                    val primaryRoom = ws.selectedInstanceIds.firstOrNull { id ->
+                        val a = ws.roomGuestAssignment[id]
+                        a == null || 0 in a.guestIndices
+                    } ?: ws.selectedInstanceIds.firstOrNull()
+                    if (primaryRoom != null) roomOwnUid[primaryRoom] = pinnedUid
+                    runCatching { userRepo.markCheckedIn(pinnedUid, true) }
+                }
                 // For a multi-room group, any room with no phoned guest borrows the group's
                 // account holder (the first room that resolved to a real user).
                 val groupAccountHolderUid = ws.selectedInstanceIds
                     .firstNotNullOfOrNull { roomOwnUid[it]?.takeIf { u -> u.isNotBlank() } } ?: ""
                 // Create/find user docs for ALL guests with name + phone (not just room owners).
                 // resolveUid() dedupes by phone via phoneToUid, so room owners aren't duplicated.
-                ws.guestEntries.forEach { entry ->
-                    val phone = normalizePhoneE164(entry.phone) ?: return@forEach
+                // The PINNED primary is skipped: their identity is the pinned account, and we must
+                // NOT create a new user doc for the new phone they gave today (per chosen policy).
+                ws.guestEntries.forEachIndexed { idx, entry ->
+                    if (idx == 0 && pinnedUid.isNotBlank()) return@forEachIndexed
+                    val phone = normalizePhoneE164(entry.phone) ?: return@forEachIndexed
                     runCatching { resolveUid(entry.name.trim().ifBlank { "Guest" }, phone) }
                 }
                 // Mark ALL resolved user accounts checked in (covers extra guests too).
@@ -2789,6 +2948,7 @@ class StaysViewModel(
             hotelId = AppContext.hotelId,
             stayId = primary.id,
             stayIds = stays.map { it.id },
+            userId = primary.userId,   // carries the guest's ledger account to the bill → settle
             guestName = primary.guestName,
             guestPhone = primary.guestPhone,
             roomNumber = allRoomNumbers.joinToString(", "),

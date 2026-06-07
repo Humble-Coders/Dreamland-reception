@@ -127,6 +127,19 @@ internal object AccountingApiClient {
             }.getOrNull()
         }
 
+    /** Look up a ledger customer (incl. its current balance) by externalId. Null if none. */
+    suspend fun findCustomerByExternalId(token: String, externalId: String): CustomerData? =
+        withContext(Dispatchers.IO) {
+            if (externalId.isBlank()) return@withContext null
+            val encoded = URLEncoder.encode(externalId, "UTF-8")
+            val raw = get(path = "/api/v1/customers?externalId=$encoded&limit=1", token = token)
+            runCatching {
+                val type = object : TypeToken<ApiEnvelope<List<CustomerData>>>() {}.type
+                val env: ApiEnvelope<List<CustomerData>> = gson.fromJson(raw, type)
+                env.data?.firstOrNull()
+            }.getOrNull()
+        }
+
     /**
      * Searches for customers whose name contains [name] (server-side substring match).
      * Returns an empty list on any non-fatal error rather than throwing.

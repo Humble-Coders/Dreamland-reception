@@ -28,8 +28,13 @@ data class Bill(
     val hotelId: String = "",
     val stayId: String = "",             // primary stay ID (used for single and group bills)
     val stayIds: List<String> = emptyList(), // all stay IDs for group bills
+    // Guest's Humble Ledger account UID (= stay.userId). The authoritative identity used
+    // at settle so a returning guest who gave a NEW phone still maps to the SAME ledger
+    // customer (balance never splits). Falls back to phone resolution only when blank.
+    val userId: String = "",
     val guestName: String = "",
     val guestPhone: String = "",
+    val guestGstin: String = "",          // optional customer GSTIN for B2B tax invoices
     val roomNumber: String = "",         // "22" or "22, 23, 24" for group
     val roomNumbers: List<String> = emptyList(), // ["22", "23", "24"] for group bills
     val checkInDate: Date? = null,

@@ -213,6 +213,31 @@ fun StayBillingScreen(
                         },
                     )
                 }
+                // Optional GSTIN — for B2B tax invoices. Blank by default; rendered on the
+                // invoice and stored on the ledger customer only when filled.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("GSTIN ", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                    BasicTextField(
+                        value = state.billGuestGstin,
+                        onValueChange = vm::onBillGuestGstin,
+                        singleLine = true,
+                        cursorBrush = SolidColor(DreamlandGold),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandMuted),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { vm.saveBillGuestGstin() }),
+                        modifier = Modifier
+                            .widthIn(min = 60.dp)
+                            .onFocusChanged { if (!it.isFocused) vm.saveBillGuestGstin() },
+                        decorationBox = { inner ->
+                            Box {
+                                if (state.billGuestGstin.isEmpty()) {
+                                    Text("optional", color = DreamlandMuted.copy(alpha = 0.4f), style = MaterialTheme.typography.bodySmall)
+                                }
+                                inner()
+                            }
+                        },
+                    )
+                }
                 if (roomLabel.isNotBlank()) Text(roomLabel, style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
             }
             state.bill?.let { bill ->
@@ -872,17 +897,84 @@ internal fun BillSummaryCard(
             // The rate comes from each item's category (shown as a pill on every row in the
             // left list) and is NOT editable here. The only control is whether the prices are
             // GST-inclusive (tax backed out of the price) or GST-added-on-top.
+            // Discount (live, editable) — computed up-front because GST is charged on the
+            // amount AFTER discount (discount applied before tax). The discount reduces the
+            // taxable base, so each rate's GST scales down by the same fraction.
+            val liveDiscountValue = editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+            val liveDiscountAmount = when (editableDiscountType) {
+                "PERCENT" -> bill.subtotal * liveDiscountValue / 100.0
+                else -> liveDiscountValue
+            }
+            val liveDiscountFraction = if (bill.subtotal > 0.0) (liveDiscountAmount / bill.subtotal).coerceIn(0.0, 1.0) else 0.0
+
+            // ── Discount (editable) — shown right after Subtotal because it is applied
+            //    BEFORE tax; the GST rows below are charged on the resulting taxable value. ──
+            if (readOnly) {
+                if (liveDiscountAmount > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    listOf("FLAT" to "₹", "PERCENT" to "%").forEach { (key, label) ->
+                        val selected = editableDiscountType == key
+                        Box(
+                            modifier = Modifier
+                                .height(24.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                                .clickable { onDiscountTypeChange(key) }
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 11.sp)
+                        }
+                    }
+                    BasicTextField(
+                        value = editableDiscountValue,
+                        onValueChange = onDiscountValueChange,
+                        singleLine = true,
+                        cursorBrush = SolidColor(DreamlandOnDark),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandOnDark, textAlign = TextAlign.End),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onDiscountSave() }),
+                        modifier = Modifier.width(56.dp).onFocusChanged { if (!it.isFocused) onDiscountSave() },
+                        decorationBox = { inner ->
+                            Box(contentAlignment = Alignment.CenterEnd) {
+                                if (editableDiscountValue.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
+                                inner()
+                            }
+                        },
+                    )
+                }
+                if (liveDiscountAmount > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Discount applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
+                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            // Taxable value — shown only when a discount applies; this is what GST is charged on.
+            if (liveDiscountAmount > 0) {
+                SummaryRow("Taxable value", (bill.subtotal - liveDiscountAmount).coerceAtLeast(0.0))
+            }
+
             val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
             fun itemGst(item: BillItem): Double = when {
                 !bill.taxEnabled || item.taxPercentage <= 0.0 -> 0.0
                 bill.taxInclusive -> item.total - item.total / (1.0 + item.taxPercentage / 100.0)
                 else -> item.total * item.taxPercentage / 100.0
             }
-            val liveTaxAmount = bill.items.sumOf { itemGst(it) }
+            val liveTaxAmount = bill.items.sumOf { itemGst(it) } * (1.0 - liveDiscountFraction)
 
             if (taxByRate.isNotEmpty()) {
                 taxByRate.toSortedMap().forEach { (rate, rateItems) ->
-                    val rateAmt = rateItems.sumOf { itemGst(it) }
+                    val rateAmt = rateItems.sumOf { itemGst(it) } * (1.0 - liveDiscountFraction)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("GST (${rate.fmtRate()})", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
                         Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
@@ -916,64 +1008,6 @@ internal fun BillSummaryCard(
                                 uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.25f),
                             ),
                         )
-                    }
-                }
-            }
-
-            // ── Compact discount row: label | [Flat][%] pills | value field ────
-            val liveDiscountValue = editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
-            val liveDiscountAmount = when (editableDiscountType) {
-                "PERCENT" -> bill.subtotal * liveDiscountValue / 100.0
-                else -> liveDiscountValue
-            }
-            if (readOnly) {
-                if (liveDiscountAmount > 0) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
-                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            } else {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Discount", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    // Compact FLAT | % pills
-                    listOf("FLAT" to "₹", "PERCENT" to "%").forEach { (key, label) ->
-                        val selected = editableDiscountType == key
-                        Box(
-                            modifier = Modifier
-                                .height(24.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
-                                .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
-                                .clickable { onDiscountTypeChange(key) }
-                                .padding(horizontal = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, fontSize = 11.sp)
-                        }
-                    }
-                    // Discount value field
-                    BasicTextField(
-                        value = editableDiscountValue,
-                        onValueChange = onDiscountValueChange,
-                        singleLine = true,
-                        cursorBrush = SolidColor(DreamlandOnDark),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(color = DreamlandOnDark, textAlign = TextAlign.End),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { onDiscountSave() }),
-                        modifier = Modifier.width(56.dp).onFocusChanged { if (!it.isFocused) onDiscountSave() },
-                        decorationBox = { inner ->
-                            Box(contentAlignment = Alignment.CenterEnd) {
-                                if (editableDiscountValue.isEmpty()) Text("0.00", color = DreamlandMuted.copy(alpha = 0.35f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
-                                inner()
-                            }
-                        },
-                    )
-                }
-                if (liveDiscountAmount > 0) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Discount applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
-                        Text("-₹${liveDiscountAmount.fmtAmt()}", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -1724,11 +1758,14 @@ private fun ConfirmPaymentDialogUI(
                                 .padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
+                            // Discount before tax: Subtotal → Discount → (Taxable) → GST → Total.
                             ConfirmRow("Subtotal", "₹${bill.subtotal.fmtAmt()}", DreamlandOnDark)
+                            if (bill.discountAmount > 0) {
+                                ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
+                                ConfirmRow("Taxable value", "₹${(bill.subtotal - bill.discountAmount).coerceAtLeast(0.0).fmtAmt()}", DreamlandOnDark)
+                            }
                             if (bill.taxEnabled && liveTaxAmount > 0)
                                 ConfirmRow(if (bill.taxInclusive) "GST (incl.)" else "GST", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
-                            if (bill.discountAmount > 0)
-                                ConfirmRow("Discount", "-₹${bill.discountAmount.fmtAmt()}", Color(0xFF4CAF50))
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
