@@ -24,7 +24,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtimeCompose)
         }
         commonTest.dependencies {
-            implementation(libs.kotlin.test)
+            implementation(libs.kotlin.test);
         }
         jvmMain.dependencies {
             implementation(compose.desktop.currentOs)
