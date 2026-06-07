@@ -206,6 +206,13 @@ class OrdersViewModel(
 
     // ── Status update ─────────────────────────────────────────────────────────
 
+    fun acknowledgeOrder(orderId: String) {
+        viewModelScope.launch {
+            runCatching { orderRepo.markAcknowledged(orderId) }
+                .onFailure { e -> _screenState.update { it.copy(error = e.message) } }
+        }
+    }
+
     fun updateStatus(orderId: String, status: String) {
         launchWithGlobalLoading {
             val order = _screenState.value.orders.find { it.id == orderId }

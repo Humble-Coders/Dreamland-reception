@@ -32,6 +32,10 @@ data class Order(
     val status: String = "NEW",      // NEW | ASSIGNED | COMPLETED
     val notes: String = "",
     val createdAt: Date = Date(),
+    // Guest-placed orders (source APP/WEBSITE) must be acknowledged by reception before
+    // they're considered "seen". Reception/legacy orders have source "" and never need it.
+    val acknowledged: Boolean = false,
+    val source: String = "",         // "APP" | "WEBSITE" | "" (reception/legacy)
     val assignedTo: String = "",
     val assignedToName: String = "",
     // ── Vendor / accounting (food bought from an outside supplier) ──────────────
@@ -47,3 +51,10 @@ data class Order(
     val vendorSynced: Boolean = false,
     val vendorSyncError: String = "",
 )
+
+/**
+ * A guest-placed (APP/WEBSITE) order that reception hasn't acknowledged yet and isn't already
+ * completed — a completed order (e.g. auto-completed at checkout) never needs acknowledgement.
+ */
+fun Order.needsAcknowledgement(): Boolean =
+    !acknowledged && status != "COMPLETED" && (source == "APP" || source == "WEBSITE")

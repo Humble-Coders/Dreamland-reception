@@ -7,6 +7,7 @@ import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.Complaint
 import com.example.dreamland_reception.data.model.Order
+import com.example.dreamland_reception.data.model.needsAcknowledgement
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.repository.BillRepository
@@ -89,6 +90,10 @@ data class DashboardState(
     val pendingPaymentsAmount: Double = 0.0,
     val activeComplaintsCount: Int = 0,
     val activeOrdersCount: Int = 0,
+    // Guest-placed (APP/WEBSITE) orders awaiting reception acknowledgement
+    val unacknowledgedAppOrders: List<Order> = emptyList(),
+    val pendingAckCount: Int = 0,
+    val showOrdersAckDialog: Boolean = false,
     // Room breakdown
     val roomStatus: RoomStatusBreakdown = RoomStatusBreakdown(),
     // Alerts & activity
@@ -170,6 +175,17 @@ class DashboardViewModel(
 
     fun clearError() = _state.update { it.copy(error = null) }
 
+    // ── Order acknowledgement (APP/WEBSITE orders) ─────────────────────────────
+    fun openOrdersAckDialog() = _state.update { it.copy(showOrdersAckDialog = true) }
+    fun closeOrdersAckDialog() = _state.update { it.copy(showOrdersAckDialog = false) }
+
+    fun acknowledgeOrder(orderId: String) {
+        viewModelScope.launch {
+            runCatching { orderRepo.markAcknowledged(orderId) }
+                .onFailure { e -> _state.update { it.copy(error = e.message) } }
+        }
+    }
+
     // ── Listener management ───────────────────────────────────────────────────
 
     private fun cancelAllListeners() {
@@ -207,7 +223,7 @@ class DashboardViewModel(
         roomsJob = viewModelScope.launch {
             var prevNeedsCleaningCount = -1
             roomInstanceRepo.listenByHotel(hotelId).collect { rooms ->
-                val newCount = rooms.count { it.needsCleaning }
+                val newCount = rooms.count { it.status == "CLEANING" }
                 if (prevNeedsCleaningCount >= 0 && newCount > prevNeedsCleaningCount) {
                     runCatching { com.example.dreamland_reception.ui.notification.NotificationManager.playSound() }
                 }
@@ -302,7 +318,7 @@ class DashboardViewModel(
             total = rooms.size,
             available = rooms.count { it.status == "AVAILABLE" && it.id !in activeRoomIds },
             occupied = activeRoomIds.size,
-            cleaning = rooms.count { it.needsCleaning },
+            cleaning = rooms.count { it.status == "CLEANING" },
             maintenance = rooms.count { it.status == "MAINTENANCE" },
         )
 
@@ -345,6 +361,8 @@ class DashboardViewModel(
                 pendingPaymentsAmount = pendingInvoices.sumOf { it.pendingAmount },
                 activeComplaintsCount = complaints.count { it.status in listOf("NEW", "ASSIGNED") },
                 activeOrdersCount = orders.count { it.status == "NEW" || it.status == "ASSIGNED" },
+                unacknowledgedAppOrders = orders.filter { it.needsAcknowledgement() }.sortedBy { it.createdAt },
+                pendingAckCount = orders.count { it.needsAcknowledgement() },
                 roomStatus = roomStatus,
                 alerts = buildAlerts(orders, complaints, rooms, pendingInvoices),
                 activeStays = activeStayRows,
@@ -380,9 +398,9 @@ class DashboardViewModel(
             ))
         }
 
-        val cleaningCount = rooms.count { it.needsCleaning }
+        val cleaningCount = rooms.count { it.status == "CLEANING" }
         if (cleaningCount > 0) {
-            val roomNums = rooms.filter { it.needsCleaning }.joinToString(", ") { it.roomNumber }
+            val roomNums = rooms.filter { it.status == "CLEANING" }.joinToString(", ") { it.roomNumber }
             alerts.add(DashboardAlert(
                 id = "cleaning_rooms", type = AlertType.CLEANING_ROOM,
                 title = "$cleaningCount Room${if (cleaningCount > 1) "s need" else " needs"} cleaning",
@@ -451,7 +469,6 @@ class DashboardViewModel(
         viewModelScope.launch {
             runCatching {
                 roomInstanceRepo.updateStatus(roomId, "AVAILABLE")
-                roomInstanceRepo.markNeedsCleaning(roomId, false)
             }
         }
     }

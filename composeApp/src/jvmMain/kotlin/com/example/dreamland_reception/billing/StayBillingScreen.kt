@@ -410,7 +410,13 @@ fun StayBillingScreen(
                                 Spacer(Modifier.height(8.dp))
                                 HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
                                 if (!isPreview) {
-                                    InlineAddPayment(pd = pd, vm = vm)
+                                    // Full balance due (total − advance already paid) for the All quick-fill.
+                                    val acpDiscV = state.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+                                    val acpDiscA = if (state.editableDiscountType == "PERCENT") bill.subtotal * acpDiscV / 100.0 else acpDiscV
+                                    val acpTotal = (bill.subtotal + bill.taxAmount - acpDiscA).coerceAtLeast(0.0)
+                                    val acpAdv = state.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+                                    val fullBalanceDue = (acpTotal - acpAdv).coerceAtLeast(0.0)
+                                    InlineAddPayment(pd = pd, vm = vm, fullBalanceDue = fullBalanceDue)
                                 } else if (bill.advancePayment > 0) {
                                     PaymentRow(
                                         label = "Advance paid at check-in",
@@ -1425,13 +1431,18 @@ private fun TypeSelectRow(type: String, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun InlineAddPayment(pd: AddPaymentDialog, vm: StayBillingViewModel) {
+private fun InlineAddPayment(pd: AddPaymentDialog, vm: StayBillingViewModel, fullBalanceDue: Double) {
+    val cashVal = pd.cashAmount.toDoubleOrNull() ?: 0.0
+    val bankVal = pd.bankAmount.toDoubleOrNull() ?: 0.0
     Column(Modifier.fillMaxWidth()) {
         SimplePaymentField(
             label = "CASH",
             amount = pd.cashAmount,
             onAmountChange = vm::onCashAmount,
             onSave = { vm.updateMethodTotal("CASH") },
+            showAll = fullBalanceDue > 0,
+            isAll = fullBalanceDue > 0 && cashVal >= fullBalanceDue && bankVal == 0.0,
+            onAllToggle = { allActive -> if (allActive) vm.onCashAmount("") else vm.fillFullBalance("CASH") },
         )
         HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
         SimplePaymentField(
@@ -1439,6 +1450,9 @@ private fun InlineAddPayment(pd: AddPaymentDialog, vm: StayBillingViewModel) {
             amount = pd.bankAmount,
             onAmountChange = vm::onBankAmount,
             onSave = { vm.updateMethodTotal("BANK") },
+            showAll = fullBalanceDue > 0,
+            isAll = fullBalanceDue > 0 && bankVal >= fullBalanceDue && cashVal == 0.0,
+            onAllToggle = { allActive -> if (allActive) vm.onBankAmount("") else vm.fillFullBalance("BANK") },
         )
     }
 }
@@ -1449,6 +1463,9 @@ private fun SimplePaymentField(
     amount: String,
     onAmountChange: (String) -> Unit,
     onSave: () -> Unit,
+    showAll: Boolean = false,
+    isAll: Boolean = false,
+    onAllToggle: (Boolean) -> Unit = {},
 ) {
     var focused by remember { mutableStateOf(false) }
     Row(
@@ -1467,6 +1484,19 @@ private fun SimplePaymentField(
             letterSpacing = 1.sp,
             modifier = Modifier.weight(1f),
         )
+        if (showAll) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(DreamlandGold.copy(alpha = if (isAll) 0.22f else 0.12f))
+                    .border(1.dp, DreamlandGold.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                    .clickable { onAllToggle(isAll) }
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+            ) {
+                Text(if (isAll) "✕" else "All", color = DreamlandGold, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.width(8.dp))
+        }
         Text("₹", color = if (focused) DreamlandGold else DreamlandMuted, style = MaterialTheme.typography.bodyMedium, fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Normal)
         Spacer(Modifier.width(4.dp))
         BasicTextField(

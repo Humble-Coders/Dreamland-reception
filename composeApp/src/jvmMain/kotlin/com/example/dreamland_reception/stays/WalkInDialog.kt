@@ -126,8 +126,25 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
 
     var currentStep by remember { mutableStateOf(1) }
 
+    // The GRC-print step exists only for actual check-ins (not "Add Booking" mode), and is the
+    // LAST step so the advance amount entered on Confirm is reflected on the card.
+    val showGrcStep = !state.isBookingMode
+    // Add Booking skips guest→room assignment: rooms are chosen in Step 1 and submitAsBooking()
+    // builds the booking from that; the assignment (Step 3) is a check-in-only concern.
+    val showAssignStep = !state.isBookingMode
+    val stepLabels = buildList {
+        add("Stay\nDetails"); add("Guest\nInfo")
+        if (showAssignStep) add("Assign\nRooms")
+        add("Confirm")
+        if (showGrcStep) add("Print\nGRC")
+    }
+    val totalSteps = stepLabels.size
+    val assignStep  = if (showAssignStep) 3 else -1
+    val confirmStep = if (showAssignStep) 4 else 3
+    val grcStep     = if (showGrcStep) confirmStep + 1 else -1
+
     // Step 3 validation: all rooms filled, all guests assigned to exactly one room
-    val step3Valid = if (currentStep == 3) {
+    val step3Valid = if (currentStep == assignStep) {
         val assignedIndices = state.roomGuestAssignment.values.flatMap { it.guestIndices }.toSet()
         val allGuestIndices = state.guestEntries.indices.toSet()
         state.selectedInstanceIds.isNotEmpty() &&
@@ -136,17 +153,6 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
             } &&
             allGuestIndices.all { it in assignedIndices }
     } else true
-
-    // The GRC-print step exists only for actual check-ins (not "Add Booking" mode), and is the
-    // LAST step so the advance amount entered on Confirm is reflected on the card.
-    val showGrcStep = !state.isBookingMode
-    val stepLabels = if (showGrcStep)
-        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm", "Print\nGRC")
-    else
-        listOf("Stay\nDetails", "Guest\nInfo", "Assign\nRooms", "Confirm")
-    val totalSteps = stepLabels.size
-    val confirmStep = 4
-    val grcStep = if (showGrcStep) 5 else -1
 
     Dialog(
         onDismissRequest = vm::closeWalkIn,
@@ -219,8 +225,8 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 when (currentStep) {
                     1 -> Step1StayDetails(state, vm)
                     2 -> Step2GuestInfo(state, vm)
-                    3 -> Step3AssignRooms(state = state, vm = vm)
-                    grcStep -> Step4PrintGrc(state, vm)
+                    assignStep  -> Step3AssignRooms(state = state, vm = vm)
+                    grcStep     -> Step4PrintGrc(state, vm)
                     confirmStep -> Step4Confirm(state, vm)
                 }
             }
@@ -252,7 +258,7 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 if (currentStep < totalSteps) {
                     Column(horizontalAlignment = Alignment.End) {
                         // Hint when step 3 validation fails
-                        if (currentStep == 3 && !step3Valid && !state.isBookingMode) {
+                        if (currentStep == assignStep && !step3Valid) {
                             val assignedIdx = state.roomGuestAssignment.values.flatMap { it.guestIndices }.toSet()
                             val unassigned = state.guestEntries.indices.count { it !in assignedIdx }
                             val emptyRooms = state.selectedInstanceIds.count {
@@ -664,6 +670,46 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
     // Categories with 0 available (not in map) show "0 avail." as a hint.
     val datesReady = state.expectedCheckOut != null
     val availChecked = datesReady && state.categoryAvailability.isNotEmpty()
+
+    if (state.isBookingMode) {
+        // Booking mode: a per-category row — name + price on the left, a +/- room-count
+        // stepper in the middle, and availability on the right. (Same logic as before —
+        // each stepper drives bookingRoomCountsByCategory; only the layout changed.)
+        if (!datesReady) {
+            Spacer(Modifier.height(6.dp))
+            Text("Set check-out date to see available rooms", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    state.categories.forEachIndexed { index, room ->
+                        val avail = state.categoryAvailability[room.id] ?: 0
+                        BookingCategoryCountRow(
+                            name = room.type,
+                            pricePerNight = state.priceForCategory(room.id),
+                            count = state.bookingRoomCountsByCategory[room.id] ?: 0,
+                            available = avail,
+                            availChecked = availChecked,
+                            onIncrement = {
+                                val cur = state.bookingRoomCountsByCategory[room.id] ?: 0
+                                if (cur < avail) vm.onBookingRoomCountForCategory(room.id, cur + 1)
+                            },
+                            onDecrement = {
+                                val cur = state.bookingRoomCountsByCategory[room.id] ?: 0
+                                vm.onBookingRoomCountForCategory(room.id, cur - 1)
+                            },
+                        )
+                        if (index < state.categories.lastIndex) {
+                            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
+                        }
+                    }
+                }
+            }
+        }
+    } else {
     DreamlandDropdown(
         modifier = Modifier.fillMaxWidth(),
         label = "Room Category *",
@@ -696,65 +742,6 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
     if (state.selectedCategoryId.isNotBlank() && state.expectedCheckOut != null) {
         Spacer(Modifier.height(10.dp))
 
-        if (state.isBookingMode) {
-            val catId = state.selectedCategoryId
-            val currentCount = state.bookingRoomCountsByCategory[catId] ?: 0
-            val maxAllowed = state.availableCount.takeIf { it > 0 } ?: Int.MAX_VALUE
-
-            // Per-category room count counter
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.weight(1f)) {
-                    CounterField(
-                        label = "Number of Rooms",
-                        value = currentCount,
-                        onIncrement = { if (currentCount < maxAllowed) vm.onBookingRoomCountForCategory(catId, currentCount + 1) },
-                        onDecrement = { vm.onBookingRoomCountForCategory(catId, currentCount - 1) },
-                    )
-                }
-            }
-
-
-            // Booking summary: all categories with room counts
-            val summaryEntries = buildList {
-                state.bookingRoomCountsByCategory.forEach { (cId, count) ->
-                    val cName = state.categories.find { it.id == cId }?.type
-                        ?: state.selectedInstanceDetails.values.find { it.categoryId == cId }?.categoryName
-                        ?: cId
-                    val specificRooms = state.selectedInstanceIds
-                        .filter { state.selectedInstanceDetails[it]?.categoryId == cId }
-                        .mapNotNull { state.selectedInstanceDetails[it]?.roomNumber }
-                    add(Triple(cId, count, specificRooms))
-                }
-                // Categories only in specific chips (no counter entry)
-                state.selectedInstanceDetails.values.groupBy { it.categoryId }.forEach { (cId, insts) ->
-                    if (cId !in state.bookingRoomCountsByCategory) {
-                        val cName = insts.first().categoryName
-                        val nums = insts.mapNotNull { it.roomNumber.ifBlank { null } }
-                        add(Triple(cId, nums.size, nums))
-                    }
-                }
-            }
-            if (summaryEntries.isNotEmpty()) {
-                Spacer(Modifier.height(14.dp))
-                WizardSectionLabel("BOOKING SUMMARY")
-                Spacer(Modifier.height(6.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    summaryEntries.forEach { (cId, count, rooms) ->
-                        val cName = state.categories.find { it.id == cId }?.type ?: cId
-                        val roomLabel = if (rooms.isEmpty()) "$count room${if (count != 1) "s" else ""}"
-                                        else "${rooms.size} room${if (rooms.size != 1) "s" else ""}: ${rooms.joinToString(", ")}"
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(cName, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                            Text(roomLabel, color = DreamlandGold, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-                        }
-                    }
-                }
-            }
-        } else {
         // Walk-in mode: SELECTED ROOMS shown above chip grid, then chip grid for current category
 
         // SELECTED ROOMS — shown above the chip grid so it stays visible when browsing any category
@@ -831,11 +818,11 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                 color = DreamlandMuted.copy(alpha = 0.6f),
             )
         }
-        } // end walk-in mode block
     } else if (state.selectedCategoryId.isNotBlank() && state.expectedCheckOut == null) {
         Spacer(Modifier.height(6.dp))
         Text("Set check-out date to see available rooms", style = MaterialTheme.typography.bodySmall, color = DreamlandMuted)
     }
+    } // end walk-in / group dropdown branch
 
     // Group requirements
     if (state.isGroupCheckIn && state.categoryRequirements.isNotEmpty()) {
@@ -1280,6 +1267,26 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
     }
     val advance = state.advancePayment.toDoubleOrNull() ?: 0.0
     val modeMissing = advance > 0 && state.advancePaymentMethod.isBlank()
+    // Full bill total — hoisted out of the "remaining" block below so the "All" quick-fill
+    // can use it even before any advance is typed. Resolves the priced categories exactly
+    // like PricingPreviewCard so room total AND tax are computed over the SAME set; in booking
+    // mode no specific instances are assigned, so fall back to the reserved room counts.
+    val grouped = state.selectedInstanceDetails.values.groupBy { it.categoryId }
+    val pricedCats: List<Pair<String, Int>> = when {
+        grouped.isNotEmpty() -> grouped.map { (catId, insts) -> catId to insts.size }
+        state.bookingRoomCountsByCategory.any { it.value > 0 } ->
+            state.bookingRoomCountsByCategory.filter { it.value > 0 }.map { (catId, count) -> catId to count }
+        state.selectedCategoryId.isNotBlank() -> listOf(state.selectedCategoryId to 1)
+        else -> emptyList()
+    }
+    val roomTotal = pricedCats.sumOf { (catId, count) -> state.priceForCategory(catId) * nights * count }
+    val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
+    val taxAmount = pricedCats.sumOf { (catId, count) ->
+        val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
+        state.priceForCategory(catId) * nights * count * taxRate / 100.0
+    }
+    // Pure walk-ins show pre-tax (tax revealed only at the billing screen); bookings include tax.
+    val total = roomTotal + bfCharge + (if (state.isWalkInOnly) 0.0 else taxAmount)
     WizardSectionLabel("ADVANCE PAYMENT")
     Spacer(Modifier.height(8.dp))
     Card(
@@ -1321,6 +1328,7 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     listOf("CASH", "BANK").forEach { method ->
                         val selected = state.advancePaymentMethod == method
+                        val isAll = selected && total > 0 && (state.advancePayment.toDoubleOrNull() ?: 0.0) >= total
                         Box(
                             Modifier
                                 .weight(1f)
@@ -1328,10 +1336,24 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
                                 .background(if (selected) DreamlandGold.copy(alpha = 0.18f) else Color.Transparent)
                                 .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
                                 .clickable { vm.onWalkInAdvancePaymentMethod(method) }
-                                .padding(vertical = 12.dp),
+                                .padding(vertical = 12.dp, horizontal = 10.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(method, color = if (selected) DreamlandGold else DreamlandMuted, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp)
+                            if (total > 0) {
+                                AllFillChip(
+                                    isAll = isAll,
+                                    modifier = Modifier.align(Alignment.CenterEnd),
+                                ) {
+                                    if (isAll) {
+                                        vm.onWalkInAdvancePayment("")
+                                        vm.onWalkInAdvancePaymentMethod("")
+                                    } else {
+                                        vm.onWalkInAdvancePaymentMethod(method)
+                                        vm.onWalkInAdvancePayment(plainAmount(total))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1340,27 +1362,6 @@ private fun Step4Confirm(state: WalkInState, vm: StaysViewModel) {
                 }
             }
             if (advance > 0 || bookingAdvance > 0) {
-                // Resolve the priced categories exactly like PricingPreviewCard so room
-                // total AND tax are always computed over the SAME set. In booking mode no
-                // specific instances are assigned, so we fall back to the reserved room
-                // counts (or the selected category) — otherwise tax would collapse to 0
-                // and the "remaining" would be understated.
-                val grouped = state.selectedInstanceDetails.values.groupBy { it.categoryId }
-                val pricedCats: List<Pair<String, Int>> = when {
-                    grouped.isNotEmpty() -> grouped.map { (catId, insts) -> catId to insts.size }
-                    state.bookingRoomCountsByCategory.any { it.value > 0 } ->
-                        state.bookingRoomCountsByCategory.filter { it.value > 0 }.map { (catId, count) -> catId to count }
-                    state.selectedCategoryId.isNotBlank() -> listOf(state.selectedCategoryId to 1)
-                    else -> emptyList()
-                }
-                val roomTotal = pricedCats.sumOf { (catId, count) -> state.priceForCategory(catId) * nights * count }
-                val bfCharge = if (state.breakfast) state.selectedCategoryBreakfastPrice * state.adults * nights else 0.0
-                val taxAmount = pricedCats.sumOf { (catId, count) ->
-                    val taxRate = state.categories.find { it.id == catId }?.taxPercentage ?: 0.0
-                    state.priceForCategory(catId) * nights * count * taxRate / 100.0
-                }
-                // Pure walk-ins show pre-tax (tax revealed only at the billing screen); bookings include tax.
-                val total = roomTotal + bfCharge + (if (state.isWalkInOnly) 0.0 else taxAmount)
                 // The advance field already includes any advance paid on the booking (auto-filled),
                 // so subtract only the field value — never the booking advance again.
                 val pending = (total - advance).coerceAtLeast(0.0)
@@ -1874,6 +1875,84 @@ private fun DobPickerField(modifier: Modifier = Modifier, dob: String, onDobChan
 @Composable
 private fun WizardSectionLabel(text: String) {
     Text(text, style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 1.5.sp, fontSize = 11.sp)
+}
+
+// Compact "All" / "×" quick-fill chip used inside the CASH/BANK payment-mode buttons.
+@Composable
+private fun AllFillChip(isAll: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(DreamlandGold.copy(alpha = if (isAll) 0.22f else 0.12f))
+            .border(1.dp, DreamlandGold.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (isAll) "✕" else "All", color = DreamlandGold, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// Renders a money amount as a plain field string: drops the trailing ".0" for whole numbers.
+private fun plainAmount(value: Double): String =
+    if (value % 1.0 == 0.0) value.toLong().toString() else "%.2f".format(value)
+
+// Booking-mode room-selection row: category name + price (left), a +/- room-count stepper
+// (middle), and availability (right). Drives bookingRoomCountsByCategory via the callbacks.
+@Composable
+private fun BookingCategoryCountRow(
+    name: String,
+    pricePerNight: Double,
+    count: Int,
+    available: Int,
+    availChecked: Boolean,
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text("₹${"%,.0f".format(pricePerNight)}/night", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StepButton("−", enabled = count > 0, onClick = onDecrement)
+            Text(
+                "$count",
+                color = if (count > 0) DreamlandGold else DreamlandMuted,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.widthIn(min = 20.dp),
+                textAlign = TextAlign.Center,
+            )
+            StepButton("+", enabled = count < available, onClick = onIncrement)
+        }
+        Text(
+            if (availChecked) "$available avail." else "—",
+            color = if (available > 0) Color(0xFF4CAF50) else DreamlandMuted,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.End,
+            modifier = Modifier.widthIn(min = 64.dp),
+        )
+    }
+}
+
+@Composable
+private fun StepButton(symbol: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .border(1.dp, if (enabled) DreamlandGold.copy(alpha = 0.5f) else DreamlandMuted.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(symbol, color = if (enabled) DreamlandGold else DreamlandMuted.copy(alpha = 0.5f), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    }
 }
 
 // ── Category requirements panel ───────────────────────────────────────────────

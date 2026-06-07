@@ -922,6 +922,30 @@ class StayBillingViewModel(
 
     fun setPendingGuestName(name: String) = _state.update { it.copy(pendingGuestNameOverride = name) }
 
+    /**
+     * "All" quick-fill: assign the entire remaining balance due (total − advance already paid)
+     * to [method] and reset the other method to blank, so the split never overpays.
+     */
+    fun fillFullBalance(method: String) {
+        val bill = _state.value.bill ?: return
+        val discV = _state.value.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+        val discA = when (_state.value.editableDiscountType) {
+            "PERCENT" -> bill.subtotal * discV / 100.0
+            else -> discV
+        }
+        val liveTotal = (bill.subtotal + bill.taxAmount - discA).coerceAtLeast(0.0)
+        val liveAdv = _state.value.editableAdvancePaid.toDoubleOrNull() ?: bill.advancePayment
+        val pending = (liveTotal - liveAdv).coerceAtLeast(0.0)
+        if (pending <= 0) return
+        val filled = "%.2f".format(pending)
+        _state.update {
+            it.copy(addPaymentDialog = if (method == "CASH")
+                it.addPaymentDialog.copy(cashAmount = filled, bankAmount = "")
+            else
+                it.addPaymentDialog.copy(bankAmount = filled, cashAmount = ""))
+        }
+    }
+
     fun payViaQr() {
         val bill = _state.value.bill ?: return
         // Tax is authoritative on the bill (recalculate handles inclusive/exclusive).

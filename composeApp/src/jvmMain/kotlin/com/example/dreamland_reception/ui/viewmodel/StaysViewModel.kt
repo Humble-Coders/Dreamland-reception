@@ -828,6 +828,11 @@ class StaysViewModel(
         val ws = _walkInState.value
         val primaryName = ws.guestEntries.firstOrNull()?.name?.trim()?.ifBlank { ws.guestName.trim() } ?: ws.guestName.trim()
         if (primaryName.isBlank()) { _walkInState.update { it.copy(error = "Primary guest name is required") }; return }
+        // The primary guest must have a valid phone so the booking can be linked to a guest record.
+        val rawPrimaryPhoneCheck = (ws.guestEntries.firstOrNull()?.phone ?: "").trim().ifBlank { ws.guestPhone.trim() }
+        if (normalizePhoneE164(rawPrimaryPhoneCheck) == null) {
+            _walkInState.update { it.copy(error = "Primary guest phone number is required") }; return
+        }
         val totalRooms = ws.bookingRoomCountsByCategory.values.sum() + ws.selectedInstanceIds.count { id ->
             val catId = ws.selectedInstanceDetails[id]?.categoryId ?: ""
             catId !in ws.bookingRoomCountsByCategory
@@ -893,6 +898,7 @@ class StaysViewModel(
                             adults = ws.adults, children = ws.children,
                             status = "CONFIRMED", source = sourceName, sourceId = sourceId,
                             totalAmount = total, advancePaidAmount = advancePerRoom,
+                            advancePaymentMethod = ws.advancePaymentMethod.ifBlank { "CASH" },
                             groupBookingId = groupId, createdAt = Date(),
                         ))
                     }
@@ -911,6 +917,7 @@ class StaysViewModel(
                             adults = ws.adults, children = ws.children,
                             status = "CONFIRMED", source = sourceName, sourceId = sourceId,
                             totalAmount = total, advancePaidAmount = advancePerRoom,
+                            advancePaymentMethod = ws.advancePaymentMethod.ifBlank { "CASH" },
                             groupBookingId = groupId, createdAt = Date(),
                         ))
                     }
@@ -2595,8 +2602,10 @@ class StaysViewModel(
                 sourceBooking = booking,
                 // Rate locked in the booking (not offline, not current category price).
                 priceOverrides = bookingPriceOverrides(listOf(booking), categories),
-                // Auto-fill the advance already paid on the booking (editable; mode still required).
+                // Auto-fill the advance already paid on the booking + the method it was paid via,
+                // so check-in reflects what was recorded when the booking was made (both editable).
                 advancePayment = formatAmountField(booking.advancePaidAmount),
+                advancePaymentMethod = booking.advancePaymentMethod,
             )
             // Populate full category availability map for all categories
             computeAvailability()

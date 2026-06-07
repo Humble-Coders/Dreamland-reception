@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.data.model.Order
+import com.example.dreamland_reception.data.model.needsAcknowledgement
 import com.example.dreamland_reception.orders.AssignStaffDialog
 import com.example.dreamland_reception.orders.CreateOrderDialog
 import com.example.dreamland_reception.orders.MarkDoneChoiceDialog
@@ -204,6 +206,7 @@ fun OrdersScreen(
                         stayPhoneMap = stayPhoneMap,
                         onMarkDone = { markDoneChoiceId = order.id },
                         onDelete = { confirmDeleteId = order.id },
+                        onAcknowledge = { vm.acknowledgeOrder(order.id) },
                     )
                     HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.08f))
                 }
@@ -307,7 +310,9 @@ private fun OrderTableRow(
     stayPhoneMap: Map<String, String> = emptyMap(),
     onMarkDone: () -> Unit,
     onDelete: () -> Unit,
+    onAcknowledge: () -> Unit = {},
 ) {
+    val needsAck = order.needsAcknowledgement()
     val statusColor = when (order.status) { "NEW" -> Color(0xFFFFC107); "ASSIGNED" -> Color(0xFF4CAF50); else -> DreamlandMuted }
     val isDone = order.status == "COMPLETED"
     val phone = stayPhoneMap[order.stayId]?.ifBlank { null } ?: order.guestPhone.ifBlank { "—" }
@@ -322,13 +327,21 @@ private fun OrderTableRow(
         Box(Modifier.width(W_STATUS).padding(top = 5.dp)) {
             Box(Modifier.size(8.dp).clip(CircleShape).background(statusColor))
         }
-        Text(
-            order.roomNumber.ifBlank { "—" },
-            style = MaterialTheme.typography.bodyMedium,
-            color = DreamlandOnDark,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(W_ROOM).padding(end = 8.dp),
-        )
+        Row(Modifier.weight(W_ROOM).padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                order.roomNumber.ifBlank { "—" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = DreamlandOnDark,
+                fontWeight = FontWeight.Bold,
+            )
+            if (needsAck) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFFFFC107).copy(alpha = 0.2f)).padding(horizontal = 5.dp, vertical = 1.dp),
+                ) {
+                    Text("NEW", color = Color(0xFFFFC107), fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
+                }
+            }
+        }
         Text(
             order.guestName.ifBlank { "—" },
             style = MaterialTheme.typography.bodyMedium,
@@ -379,24 +392,41 @@ private fun OrderTableRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            OutlinedButton(
-                onClick = onMarkDone,
-                enabled = !isDone,
-                modifier = Modifier.height(30.dp),
-                shape = RoundedCornerShape(6.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                border = BorderStroke(1.dp, if (isDone) DreamlandMuted.copy(alpha = 0.3f) else Color(0xFF4CAF50).copy(alpha = 0.7f)),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFF4CAF50),
-                    disabledContentColor = DreamlandMuted.copy(alpha = 0.4f),
-                ),
-            ) {
-                Text(
-                    if (isDone) "Done" else "Mark Done",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isDone) DreamlandMuted.copy(alpha = 0.4f) else Color(0xFF4CAF50),
-                )
+            // Unacknowledged guest orders must be acknowledged first, so we show only the
+            // Acknowledge button until then (Mark Done replaces it afterwards). This keeps the
+            // Actions column to two items so its width is unchanged.
+            if (needsAck) {
+                OutlinedButton(
+                    onClick = onAcknowledge,
+                    modifier = Modifier.height(30.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFFC107).copy(alpha = 0.7f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFC107)),
+                ) {
+                    Text("Acknowledge", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFFC107), maxLines = 1)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onMarkDone,
+                    enabled = !isDone,
+                    modifier = Modifier.height(30.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    border = BorderStroke(1.dp, if (isDone) DreamlandMuted.copy(alpha = 0.3f) else Color(0xFF4CAF50).copy(alpha = 0.7f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF4CAF50),
+                        disabledContentColor = DreamlandMuted.copy(alpha = 0.4f),
+                    ),
+                ) {
+                    Text(
+                        if (isDone) "Done" else "Mark Done",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isDone) DreamlandMuted.copy(alpha = 0.4f) else Color(0xFF4CAF50),
+                        maxLines = 1,
+                    )
+                }
             }
             IconButton(onClick = onDelete, modifier = Modifier.size(30.dp)) {
                 Icon(Icons.Filled.Delete, contentDescription = "Delete", tint = Color(0xFFEF5350).copy(alpha = 0.7f), modifier = Modifier.size(14.dp))
@@ -445,7 +475,16 @@ private fun OrderListItem(order: Order, isSelected: Boolean, onClick: () -> Unit
         Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 9.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Room ${order.roomNumber}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = DreamlandOnDark)
-                OrderTypeBadge(order.type)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (order.needsAcknowledgement()) {
+                        Box(
+                            Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFFFFC107).copy(alpha = 0.2f)).padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text("NEW", color = Color(0xFFFFC107), fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    OrderTypeBadge(order.type)
+                }
             }
             Text(order.guestName, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
             Spacer(Modifier.height(4.dp))
@@ -564,6 +603,20 @@ private fun OrderDetailPanel(order: Order, vm: OrdersViewModel) {
         // Actions
         Text("ACTIONS", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, letterSpacing = 1.5.sp)
         Spacer(Modifier.height(12.dp))
+
+        if (order.needsAcknowledgement()) {
+            Button(
+                onClick = { vm.acknowledgeOrder(order.id) },
+                modifier = Modifier.fillMaxWidth().height(42.dp),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFC107)),
+            ) {
+                Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Acknowledge", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(10.dp))
+        }
 
         when (order.status) {
             "NEW" -> {

@@ -371,10 +371,8 @@ class RoomsAndBookingsViewModel(
     fun markCleaningComplete(room: RoomInstance) {
         launchWithGlobalLoading {
             runCatching {
-                // Clear needsCleaning flag AND ensure status is AVAILABLE
-                // (handles both new-flow rooms and legacy CLEANING-status rooms)
+                // Housekeeping done — return the CLEANING room to AVAILABLE.
                 roomInstanceRepo.updateStatus(room.id, "AVAILABLE", null)
-                roomInstanceRepo.markNeedsCleaning(room.id, false)
             }
                 .onSuccess { _uiState.update { it.copy(operationMessage = "Room ${room.roomNumber} marked as available") } }
                 .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
