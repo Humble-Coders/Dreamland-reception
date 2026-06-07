@@ -14,6 +14,9 @@ import java.util.Date
 /** Reception's chosen refund amount source for a cancellation. */
 enum class ReceptionRefundMode { POLICY, FULL, FIXED }
 
+/** Payout method for hotel-side (walk-in) manual refunds. */
+enum class ManualRefundMethod { CASH, BANK }
+
 /** Decoded response from cancelBookingByReceptionHttp. */
 data class CancelBookingResult(
     val groupBookingId: String,
@@ -49,6 +52,23 @@ interface BookingRepository {
         fixedRefundPaise: Long?,
         cancelledByReceptionUserId: String,
     ): CancelBookingResult
+
+    /**
+     * Cancel + log a manual refund for a HOTEL-SIDE (walk-in) booking group.
+     * No Cloud Function, no Razorpay — the cash/bank payout happens at the desk.
+     * This method just flips the booking statuses + writes the audit fields so
+     * the cancellation is on record. Every booking in [bookingIds] is updated
+     * in a single Firestore transaction.
+     */
+    suspend fun cancelByReceptionManual(
+        bookingIds: List<String>,
+        reason: String,
+        refundMode: ReceptionRefundMode,
+        refundAmountPaise: Long,
+        method: ManualRefundMethod,
+        cancelledByReceptionUserId: String,
+    )
+
     fun listenByHotel(hotelId: String): Flow<List<Booking>>
 }
 
@@ -197,6 +217,51 @@ object FirestoreBookingRepository : BookingRepository {
         )
     }
 
+    override suspend fun cancelByReceptionManual(
+        bookingIds: List<String>,
+        reason: String,
+        refundMode: ReceptionRefundMode,
+        refundAmountPaise: Long,
+        method: ManualRefundMethod,
+        cancelledByReceptionUserId: String,
+    ) = withContext(Dispatchers.IO) {
+        require(bookingIds.isNotEmpty()) { "bookingIds must not be empty" }
+        require(reason.trim().length in 10..500) { "reason must be 10–500 chars" }
+        require(refundAmountPaise >= 0L) { "refundAmountPaise must be non-negative" }
+        val fs = FirestoreRepositorySupport.get()
+        fs.runTransaction { txn ->
+            // Pre-read every booking so the transaction sees the latest state.
+            val refs = bookingIds.map { col.document(it) }
+            val snaps = refs.map { txn.get(it).get() }
+            // Refuse if any booking has already been cancelled — keeps the audit clean.
+            for (snap in snaps) {
+                val status = snap.getString("status") ?: ""
+                if (status == "CANCELLED") {
+                    throw IllegalStateException("Booking ${snap.id} is already cancelled")
+                }
+                if (status == "CHECKED_IN") {
+                    throw IllegalStateException("Booking ${snap.id} is already checked in")
+                }
+            }
+            val now = java.util.Date()
+            for (ref in refs) {
+                txn.update(ref, mapOf(
+                    "status"                          to "CANCELLED",
+                    "cancellationSource"              to "RECEPTION",
+                    "cancelledAt"                     to now,
+                    "cancellationLockedAt"            to 0,
+                    "cancellationReason"              to reason.trim(),
+                    "cancelledByReceptionUserId"      to cancelledByReceptionUserId,
+                    "cancellationRefundMode"          to refundMode.name,
+                    "cancellationRefundAmountPaise"   to refundAmountPaise,
+                    "cancellationRefundStatus"        to "MANUAL",
+                    "cancellationRefundId"            to "",
+                    "cancellationManualRefundMethod"  to method.name,
+                ))
+            }
+        }.get(); Unit
+    }
+
     override fun listenByHotel(hotelId: String): Flow<List<Booking>> = callbackFlow {
         val registration = col.whereEqualTo("hotelId", hotelId)
             .addSnapshotListener { snapshot, error ->
@@ -273,6 +338,7 @@ object FirestoreBookingRepository : BookingRepository {
             cancellationRefundAmountPaise = (get("cancellationRefundAmountPaise") as? Number)?.toLong() ?: 0L,
             cancellationRefundStatus = getString("cancellationRefundStatus") ?: "",
             cancellationRefundMode = getString("cancellationRefundMode") ?: "",
+            cancellationManualRefundMethod = getString("cancellationManualRefundMethod") ?: "",
         )
     }.getOrNull()
 

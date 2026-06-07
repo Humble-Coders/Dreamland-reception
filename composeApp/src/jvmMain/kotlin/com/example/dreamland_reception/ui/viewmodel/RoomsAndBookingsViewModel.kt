@@ -14,6 +14,7 @@ import com.example.dreamland_reception.data.repository.BookingRepository
 import com.example.dreamland_reception.data.repository.BookingSourceRepository
 import com.example.dreamland_reception.data.repository.CancelBookingResult
 import com.example.dreamland_reception.data.repository.FirestoreBookingRepository
+import com.example.dreamland_reception.data.repository.ManualRefundMethod
 import com.example.dreamland_reception.data.repository.ReceptionRefundMode
 import com.example.dreamland_reception.data.repository.FirestoreBookingSourceRepository
 import com.example.dreamland_reception.data.repository.FirestoreHotelRepository
@@ -64,18 +65,39 @@ data class CancelDialogState(
     val groupBookings: List<Booking>,              // all bookings sharing primary.groupBookingId (or just [primary])
     val reason: String = "",
     val refundMode: ReceptionRefundMode = ReceptionRefundMode.POLICY,
-    val fixedRefundRupeesInput: String = "",       // raw text from the ₹ field
+    /**
+     * Free-text ₹ amount field.
+     *   - Razorpay flow: only used (and only shown) for FIXED mode.
+     *   - Manual flow: ALWAYS shown. Auto-filled by the ViewModel when POLICY
+     *     or FULL is selected; blank when FIXED is selected.
+     */
+    val refundAmountRupeesInput: String = "",
+    /**
+     * Manual-refund payout method. `null` until reception picks one.
+     * Only relevant when [isManual] is true; ignored on the Razorpay flow.
+     */
+    val paidVia: ManualRefundMethod? = null,
     val isLoading: Boolean = false,
     val error: CancelDialogError? = null,
     /**
      * Computed POLICY-mode refund preview (in paise).
      *   null   → still loading the room policies from Firestore
      *   value  → final amount, even if 0 (no refund per policy)
-     * Shown as a hint under the "As per cancellation policy" radio.
      */
     val policyPreviewPaise: Long? = null,
 ) {
-    val totalAdvancePaise: Long get() = groupBookings.sumOf { it.advancePaidAmountPaise }
+    /** Sum of advances across the group, falling back to rupees Double if the paise field isn't populated (walk-in bookings). */
+    val totalAdvancePaise: Long get() = groupBookings.sumOf {
+        if (it.advancePaidAmountPaise > 0L) it.advancePaidAmountPaise
+        else (it.advancePaidAmount * 100.0).toLong()
+    }
+
+    /**
+     * `true` when this booking group was created hotel-side (no Razorpay payment).
+     * Drives the entire manual-refund branch: shows the info banner, the
+     * Refund-amount field on all modes, and the Paid-via CASH/BANK toggle.
+     */
+    val isManual: Boolean get() = groupBookings.all { it.paymentOrderId.isBlank() }
 }
 
 data class RoomCategoryEntry(
@@ -442,12 +464,24 @@ class RoomsAndBookingsViewModel(
     fun onCancelRefundModeChanged(mode: ReceptionRefundMode) {
         _uiState.update { s ->
             val d = s.cancelDialog ?: return@update s
-            val cleared = if (mode != ReceptionRefundMode.FIXED) "" else d.fixedRefundRupeesInput
-            s.copy(cancelDialog = d.copy(refundMode = mode, fixedRefundRupeesInput = cleared, error = null))
+            // Compute the new amount-field content based on the picked mode + whether
+            // this is the manual flow. POLICY → policy preview; FULL → total advance;
+            // FIXED → blank so reception types it.
+            val newInput = when {
+                d.isManual && mode == ReceptionRefundMode.POLICY ->
+                    d.policyPreviewPaise?.let { paiseToRupeesField(it) } ?: ""
+                d.isManual && mode == ReceptionRefundMode.FULL ->
+                    paiseToRupeesField(d.totalAdvancePaise)
+                d.isManual && mode == ReceptionRefundMode.FIXED -> ""
+                // Razorpay flow: only FIXED uses the field — clear it on mode switch.
+                mode != ReceptionRefundMode.FIXED -> ""
+                else -> d.refundAmountRupeesInput
+            }
+            s.copy(cancelDialog = d.copy(refundMode = mode, refundAmountRupeesInput = newInput, error = null))
         }
     }
 
-    fun onCancelFixedRupeesChanged(text: String) {
+    fun onCancelRefundAmountChanged(text: String) {
         // Accept digits + at most one '.' + max 2 decimal places.
         val sanitized = buildString {
             var seenDot = false
@@ -465,9 +499,20 @@ class RoomsAndBookingsViewModel(
         }
         _uiState.update { s ->
             val d = s.cancelDialog ?: return@update s
-            s.copy(cancelDialog = d.copy(fixedRefundRupeesInput = sanitized, error = null))
+            s.copy(cancelDialog = d.copy(refundAmountRupeesInput = sanitized, error = null))
         }
     }
+
+    /** Reception picks how the cash/bank transfer happens (manual flow only). */
+    fun onPaidViaChanged(method: ManualRefundMethod) {
+        _uiState.update { s ->
+            val d = s.cancelDialog ?: return@update s
+            s.copy(cancelDialog = d.copy(paidVia = method, error = null))
+        }
+    }
+
+    private fun paiseToRupeesField(paise: Long): String =
+        if (paise % 100L == 0L) (paise / 100L).toString() else "%.2f".format(paise / 100.0)
 
     fun confirmCancelByReception() {
         val dialog = _uiState.value.cancelDialog ?: return
@@ -481,12 +526,21 @@ class RoomsAndBookingsViewModel(
             return
         }
 
-        // Guard: FIXED amount valid + ≤ total advance.
+        val staffId = AppContext.currentManager.ifBlank { "reception_unknown" }
+
+        if (dialog.isManual) {
+            confirmManualRefund(dialog, staffId)
+        } else {
+            confirmRazorpayRefund(dialog, staffId)
+        }
+    }
+
+    private fun confirmRazorpayRefund(dialog: CancelDialogState, staffId: String) {
+        // Razorpay flow: only FIXED mode uses the amount field; POLICY/FULL are server-computed.
         var fixedPaise: Long? = null
         if (dialog.refundMode == ReceptionRefundMode.FIXED) {
-            val rupees = dialog.fixedRefundRupeesInput.toDoubleOrNull()
-            val paise = rupees?.let { (it * 100).toLong() } ?: -1L
-            if (paise <= 0L) {
+            val paise = rupeesInputToPaise(dialog.refundAmountRupeesInput)
+            if (paise == null || paise <= 0L) {
                 _uiState.update { it.copy(cancelDialog = dialog.copy(
                     error = CancelDialogError("Invalid amount", "Enter an amount greater than ₹0.", retrySafe = false)
                 ))}
@@ -505,8 +559,7 @@ class RoomsAndBookingsViewModel(
             fixedPaise = paise
         }
 
-        val staffId = AppContext.currentManager.ifBlank { "reception_unknown" }
-
+        val booking = dialog.primary
         _uiState.update { it.copy(cancelDialog = dialog.copy(isLoading = true, error = null)) }
 
         viewModelScope.launch {
@@ -535,6 +588,71 @@ class RoomsAndBookingsViewModel(
                 }
             }
         }
+    }
+
+    private fun confirmManualRefund(dialog: CancelDialogState, staffId: String) {
+        // Manual flow: amount field is ALWAYS the source of truth (auto-filled or typed).
+        val method = dialog.paidVia
+        if (method == null) {
+            _uiState.update { it.copy(cancelDialog = dialog.copy(
+                error = CancelDialogError("Pick payout method", "Select CASH or BANK to confirm the manual refund.", retrySafe = false)
+            ))}
+            return
+        }
+        val paise = rupeesInputToPaise(dialog.refundAmountRupeesInput)
+        if (paise == null || paise < 0L) {
+            _uiState.update { it.copy(cancelDialog = dialog.copy(
+                error = CancelDialogError("Invalid amount", "Enter a valid refund amount in ₹.", retrySafe = false)
+            ))}
+            return
+        }
+        if (paise > dialog.totalAdvancePaise) {
+            _uiState.update { it.copy(cancelDialog = dialog.copy(
+                error = CancelDialogError(
+                    "Amount too high",
+                    "Must be at most ₹${"%.2f".format(dialog.totalAdvancePaise / 100.0)} (the advance paid).",
+                    retrySafe = false,
+                )
+            ))}
+            return
+        }
+
+        val booking = dialog.primary
+        _uiState.update { it.copy(cancelDialog = dialog.copy(isLoading = true, error = null)) }
+
+        viewModelScope.launch {
+            runCatching {
+                bookingRepo.cancelByReceptionManual(
+                    bookingIds = dialog.groupBookings.map { it.id },
+                    reason = dialog.reason.trim(),
+                    refundMode = dialog.refundMode,
+                    refundAmountPaise = paise,
+                    method = method,
+                    cancelledByReceptionUserId = staffId,
+                )
+            }.onSuccess {
+                val rupees = "%.2f".format(paise / 100.0)
+                _uiState.update {
+                    it.copy(
+                        cancelDialog = null,
+                        operationMessage = "Cancelled for ${booking.guestName}. Manual refund of ₹$rupees logged (${method.name}).",
+                    )
+                }
+            }.onFailure { e ->
+                _uiState.update { s ->
+                    val d = s.cancelDialog ?: return@update s
+                    s.copy(cancelDialog = d.copy(
+                        isLoading = false,
+                        error = CancelDialogError("Couldn't cancel", e.message ?: "Firestore write failed.", retrySafe = true),
+                    ))
+                }
+            }
+        }
+    }
+
+    private fun rupeesInputToPaise(input: String): Long? {
+        val rupees = input.toDoubleOrNull() ?: return null
+        return (rupees * 100.0).toLong()
     }
 
     private fun openCancelDialogFor(booking: Booking, fromGroupEntry: Boolean) {
@@ -583,7 +701,16 @@ class RoomsAndBookingsViewModel(
             val previewPaise = runCatching { computePolicyRefundPaise(group) }.getOrDefault(0L)
             _uiState.update { s ->
                 val d = s.cancelDialog ?: return@update s
-                s.copy(cancelDialog = d.copy(policyPreviewPaise = previewPaise))
+                // On the manual flow, when POLICY is still the active selection and the
+                // amount field is empty, auto-fill it now that the preview has loaded.
+                val autoFill = d.isManual
+                    && d.refundMode == ReceptionRefundMode.POLICY
+                    && d.refundAmountRupeesInput.isBlank()
+                val newInput = if (autoFill) paiseToRupeesField(previewPaise) else d.refundAmountRupeesInput
+                s.copy(cancelDialog = d.copy(
+                    policyPreviewPaise = previewPaise,
+                    refundAmountRupeesInput = newInput,
+                ))
             }
         }
     }
@@ -613,7 +740,10 @@ class RoomsAndBookingsViewModel(
 
             var total = 0L
             for (b in group) {
-                val advance = b.advancePaidAmountPaise
+                // Walk-in bookings store advance as Double rupees; fall back so the
+                // calculator works for both app-paid and hotel-side bookings.
+                val advance = if (b.advancePaidAmountPaise > 0L) b.advancePaidAmountPaise
+                              else (b.advancePaidAmount * 100.0).toLong()
                 if (advance <= 0L) continue
                 val p = policies[b.roomCategoryId] ?: continue
                 val (freeCancellation, freeBefore, refundPercent) = p
@@ -632,9 +762,8 @@ class RoomsAndBookingsViewModel(
         if (group.any { it.status != "CONFIRMED" }) {
             return "Only CONFIRMED bookings can be cancelled."
         }
-        if (group.any { it.paymentOrderId.isBlank() }) {
-            return "Walk-in bookings have no online payment — handle refund manually at the desk."
-        }
+        // Note: a missing paymentOrderId is NOT a blocker — those bookings are hotel-side
+        // (walk-in) and route to the manual-refund branch of the cancel dialog.
         val now = System.currentTimeMillis()
         val graceMs = 10L * 60L * 1000L
         if (group.any { b ->
