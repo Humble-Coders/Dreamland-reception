@@ -44,12 +44,20 @@ import java.util.Locale
  * The advance payment + all checkout PAYMENTs equal the invoice total exactly,
  * enforced by a penny adjustment on the last checkout payment.
  *
+ * ## Advance lifecycle (deposit in once, adjusted once)
+ * The advance is posted to the ledger AT CHECK-IN (`checkin_<stayId>_advance`) and is
+ * NEVER reversed. At checkout, settle posts only the DIFFERENCE if the recorded advance
+ * grew (`stay_<stayId>_advance_topup`), then applies it to the invoice
+ * (`stay_<stayId>_advance_applied`). Any surplus held beyond the bill's advance stays as
+ * customer credit.
+ *
  * ## Idempotency
  * Every posting uses a deterministic sourceId:
- *   stay_<stayId>_advance_in      ADVANCE
- *   stay_<stayId>_sale            SALE
- *   stay_<stayId>_advance_applied ADVANCE_APPLIED
- *   stay_<stayId>_txn_<txnId>     PAYMENT (one per PaymentTransaction)
+ *   checkin_<stayId>_advance       ADVANCE (posted at check-in; never reversed)
+ *   stay_<stayId>_advance_topup    ADVANCE (only the extra collected vs. check-in)
+ *   stay_<stayId>_sale             SALE
+ *   stay_<stayId>_advance_applied  ADVANCE_APPLIED
+ *   stay_<stayId>_txn_<txnId>      PAYMENT (one per PaymentTransaction)
  */
 /** A vendor's current Humble Ledger balance. [payable] > 0 = we owe them. */
 data class VendorBalanceInfo(val payable: Double, val balanceType: String)
@@ -145,48 +153,53 @@ object AccountingRepository {
 
         // ── 3. Resolve customer (need accountId for ADVANCE_APPLIED) ──────────
         log("Resolving customer '${bill.guestName}' (uid='$guestUid')")
-        val customer       = resolveCustomer(token, bill.guestName, guestPhone, guestUid)
+        val customer       = resolveCustomer(token, bill.guestName, guestPhone, guestUid, bill.guestGstin)
         val customerId     = customer.id
         val customerArId   = customer.accountId   // AR sub-account for ADVANCE_APPLIED credit leg
         log("Customer — id=$customerId, arAccountId=$customerArId")
 
-        // ── 4. Reverse any check-in advance postings + ensure liability account ──
-        // A stay may have posted its advance to the ledger AT CHECK-IN (so live
-        // cash/bank reflected it immediately). Reverse those here so the
-        // authoritative advance posted in step 5 is the only surviving entry — this
-        // is what makes edited advances and group bills reconcile exactly. Stays
-        // checked in before early-posting existed aren't flagged, so are untouched.
-        val reversibleCheckInAdvances = resolveReversibleCheckInAdvances(bill)
+        // ── 4. Ensure liability account + measure advance already held from check-in ──
+        // The advance posted AT CHECK-IN stays in the ledger — it is NOT reversed (that's
+        // not how a real deposit works). Here we only measure how much is already held so
+        // step 5 can post the DIFFERENCE if the recorded advance changed, and step 7
+        // applies it to the invoice. Deposit comes in once, is adjusted once.
+        val alreadyHeldAtCheckIn = resolveCheckInAdvanceHeld(bill)
         val advanceLiabilityId: String? =
-            if (hasAdvance || reversibleCheckInAdvances.isNotEmpty()) {
+            if (hasAdvance || alreadyHeldAtCheckIn > 0.01) {
                 val id = ensureAdvanceLiabilityAccount(token)
-                log("Advance liability account id=$id")
+                log("Advance liability account id=$id (alreadyHeldAtCheckIn=$alreadyHeldAtCheckIn)")
                 id
             } else null
-        if (advanceLiabilityId != null && reversibleCheckInAdvances.isNotEmpty()) {
-            reverseCheckInAdvances(token, reversibleCheckInAdvances, advanceLiabilityId)
-        }
 
-        // ── 5. ADVANCE — DR Cash / CR Advance Liability ───────────────────────
-        // Posted with the check-in date because cash was received at check-in.
+        // ── 5. ADVANCE TOP-UP — only the part not already held from check-in ──────
+        // The check-in advance already sits in the liability, so we post a fresh cash-in
+        // only for the DIFFERENCE: when more was collected than was posted at check-in,
+        // or when nothing was posted there (legacy stays, or an advance entered only at
+        // checkout). A *reduction* is never removed here — when step 7 applies only the
+        // bill's advance, any surplus simply stays as the guest's credit.
         if (hasAdvance && advanceLiabilityId != null) {
-            log("Posting ADVANCE — amount=$advanceRounded, date=$checkInDate, " +
-                "sourceId=stay_${bill.stayId}_advance_in")
-            client.postRawTransaction(
-                token = token,
-                req   = RawTransactionRequest(
-                    appId       = APP_ID,
-                    sourceId    = "stay_${bill.stayId}_advance_in",
-                    postingType = "ADVANCE",
-                    description = stampManager("Advance received — Room ${bill.roomNumber} (${bill.guestName})"),
-                    date        = checkInDate,
-                    entries     = listOf(
-                        RawEntryInput(account = if (bill.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "DEBIT", amount = advanceRounded),
-                        RawEntryInput(accountId = advanceLiabilityId, type = "CREDIT", amount = advanceRounded),
+            val topUp = roundAmount(advanceRounded - alreadyHeldAtCheckIn)
+            if (topUp > 0.01) {
+                log("Posting ADVANCE TOP-UP — amount=$topUp (bill=$advanceRounded, held=$alreadyHeldAtCheckIn), " +
+                    "date=$checkInDate, sourceId=stay_${bill.stayId}_advance_topup")
+                client.postRawTransaction(
+                    token = token,
+                    req   = RawTransactionRequest(
+                        appId       = APP_ID,
+                        sourceId    = "stay_${bill.stayId}_advance_topup",
+                        postingType = "ADVANCE",
+                        description = stampManager("Advance received — Room ${bill.roomNumber} (${bill.guestName})"),
+                        date        = checkInDate,
+                        entries     = listOf(
+                            RawEntryInput(account = if (bill.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "DEBIT", amount = topUp),
+                            RawEntryInput(accountId = advanceLiabilityId, type = "CREDIT", amount = topUp),
+                        ),
                     ),
-                ),
-            )
-            log("ADVANCE posted OK")
+                )
+                log("ADVANCE TOP-UP posted OK")
+            } else {
+                log("No advance top-up needed (bill=$advanceRounded, held=$alreadyHeldAtCheckIn)")
+            }
         }
 
         // ── 6. SALE — DR AR / CR Revenue (+ CR GST Payable) ──────────────────
@@ -388,43 +401,23 @@ object AccountingRepository {
     }
 
     /**
-     * Fetches the stays on [bill] whose advance was posted to the ledger at check-in
-     * (and is therefore reversible at checkout). A fetch failure propagates so the
-     * caller retries — never silently skipping a reversal, which would double-count.
+     * Sums the advance already sitting in the Advance Liability account from CHECK-IN
+     * for the stays on [bill] (those flagged [Stay.ledgerAdvancePostedAtCheckIn]).
+     *
+     * The checkout flow keeps those postings and tops up only the difference, so this
+     * must be accurate: a stay that cannot be loaded throws, which fails settle so it
+     * is retried — never guessing 0, which would double-post the advance.
      */
-    private suspend fun resolveReversibleCheckInAdvances(bill: Bill): List<Stay> {
+    private suspend fun resolveCheckInAdvanceHeld(bill: Bill): Double {
         val stayIds = bill.stayIds.ifEmpty { listOf(bill.stayId) }.filter { it.isNotBlank() }.distinct()
-        if (stayIds.isEmpty()) return emptyList()
-        return stayIds.mapNotNull { sid -> FirestoreStayRepository.getById(sid) }
-            .filter { it.ledgerAdvancePostedAtCheckIn && roundAmount(it.advancePaidAmount) > 0.01 }
-    }
-
-    /**
-     * Reverses each stay's check-in advance posting (the mirror of [postCheckInAdvance]):
-     *   DR Advance Liability     advance
-     *   CR Cash | Bank           advance
-     * Idempotent on `checkin_<stayId>_advance_reversal`.
-     */
-    private suspend fun reverseCheckInAdvances(token: String, stays: List<Stay>, advanceLiabilityId: String) {
-        for (stay in stays) {
-            val amt = roundAmount(stay.advancePaidAmount)
-            if (amt <= 0.01) continue
-            log("Reversing check-in advance — stay=${stay.id}, amount=$amt, method=${stay.advancePaymentMethod}")
-            client.postRawTransaction(
-                token = token,
-                req   = RawTransactionRequest(
-                    appId       = APP_ID,
-                    sourceId    = "checkin_${stay.id}_advance_reversal",
-                    postingType = "ADVANCE",
-                    description = stampManager("Advance re-posted on invoice — Room ${stay.roomNumber}"),
-                    date        = LocalDate.now().toString(),
-                    entries     = listOf(
-                        RawEntryInput(accountId = advanceLiabilityId, type = "DEBIT", amount = amt),
-                        RawEntryInput(account = if (stay.advancePaymentMethod == "BANK") "Bank" else "Cash", type = "CREDIT", amount = amt),
-                    ),
-                ),
-            )
+        if (stayIds.isEmpty()) return 0.0
+        var held = 0.0
+        for (sid in stayIds) {
+            val stay = FirestoreStayRepository.getById(sid)
+                ?: error("Could not load stay $sid to measure its check-in advance")
+            if (stay.ledgerAdvancePostedAtCheckIn) held += roundAmount(stay.advancePaidAmount)
         }
+        return roundAmount(held)
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -453,7 +446,9 @@ object AccountingRepository {
         guestName: String,
         guestPhone: String,
         guestUid: String,
+        guestGstin: String = "",
     ): CustomerData {
+        val gstin = guestGstin.takeIf { it.isNotBlank() }
         // 0. Stable cross-system UID — the canonical identity. Idempotent on the server.
         if (guestUid.isNotBlank()) {
             val c = client.createCustomer(
@@ -461,6 +456,7 @@ object AccountingRepository {
                 req   = CreateCustomerRequest(
                     name       = guestName,
                     phone      = guestPhone.takeIf { it.isNotBlank() },
+                    gstin      = gstin,
                     externalId = guestUid,
                 ),
             )
@@ -496,6 +492,7 @@ object AccountingRepository {
             req   = CreateCustomerRequest(
                 name  = guestName,
                 phone = guestPhone.takeIf { it.isNotBlank() },
+                gstin = gstin,
             ),
         )
         log("Customer created — id=${created.id}, arAccountId=${created.accountId}")
@@ -681,6 +678,24 @@ object AccountingRepository {
         return runCatching {
             val token = client.ensureValidToken()
             client.findCustomerByPhone(token, normalized)?.let {
+                CustomerBalanceInfo(
+                    balance = it.currentBalance ?: (it.outstanding?.toDoubleOrNull() ?: 0.0),
+                    balanceType = it.balanceType ?: "SETTLED",
+                )
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Current balance for a guest looked up by their ledger account UID (externalId).
+     * Used when the guest was identified by NAME (their new phone may not be in the ledger),
+     * so the balance still resolves to the correct account. Null on any non-fatal error.
+     */
+    suspend fun fetchCustomerBalanceByUid(uid: String): CustomerBalanceInfo? {
+        if (uid.isBlank() || !AccountingConfig.isConfigured()) return null
+        return runCatching {
+            val token = client.ensureValidToken()
+            client.findCustomerByExternalId(token, uid)?.let {
                 CustomerBalanceInfo(
                     balance = it.currentBalance ?: (it.outstanding?.toDoubleOrNull() ?: 0.0),
                     balanceType = it.balanceType ?: "SETTLED",

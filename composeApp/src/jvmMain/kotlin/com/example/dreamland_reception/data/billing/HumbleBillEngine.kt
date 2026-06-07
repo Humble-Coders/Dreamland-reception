@@ -107,22 +107,39 @@ object HumbleBillEngine {
             status = mapStatus(bill.status),
             currency = "INR",
             subtotal = bill.subtotal,
+            // Discount applied BEFORE tax: subtotal is the pre-discount base, `discount` is
+            // deducted from it, and taxAmount/total are already computed on the discounted
+            // base. Omitted (null) when there's no discount so non-discounted invoices are
+            // unchanged. The engine renders: Subtotal → Discount → Taxable → GST → Total.
+            discount = bill.discountAmount.takeIf { it > 0.0 },
             taxRate = if (bill.taxEnabled) bill.taxPercentage else 0.0,
             taxAmount = bill.taxAmount,
             total = bill.totalAmount,
-            amountPaid = bill.totalPaid + bill.advancePayment,
+            // Cap at the invoice total: an intentional overpayment (to clear prior dues or
+            // leave credit) settles THIS invoice to zero — the surplus lives on the guest's
+            // ledger account, not on this bill. So the invoice never shows a negative balance.
+            // Under-payments are unaffected (a real outstanding balance still shows).
+            amountPaid = minOf(bill.totalPaid + bill.advancePayment, bill.totalAmount),
             totalRefunded = 0.0,
             customer = Customer(
                 name = bill.guestName.ifBlank { null },
                 phone = guestPhone.ifBlank { null },
+                gstin = bill.guestGstin.ifBlank { null },   // rendered in BILL TO when present
             ),
             payments = payments.ifEmpty { null },
             lineItems = bill.items.map {
+                // The engine treats `rate` as the PRE-TAX base (it adds tax on top to reach
+                // the total). When the bill is GST-inclusive, item.unitPrice is the GROSS
+                // price, so we back the tax out here — otherwise the line items wouldn't sum
+                // to the subtotal/tax we send. Exclusive bills keep unitPrice as-is.
+                val baseRate = if (bill.taxInclusive && it.taxPercentage > 0)
+                    it.unitPrice / (1.0 + it.taxPercentage / 100.0)
+                else it.unitPrice
                 LineItem(
                     name = it.name,
                     hsn = if (it.type == "ROOM") "996311" else null,
                     qty = it.quantity,
-                    rate = it.unitPrice,
+                    rate = baseRate,
                 )
             }.ifEmpty { null },
         )
@@ -147,6 +164,7 @@ object HumbleBillEngine {
         val status: String,
         val currency: String,
         val subtotal: Double,
+        val discount: Double? = null,   // pre-tax discount; omitted when 0
         val taxRate: Double,
         val taxAmount: Double,
         val total: Double,

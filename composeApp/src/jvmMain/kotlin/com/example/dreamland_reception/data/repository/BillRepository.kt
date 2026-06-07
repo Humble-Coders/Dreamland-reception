@@ -25,6 +25,7 @@ interface BillRepository {
     suspend fun updateDates(id: String, checkIn: Date, checkOut: Date)
     suspend fun updateGuestName(id: String, name: String)
     suspend fun updateGuestPhone(id: String, phone: String)
+    suspend fun updateGuestGstin(id: String, gstin: String)
     suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String)
     suspend fun finalizeTransaction(
         id: String, items: List<BillItem>,
@@ -178,9 +179,11 @@ object FirestoreBillRepository : BillRepository {
             id = id,
             hotelId = getString("hotelId") ?: "",
             stayId = getString("stayId") ?: "",
+            userId = getString("userId") ?: "",
             stayIds = stayIdsList,
             guestName = getString("guestName") ?: "",
             guestPhone = getString("guestPhone") ?: "",
+            guestGstin = getString("guestGstin") ?: "",
             roomNumber = getString("roomNumber") ?: "",
             roomNumbers = roomNumbersList,
             checkInDate = getTimestamp("checkInDate")?.toDate(),
@@ -245,6 +248,10 @@ object FirestoreBillRepository : BillRepository {
 
     override suspend fun updateGuestPhone(id: String, phone: String) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("guestPhone" to phone, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateGuestGstin(id: String, gstin: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("guestGstin" to gstin, "updatedAt" to Date())).get(); Unit
     }
 
     override suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String) = withContext(Dispatchers.IO) {
@@ -317,9 +324,11 @@ object FirestoreBillRepository : BillRepository {
     private fun Bill.toMap() = mapOf(
         "hotelId" to hotelId,
         "stayId" to stayId,
+        "userId" to userId,
         "stayIds" to stayIds,
         "guestName" to guestName,
         "guestPhone" to guestPhone,
+        "guestGstin" to guestGstin,
         "roomNumber" to roomNumber,
         "roomNumbers" to roomNumbers,
         "checkInDate" to checkInDate,

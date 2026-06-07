@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Hotel
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
@@ -98,6 +100,7 @@ import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.dreamland_reception.data.accounting.CustomerBalanceInfo
+import com.example.dreamland_reception.ui.viewmodel.GuestNameMatch
 import com.example.dreamland_reception.ui.viewmodel.MatchedGuestId
 import com.example.dreamland_reception.ui.viewmodel.GRC_SAVE_AS_PDF
 import com.example.dreamland_reception.ui.viewmodel.GrcPhase
@@ -150,15 +153,19 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         val matchedIds = state.matchedGuestIds
+        // The dialog widens and gives the right panel room whenever EITHER returning-guest
+        // panel is shown — phone-matched IDs OR name-matched guests — so the name panel gets
+        // exactly the same width (and image size) as the phone panel.
+        val showSidePanel = matchedIds.isNotEmpty() || state.guestNameMatches.isNotEmpty()
         Row(
             modifier = Modifier
-                .fillMaxWidth(if (matchedIds.isNotEmpty()) 0.82f else 0.50f)
+                .fillMaxWidth(if (showSidePanel) 0.82f else 0.50f)
                 .fillMaxHeight(0.90f),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
         Column(
             modifier = Modifier
-                .weight(if (matchedIds.isNotEmpty()) 0.62f else 1f)
+                .weight(if (showSidePanel) 0.62f else 1f)
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(20.dp))
                 .background(DreamlandForestSurface),
@@ -306,9 +313,16 @@ fun WalkInDialog(state: WalkInState, vm: StaysViewModel) {
                 }
             }
         }
-            // Returning-guest ID panel — to the right of the card, never overlapping it.
-            if (matchedIds.isNotEmpty()) {
-                GuestIdMatchPanel(
+            // Returning-guest panel — to the right of the card, never overlapping it.
+            // Name matches take precedence (the receptionist is actively searching by name);
+            // otherwise the phone-matched IDs panel shows, exactly as before.
+            when {
+                state.guestNameMatches.isNotEmpty() -> ReturningGuestNamePanel(
+                    matches = state.guestNameMatches,
+                    onApply = { vm.applyGuestNameMatch(it) },
+                    modifier = Modifier.weight(0.38f).fillMaxHeight(),
+                )
+                matchedIds.isNotEmpty() -> GuestIdMatchPanel(
                     matches = matchedIds,
                     onApply = { vm.applyMatchedId(it) },
                     modifier = Modifier.weight(0.38f).fillMaxHeight(),
@@ -444,6 +458,100 @@ private fun GuestIdImage(url: String, clickable: Boolean = true) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(12.dp)) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = DreamlandGold)
                 Text("Loading…", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+// ── Find a returning guest by name ─────────────────────────────────────────────
+
+// The search box lives in the Guest Info column; its RESULTS render in the right-side
+// panel (ReturningGuestNamePanel) — the same place the phone search shows IDs — so the
+// main dialog layout is never disrupted.
+@Composable
+private fun ReturningGuestNameSearch(state: WalkInState, vm: StaysViewModel) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(
+            value = state.guestNameQuery,
+            onValueChange = vm::onGuestNameSearch,
+            label = { Text("Returning guest? Find by name", color = DreamlandMuted, fontSize = 12.sp) },
+            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, tint = DreamlandMuted, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (state.guestNameQuery.isNotEmpty()) {
+                    IconButton(onClick = { vm.clearGuestNameSearch() }) {
+                        Icon(Icons.Filled.Close, contentDescription = "Clear", tint = DreamlandMuted, modifier = Modifier.size(16.dp))
+                    }
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                cursorColor = DreamlandGold,
+            ),
+        )
+        // Small inline status only; the actual candidate cards appear in the right panel.
+        when {
+            state.isSearchingByName -> Text("Searching…", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+            state.guestNameMatches.isNotEmpty() -> Text("${state.guestNameMatches.size} match(es) on the right →", color = DreamlandGold, style = MaterialTheme.typography.labelSmall)
+            state.guestNameQuery.trim().length >= 2 -> Text("No returning guest by that name.", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+// Right-side panel for name matches — mirrors the phone "IDS ON RECORD" panel, with small
+// ID thumbnails so the receptionist can match the face, then tap to use.
+@Composable
+private fun ReturningGuestNamePanel(
+    matches: List<GuestNameMatch>,
+    onApply: (GuestNameMatch) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dateFmt = remember { SimpleDateFormat("d MMM yyyy", Locale.getDefault()) }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(DreamlandForestSurface)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("RETURNING GUESTS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold, letterSpacing = 2.sp)
+        Text(
+            "Matched by name (${matches.size}) · check the face, tap to use",
+            color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            matches.forEach { m ->
+                // Same card layout/sizing as the phone "IDS ON RECORD" panel: full-width ID images.
+                Column(
+                    Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(DreamlandForestElevated)
+                        .border(1.dp, DreamlandGold.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                        .clickable { onApply(m) }
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (m.name.isNotBlank()) {
+                        Text(m.name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    }
+                    val sub = buildString {
+                        append("Last stay: ${dateFmt.format(Date(m.lastStayMillis))}")
+                        if (m.lastRoom.isNotBlank()) append("  ·  Room ${m.lastRoom}")
+                    }
+                    Text(sub, color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                    val idLine = listOfNotNull(m.idType.takeIf { it.isNotBlank() }, m.govIdNumber.takeIf { it.isNotBlank() }).joinToString(" · ")
+                    if (idLine.isNotBlank()) {
+                        Text(idLine, color = DreamlandMuted.copy(alpha = 0.75f), style = MaterialTheme.typography.labelSmall)
+                    }
+                    // Full-size ID photos for face matching — same as the phone panel.
+                    m.pictures.forEach { url -> GuestIdImage(url, clickable = false) }
+                    Text("Tap to use", color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -761,6 +869,13 @@ private fun Step2GuestInfo(state: WalkInState, vm: StaysViewModel) {
         )
     }
     Spacer(Modifier.height(12.dp))
+
+    // Find a returning guest by name (for known regulars who may give a new phone number).
+    // Pure walk-ins only — booking/group check-ins already carry the guest's account.
+    if (state.isWalkInOnly) {
+        ReturningGuestNameSearch(state, vm)
+        Spacer(Modifier.height(12.dp))
+    }
 
     // Guest's current Humble Ledger balance (shown once the phone resolves to a ledger guest).
     state.guestBalance?.let { bal ->

@@ -162,6 +162,7 @@ data class StayBillingState(
     val bill: Bill? = null,
     val billGuestName: String = "",  // editable guest name for the bill header
     val billGuestPhone: String = "",  // editable guest phone for the bill header
+    val billGuestGstin: String = "",  // optional customer GSTIN for the bill header
     // Guest's current Humble Ledger balance (null = none / not configured / new guest).
     val guestLedgerBalance: com.example.dreamland_reception.data.accounting.CustomerBalanceInfo? = null,
     val pendingGuestNameOverride: String = "",  // set before load(); applied on bill load then cleared
@@ -224,14 +225,14 @@ class StayBillingViewModel(
             val allRooms = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val foods = runCatching { foodRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
             val svcs = runCatching { serviceRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
-            _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone, pendingGuestNameOverride = "",
+            _state.update { it.copy(isLoading = false, stay = null, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone, billGuestGstin = bill?.guestGstin ?: "", pendingGuestNameOverride = "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
-            loadGuestLedgerBalance(guestPhone)
+            loadGuestLedgerBalance(guestPhone, bill?.userId ?: "")
         }
     }
 
@@ -295,7 +296,7 @@ class StayBillingViewModel(
                     else -> "PENDING"
                 }
                 val computed = Bill(
-                    hotelId = AppContext.hotelId, stayId = stayId,
+                    hotelId = AppContext.hotelId, stayId = stayId, userId = stay.userId,
                     guestName = stay.guestName, roomNumber = stay.roomNumber,
                     checkInDate = stay.checkInActual, checkOutDate = checkOutDate,
                     items = items, taxEnabled = taxEnabled, taxPercentage = taxPercentage,
@@ -322,14 +323,14 @@ class StayBillingViewModel(
             val allRooms2 = runCatching { roomRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val foods2 = runCatching { foodRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
             val svcs2 = runCatching { serviceRepo.getByHotel(hotelId2) }.getOrElse { emptyList() }
-            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone2, pendingGuestNameOverride = "",
+            _state.update { it.copy(isLoading = false, stay = stay, bill = bill, billGuestName = guestName, billGuestPhone = guestPhone2, billGuestGstin = bill?.guestGstin ?: "", pendingGuestNameOverride = "",
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState()) }
-            loadGuestLedgerBalance(guestPhone2)
+            loadGuestLedgerBalance(guestPhone2, bill?.userId ?: "")
         }
     }
 
@@ -997,6 +998,22 @@ class StayBillingViewModel(
         }
     }
 
+    // GSTIN: 15-char alphanumeric, upper-cased; persisted to the bill so the invoice
+    // (and the ledger customer at settle) carry it.
+    fun onBillGuestGstin(v: String) = _state.update {
+        it.copy(billGuestGstin = v.uppercase().filter { c -> c.isLetterOrDigit() }.take(15))
+    }
+
+    fun saveBillGuestGstin() {
+        val gstin = _state.value.billGuestGstin.trim()
+        val billId = _state.value.bill?.id ?: return
+        if (billId.isBlank()) return
+        viewModelScope.launch {
+            runCatching { billRepo.updateGuestGstin(billId, gstin) }
+                .onSuccess { _state.update { s -> s.copy(bill = s.bill?.copy(guestGstin = gstin)) } }
+        }
+    }
+
     fun openGuestPicker() {
         val bill = _state.value.bill ?: return
         viewModelScope.launch {
@@ -1212,7 +1229,10 @@ class StayBillingViewModel(
     private suspend fun syncLedger(bill: Bill, guestPhone: String): AccountingRepository.SettleResult? {
         if (bill.id.isBlank()) return null
         _state.update { it.copy(accountingStatus = AccountingStatus.InProgress) }
-        val guestUid = resolveGuestUid(bill.guestName, guestPhone)
+        // Prefer the bill's stored ledger UID (set at check-in) so a returning guest who gave
+        // a new phone still settles against the SAME ledger customer. Fall back to phone only
+        // when the bill has no UID (legacy bills / older flows).
+        val guestUid = bill.userId.ifBlank { resolveGuestUid(bill.guestName, guestPhone) }
         // Use the authoritative display name from the users collection for accounting,
         // so the ledger record matches the registered guest identity.
         val normalizedPhone = normalizePhoneE164(guestPhone) ?: guestPhone
@@ -1255,12 +1275,20 @@ class StayBillingViewModel(
      * stay may belong to a different guest, so we fall back to the stay(s) backing
      * the bill to find the one whose name matches.
      */
-    /** Fetches the bill guest's current Humble Ledger balance (best-effort; null when none). */
-    private fun loadGuestLedgerBalance(phone: String) {
-        if (phone.isBlank()) { _state.update { it.copy(guestLedgerBalance = null) }; return }
+    /**
+     * Fetches the bill guest's current Humble Ledger balance (best-effort; null when none).
+     * Prefers the account UID (so a guest identified by name, who gave a new phone, still
+     * shows the right balance); falls back to phone when no UID is on the bill.
+     */
+    private fun loadGuestLedgerBalance(phone: String, uid: String = "") {
+        if (uid.isBlank() && phone.isBlank()) { _state.update { it.copy(guestLedgerBalance = null) }; return }
         viewModelScope.launch {
-            val bal = accountingRepo.fetchCustomerBalance(phone)
-            _state.update { s -> if (s.billGuestPhone == phone) s.copy(guestLedgerBalance = bal) else s }
+            val bal = if (uid.isNotBlank()) accountingRepo.fetchCustomerBalanceByUid(uid)
+                      else accountingRepo.fetchCustomerBalance(phone)
+            _state.update { s ->
+                val stillCurrent = if (uid.isNotBlank()) s.bill?.userId == uid else s.billGuestPhone == phone
+                if (stillCurrent) s.copy(guestLedgerBalance = bal) else s
+            }
         }
     }
 
@@ -1318,10 +1346,13 @@ class StayBillingViewModel(
      */
     fun generateInvoicePdf(bill: Bill, guestPhone: String) {
         if (bill.id.isBlank()) return
-        // Recompute taxPercentage as rounded effective blended rate so the invoice Lambda
-        // shows consistent CGST/SGST rate labels (e.g. 4.86% not the stale stored value).
-        val effectiveTaxPct = if (bill.taxEnabled && bill.subtotal > 0)
-            Math.round(bill.taxAmount / bill.subtotal * 10000.0) / 100.0
+        // Recompute taxPercentage as the rounded effective rate for the invoice's CGST/SGST
+        // labels. GST is charged on the TAXABLE VALUE (subtotal − discount, since discount is
+        // applied before tax), so the rate must be tax / taxable value — not tax / subtotal,
+        // which would understate the rate whenever a discount is present.
+        val taxableValue = bill.subtotal - bill.discountAmount
+        val effectiveTaxPct = if (bill.taxEnabled && taxableValue > 0)
+            Math.round(bill.taxAmount / taxableValue * 10000.0) / 100.0
         else bill.taxPercentage
         _state.update { it.copy(invoicePdf = InvoicePdfState(show = true, isGenerating = true)) }
         viewModelScope.launch {
@@ -1332,7 +1363,7 @@ class StayBillingViewModel(
             var invNo = bill.ledgerInvoiceNumber
             var invId = bill.ledgerInvoiceId
             if (invNo.isBlank()) {
-                val uid = resolveGuestUid(bill.guestName, guestPhone)
+                val uid = bill.userId.ifBlank { resolveGuestUid(bill.guestName, guestPhone) }
                 accountingRepo.settle(bill, guestPhone, uid).onSuccess { r ->
                     if (r.invoiceNumber.isNotBlank()) {
                         invNo = r.invoiceNumber
@@ -1531,11 +1562,11 @@ class StayBillingViewModel(
     private fun recalculate(bill: Bill): Bill {
         // gross = sum of the entered item prices (what's shown on each row).
         val gross = bill.items.sumOf { it.total }
-        // GST per item, honouring the bill-level inclusive/exclusive toggle.
+        // Full per-item GST BEFORE any discount, honouring the inclusive/exclusive toggle.
         //   exclusive → tax is added on top:  tax = price × rate
         //   inclusive → price already contains tax:  tax = price − price/(1+rate)
         // Falls back to the bill-level rate only when no item carries a per-item rate.
-        val taxAmount = if (bill.taxEnabled) {
+        val taxFull = if (bill.taxEnabled) {
             if (bill.taxInclusive) {
                 val t = bill.items.sumOf { it.total - it.total / (1.0 + it.taxPercentage / 100.0) }
                 if (t > 0.0) t else gross - gross / (1.0 + bill.taxPercentage / 100.0)
@@ -1544,13 +1575,18 @@ class StayBillingViewModel(
                 if (t > 0.0) t else gross * bill.taxPercentage / 100.0
             }
         } else 0.0
-        // Taxable base: exclusive → the gross prices; inclusive → gross minus the embedded tax.
-        val subtotal = if (bill.taxEnabled && bill.taxInclusive) gross - taxAmount else gross
+        // Taxable base before discount: exclusive → gross prices; inclusive → gross minus embedded tax.
+        val subtotal = if (bill.taxEnabled && bill.taxInclusive) gross - taxFull else gross
+        // Discount: a % of the taxable base, or a flat amount.
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0
             else -> bill.discountValue
         }
-        val total = (subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
+        // Discount is applied BEFORE tax — it reduces the taxable base, so GST scales down
+        // proportionally (GST is charged on subtotal − discount, the standard treatment).
+        val discountFraction = if (subtotal > 0.0) (discountAmount / subtotal).coerceIn(0.0, 1.0) else 0.0
+        val taxAmount = taxFull * (1.0 - discountFraction)
+        val total = (subtotal - discountAmount + taxAmount).coerceAtLeast(0.0)
         val pending = (total - bill.totalPaid - bill.advancePayment).coerceAtLeast(0.0)
         val status = when {
             pending <= 0 && total > 0 -> "PAID"
