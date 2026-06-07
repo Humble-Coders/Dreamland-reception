@@ -798,6 +798,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                         isSelected = isSelected,
                         isCleaning = false,
                         isDisabled = disabled,
+                        isNotBookable = !inst.isAvailableForBooking,
                         onClick = { vm.onInstanceToggled(inst.id) },
                     )
                 }
@@ -807,6 +808,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                         isSelected = false,
                         isCleaning = true,
                         isDisabled = true,
+                        isNotBookable = !inst.isAvailableForBooking,
                         onClick = {},
                     )
                 }
@@ -817,6 +819,7 @@ private fun Step1StayDetails(state: WalkInState, vm: StaysViewModel) {
                         isCleaning = false,
                         isDueOut = true,
                         isDisabled = true,
+                        isNotBookable = !inst.isAvailableForBooking,
                         onClick = {},
                     )
                 }
@@ -1437,6 +1440,7 @@ private fun RoomChip(
     isCleaning: Boolean,
     isDisabled: Boolean,
     isDueOut: Boolean = false,
+    isNotBookable: Boolean = false,
     onClick: () -> Unit,
 ) {
     Box(
@@ -1492,6 +1496,16 @@ private fun RoomChip(
                 color = Color(0xFFBB8800).copy(alpha = 0.9f),
                 fontSize = 8.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+            )
+        }
+        // Not-bookable badge — purely informational; room remains selectable here.
+        if (isNotBookable) {
+            Text(
+                "NB",
+                color = DreamlandMuted.copy(alpha = 0.8f),
+                fontSize = 7.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
             )
         }
     }

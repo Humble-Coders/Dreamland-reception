@@ -1597,6 +1597,20 @@ class StaysViewModel(
                 .filter { it.hotelId == hotelId && it.status != "MAINTENANCE" }
             val usablePerCat = allInstances.groupingBy { it.categoryId }.eachCount()
 
+            // Add Booking creates a NEW reservation, so its "avail." count must equal the
+            // Dashboard's Check Availability "bookable" count exactly — both go through the shared
+            // availableForNewBookingByCategory (honors the per-room "bookable" flag and counts
+            // unassigned reservations as demand). Walk-in / booking check-in keep the category-level
+            // supply−demand count below: the "bookable" flag only governs new-booking supply, not
+            // who can be checked in.
+            val bookingModeAvailability: Map<String, Int>? = if (ws.isBookingMode) {
+                val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
+                availableForNewBookingByCategory(
+                    allInstances, confirmedBookings, activeStays, checkIn, checkOut,
+                    hotel?.checkInTime ?: "", hotel?.checkOutTime ?: "",
+                )
+            } else null
+
             // Steps 5-6 — compute availability for all categories; always populate the map
             // so the UI can show "N avail." counts regardless of capacity/available filters.
             val availabilityMap = mutableMapOf<String, Int>()
@@ -1604,7 +1618,8 @@ class StaysViewModel(
             ws.categories.forEach { cat ->
                 val committed = (bookingsPerCat[cat.id] ?: 0) + (staysPerCat[cat.id] ?: 0)
                 val usable = usablePerCat[cat.id] ?: 0
-                availabilityMap[cat.id] = (usable - committed).coerceAtLeast(0)
+                availabilityMap[cat.id] = bookingModeAvailability?.let { it[cat.id] ?: 0 }
+                    ?: (usable - committed).coerceAtLeast(0)
                 // Walk-ins default to the offline rate (ignoring seasonal); bookings keep
                 // the original standard/seasonal price. Manual overrides are applied on top
                 // in the UI and survive this recompute (they live in priceOverrides).
@@ -1692,6 +1707,8 @@ class StaysViewModel(
             val dueOut = mutableListOf<RoomInstance>()
             for (inst in allInstances) {
                 when {
+                    // Add Booking honors the "bookable" flag (see computeAvailability); walk-in/check-in don't.
+                    ws.isBookingMode && !inst.isAvailableForBooking -> continue  // off the new-booking pool — hide
                     inst.id in dueOutIds  -> dueOut.add(inst)   // expected checkout today — show marked
                     inst.id in occupiedIds -> continue           // occupied — hide
                     inst.id in bookedIds -> continue             // confirmed booking — hide

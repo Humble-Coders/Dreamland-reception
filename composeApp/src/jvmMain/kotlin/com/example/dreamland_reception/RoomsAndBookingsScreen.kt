@@ -666,22 +666,43 @@ private fun RoomListItem(
                     )
                 }
             }
-            if (categoryName.isNotBlank()) {
+            if (categoryName.isNotBlank() || !room.isAvailableForBooking) {
                 Spacer(Modifier.height(4.dp))
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(DreamlandGold.copy(alpha = 0.12f))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        categoryName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = DreamlandGold.copy(alpha = 0.8f),
-                        fontSize = 9.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    if (categoryName.isNotBlank()) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(DreamlandGold.copy(alpha = 0.12f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                categoryName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DreamlandGold.copy(alpha = 0.8f),
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (!room.isAvailableForBooking) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                "Not Bookable",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFF39C12).copy(alpha = 0.85f),
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }

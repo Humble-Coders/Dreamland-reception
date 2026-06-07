@@ -56,6 +56,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -151,9 +154,11 @@ fun DashboardScreen(
                     RoomGridSection(
                         rooms = state.roomInstances,
                         stays = state.rawActiveStays,
+                        categoryNames = state.categoryNames,
                         hotelCheckOutTime = hotelCheckOutTime,
                         onSetCleaning = vm::setRoomCleaning,
                         onSetAvailable = vm::setRoomAvailable,
+                        onToggleBookable = vm::setRoomAvailableForBooking,
                         onRoomClick = onRoomClick,
                     )
                     TodayBookingsCard(bookings = state.todayBookings)
@@ -207,9 +212,11 @@ private fun roomStatusColor(status: String, isOccupied: Boolean): Color = when {
 private fun RoomGridSection(
     rooms: List<RoomInstance>,
     stays: List<Stay>,
+    categoryNames: Map<String, String>,
     hotelCheckOutTime: String,
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onToggleBookable: (String, Boolean) -> Unit,
     onRoomClick: (String) -> Unit,
 ) {
     if (rooms.isEmpty()) return
@@ -233,9 +240,11 @@ private fun RoomGridSection(
                                 room = room,
                                 stay = stay,
                                 isOccupied = stay != null,
+                                categoryNames = categoryNames,
                                 hotelCheckOutTime = hotelCheckOutTime,
                                 onSetCleaning = onSetCleaning,
                                 onSetAvailable = onSetAvailable,
+                                onToggleBookable = onToggleBookable,
                                 onClick = { stay?.id?.let { onRoomClick(it) } },
                                 modifier = Modifier.weight(1f),
                             )
@@ -263,9 +272,11 @@ private fun RoomCard(
     room: RoomInstance,
     stay: Stay?,
     isOccupied: Boolean,
+    categoryNames: Map<String, String> = emptyMap(),
     hotelCheckOutTime: String = "11:00",
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onToggleBookable: (String, Boolean) -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -278,11 +289,11 @@ private fun RoomCard(
         room.status == "MAINTENANCE" -> "MAINTENANCE"
         else -> "AVAILABLE"
     }
-    // Room type from whatever's available: the instance's category, else the active stay's category.
-    val roomType = room.categoryName.ifBlank { stay?.roomCategoryName.orEmpty() }
+    // Room type from whatever's available: the instance's own name, else a category lookup, else the active stay's category.
+    val roomType = room.categoryName.ifBlank { categoryNames[room.categoryId] ?: stay?.roomCategoryName.orEmpty() }
     Column(
         modifier = modifier
-            .height(156.dp)
+            .height(200.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(DreamlandForestElevated)
             .border(1.dp, statusColor.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
@@ -302,7 +313,24 @@ private fun RoomCard(
             RoomStatusPill(statusLabel, statusColor)
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(6.dp))
+
+        // Admin toggle: takes the room off the new-booking pool without affecting check-in/extend/change-room.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (room.isAvailableForBooking) "Bookable" else "Not Bookable",
+                color = DreamlandMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Switch(
+                checked = room.isAvailableForBooking,
+                onCheckedChange = { onToggleBookable(room.id, it) },
+                modifier = Modifier.scale(0.7f),
+                colors = SwitchDefaults.colors(checkedThumbColor = DreamlandGold, checkedTrackColor = DreamlandGold.copy(alpha = 0.4f)),
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
 
         when {
             // Occupied — guest summary. No housekeeping toggle: an occupied room can't be set to cleaning here.
@@ -850,6 +878,12 @@ private fun SidebarAvailableCategoryRow(cat: AvailableCategory) {
                 "${cat.availableCount} room${if (cat.availableCount != 1) "s" else ""} free",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color(0xFF2ECC71),
+                fontSize = 10.sp,
+            )
+            Text(
+                "${cat.availableForBookingCount} bookable",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFF39C12),
                 fontSize = 10.sp,
             )
         }

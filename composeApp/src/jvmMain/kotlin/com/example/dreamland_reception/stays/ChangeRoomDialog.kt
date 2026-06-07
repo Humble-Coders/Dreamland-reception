@@ -100,7 +100,7 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
                         ) {
                             items(state.selectableRooms) { room ->
                                 val catName = room.categoryName.ifBlank { state.categoryNames[room.categoryId] ?: "" }
-                                RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = false) {
+                                RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = false, notBookable = !room.isAvailableForBooking) {
                                     vm.onChangeRoomSelected(room)
                                 }
                             }
@@ -117,7 +117,7 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
                                 }
                                 items(state.cleaningRooms) { room ->
                                     val catName = room.categoryName.ifBlank { state.categoryNames[room.categoryId] ?: "" }
-                                    RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = true) {
+                                    RoomRow(room, catName = catName, selected = state.selectedInstance?.id == room.id, cleaning = true, notBookable = !room.isAvailableForBooking) {
                                         vm.onChangeRoomSelected(room)
                                     }
                                 }
@@ -161,7 +161,7 @@ fun ChangeRoomDialog(state: ChangeRoomState, vm: StaysViewModel) {
 }
 
 @Composable
-private fun RoomRow(room: RoomInstance, catName: String, selected: Boolean, cleaning: Boolean, onClick: () -> Unit) {
+private fun RoomRow(room: RoomInstance, catName: String, selected: Boolean, cleaning: Boolean, notBookable: Boolean = false, onClick: () -> Unit) {
     val borderColor = if (selected) DreamlandGold else DreamlandGold.copy(alpha = 0.2f)
     val bgColor = if (selected) DreamlandGold.copy(alpha = 0.08f) else Color.Transparent
     val textColor = if (cleaning) DreamlandMuted else DreamlandOnDark
@@ -193,8 +193,13 @@ private fun RoomRow(room: RoomInstance, catName: String, selected: Boolean, clea
                 )
             }
         }
-        if (cleaning) {
-            Text("Cleaning", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.7f))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (notBookable) {
+                Text("Not Bookable", style = MaterialTheme.typography.labelSmall, color = Color(0xFFF39C12).copy(alpha = 0.8f))
+            }
+            if (cleaning) {
+                Text("Cleaning", style = MaterialTheme.typography.labelSmall, color = DreamlandMuted.copy(alpha = 0.7f))
+            }
         }
     }
 }

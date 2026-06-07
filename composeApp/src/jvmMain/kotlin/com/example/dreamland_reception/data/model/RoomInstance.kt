@@ -10,6 +10,7 @@ data class RoomInstance(
     val roomNumber: String = "",
     val status: String = "AVAILABLE",  // AVAILABLE | ASSIGNED | OCCUPIED | CLEANING | MAINTENANCE
     val needsCleaning: Boolean = false,
+    val isAvailableForBooking: Boolean = true,
     val currentStayId: String? = null,
     val createdAt: Date = Date(),
 )
