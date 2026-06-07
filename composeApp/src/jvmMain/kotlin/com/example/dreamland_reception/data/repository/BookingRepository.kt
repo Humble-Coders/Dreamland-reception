@@ -1,13 +1,29 @@
 package com.example.dreamland_reception.data.repository
 
+import com.example.dreamland_reception.data.firebase.CloudFunctionClient
 import com.example.dreamland_reception.data.model.Booking
 import com.google.cloud.firestore.Firestore
+import com.google.gson.JsonParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
 import java.util.Date
+
+/** Reception's chosen refund amount source for a cancellation. */
+enum class ReceptionRefundMode { POLICY, FULL, FIXED }
+
+/** Decoded response from cancelBookingByReceptionHttp. */
+data class CancelBookingResult(
+    val groupBookingId: String,
+    val totalRefundPaise: Long,
+    val refundId: String,
+    val finalRefundStatus: String, // "" | "INITIATED" | "COMPLETED" | "FAILED"
+    val perRoom: List<PerRoom>,
+) {
+    data class PerRoom(val bookingId: String, val refundPaise: Long, val bucket: String)
+}
 
 interface BookingRepository {
     suspend fun getAll(): List<Booking>
@@ -19,8 +35,20 @@ interface BookingRepository {
     suspend fun update(booking: Booking)
     suspend fun delete(id: String)
     suspend fun assignRoomTransaction(bookingId: String, roomInstanceId: String, roomNumber: String)
-    suspend fun cancelWithTransaction(bookingId: String)
     suspend fun markNoShow(bookingId: String, markedAt: Date, refundStatus: String, refundNote: String)
+    /**
+     * Calls cancelBookingByReceptionHttp to cancel every booking in the group + trigger
+     * the Razorpay refund according to [refundMode]. Throws [CloudFunctionClient.CancelByReceptionException]
+     * on any non-2xx response. Idempotent on [groupBookingId].
+     */
+    suspend fun cancelByReception(
+        userId: String,
+        groupBookingId: String,
+        reason: String,
+        refundMode: ReceptionRefundMode,
+        fixedRefundPaise: Long?,
+        cancelledByReceptionUserId: String,
+    ): CancelBookingResult
     fun listenByHotel(hotelId: String): Flow<List<Booking>>
 }
 
@@ -109,15 +137,64 @@ object FirestoreBookingRepository : BookingRepository {
         ).get(); Unit
     }
 
-    override suspend fun cancelWithTransaction(bookingId: String) = withContext(Dispatchers.IO) {
-        val fs = FirestoreRepositorySupport.get()
-        fs.runTransaction { txn ->
-            val ref = col.document(bookingId)
-            val doc = txn.get(ref).get()
-            if (doc.getString("status") != "CANCELLED") {
-                txn.update(ref, mapOf("status" to "CANCELLED"))
+    override suspend fun cancelByReception(
+        userId: String,
+        groupBookingId: String,
+        reason: String,
+        refundMode: ReceptionRefundMode,
+        fixedRefundPaise: Long?,
+        cancelledByReceptionUserId: String,
+    ): CancelBookingResult = withContext(Dispatchers.IO) {
+        val body = buildString {
+            append("{")
+            append("\"userId\":${esc(userId)},")
+            append("\"groupBookingId\":${esc(groupBookingId)},")
+            append("\"reason\":${esc(reason)},")
+            append("\"refundMode\":${esc(refundMode.name)},")
+            if (refundMode == ReceptionRefundMode.FIXED && fixedRefundPaise != null) {
+                append("\"fixedRefundPaise\":$fixedRefundPaise,")
             }
-        }.get(); Unit
+            append("\"cancelledByReceptionUserId\":${esc(cancelledByReceptionUserId)}")
+            append("}")
+        }
+        val responseJson = CloudFunctionClient.callCancelByReception(body)
+        parseCancelBookingResult(responseJson)
+    }
+
+    private fun esc(s: String): String {
+        val sb = StringBuilder("\"")
+        for (c in s) {
+            when (c) {
+                '\\' -> sb.append("\\\\")
+                '"'  -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                '\b' -> sb.append("\\b")
+                else -> if (c.code < 0x20) sb.append("\\u%04x".format(c.code)) else sb.append(c)
+            }
+        }
+        sb.append("\"")
+        return sb.toString()
+    }
+
+    private fun parseCancelBookingResult(json: String): CancelBookingResult {
+        val root = JsonParser.parseString(json).asJsonObject
+        val perRoom = root.getAsJsonArray("perRoom")?.map {
+            val o = it.asJsonObject
+            CancelBookingResult.PerRoom(
+                bookingId   = o.get("bookingId")?.asString.orEmpty(),
+                refundPaise = o.get("refundPaise")?.asLong ?: 0L,
+                bucket      = o.get("bucket")?.asString.orEmpty(),
+            )
+        } ?: emptyList()
+        return CancelBookingResult(
+            groupBookingId    = root.get("groupBookingId")?.asString.orEmpty(),
+            totalRefundPaise  = root.get("totalRefundPaise")?.asLong ?: 0L,
+            refundId          = root.get("refundId")?.asString.orEmpty(),
+            finalRefundStatus = root.get("finalRefundStatus")?.asString.orEmpty(),
+            perRoom           = perRoom,
+        )
     }
 
     override fun listenByHotel(hotelId: String): Flow<List<Booking>> = callbackFlow {
@@ -186,6 +263,16 @@ object FirestoreBookingRepository : BookingRepository {
             noShowMarkedAt = getTimestamp("noShowMarkedAt")?.toDate(),
             noShowRefundStatus = getString("noShowRefundStatus") ?: "",
             noShowRefundNote = getString("noShowRefundNote") ?: "",
+            paymentOrderId = getString("paymentOrderId") ?: "",
+            cancellationLockedAt = getTimestamp("cancellationLockedAt")?.toDate(),
+            advancePaidAmountPaise = (get("advancePaidAmountPaise") as? Number)?.toLong() ?: 0L,
+            cancellationSource = getString("cancellationSource") ?: "",
+            cancellationReason = getString("cancellationReason") ?: "",
+            cancelledByReceptionUserId = getString("cancelledByReceptionUserId") ?: "",
+            cancellationRefundId = getString("cancellationRefundId") ?: "",
+            cancellationRefundAmountPaise = (get("cancellationRefundAmountPaise") as? Number)?.toLong() ?: 0L,
+            cancellationRefundStatus = getString("cancellationRefundStatus") ?: "",
+            cancellationRefundMode = getString("cancellationRefundMode") ?: "",
         )
     }.getOrNull()
 

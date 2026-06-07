@@ -54,4 +54,16 @@ data class Booking(
     val noShowMarkedAt: Date? = null,
     val noShowRefundStatus: String = "",   // "" | "PENDING" | "REFUNDED" | "FORFEITED" | "PARTIAL"
     val noShowRefundNote: String = "",
+    // Razorpay refund flow (set by Cloud Function on app-originated bookings)
+    val paymentOrderId: String = "",                 // payments/{paymentOrderId}; "" for walk-ins
+    val cancellationLockedAt: Date? = null,          // 10-min guest cancel grace window
+    val advancePaidAmountPaise: Long = 0L,           // server-of-truth in paise
+    // Cancellation audit (populated by cancelBookingByReceptionHttp)
+    val cancellationSource: String = "",             // "" | "USER" | "RECEPTION" | "PAYMENT_FAILURE" | "ADMIN"
+    val cancellationReason: String = "",
+    val cancelledByReceptionUserId: String = "",
+    val cancellationRefundId: String = "",           // Razorpay refund_id
+    val cancellationRefundAmountPaise: Long = 0L,
+    val cancellationRefundStatus: String = "",       // "" | "INITIATED" | "COMPLETED" | "FAILED"
+    val cancellationRefundMode: String = "",         // "" | "POLICY" | "FULL" | "FIXED"
 )

@@ -53,11 +53,14 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -67,6 +70,8 @@ import androidx.compose.material3.TabRowDefaults.SecondaryIndicator
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -88,7 +93,9 @@ import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.roomsbookings.AssignRoomDialog
 import com.example.dreamland_reception.stays.WalkInDialog
+import com.example.dreamland_reception.data.repository.ReceptionRefundMode
 import com.example.dreamland_reception.ui.viewmodel.BookingDateFilter
+import com.example.dreamland_reception.ui.viewmodel.CancelDialogState
 import com.example.dreamland_reception.ui.viewmodel.NoShowRefundDialogState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsUiState
 import com.example.dreamland_reception.ui.viewmodel.RoomsAndBookingsViewModel
@@ -212,19 +219,14 @@ fun RoomsAndBookingsScreen(
     if (state.assignRoomDialogBooking != null) {
         AssignRoomDialog(state = state, vm = vm)
     }
-    if (state.cancelConfirmBooking != null) {
+    state.cancelDialog?.let { dialog ->
         CancelConfirmDialog(
-            guestName = state.cancelConfirmBooking!!.guestName,
-            onConfirm = vm::confirmCancelBooking,
-            onDismiss = vm::dismissCancelBooking,
-        )
-    }
-    state.groupCancelBookings?.let { group ->
-        val guestName = group.firstOrNull()?.guestName ?: "Guest"
-        CancelConfirmDialog(
-            guestName = "$guestName (${group.size} bookings)",
-            onConfirm = vm::confirmCancelGroupBooking,
-            onDismiss = vm::dismissGroupCancelBooking,
+            dialog = dialog,
+            onReasonChanged = vm::onCancelReasonChanged,
+            onRefundModeChanged = vm::onCancelRefundModeChanged,
+            onFixedRupeesChanged = vm::onCancelFixedRupeesChanged,
+            onConfirm = vm::confirmCancelByReception,
+            onDismiss = vm::dismissCancelDialog,
         )
     }
     if (state.noShowConfirmBooking != null) {
@@ -1869,6 +1871,39 @@ private fun BookingCard(
                 }
             }
 
+            if (booking.status == "CANCELLED" && booking.cancellationSource == "RECEPTION") {
+                Spacer(Modifier.height(6.dp))
+                val refundRupees = "%.2f".format(booking.cancellationRefundAmountPaise / 100.0)
+                val badgeText = when {
+                    booking.cancellationRefundStatus == "COMPLETED" ->
+                        "Refund completed — ₹$refundRupees"
+                    booking.cancellationRefundStatus == "INITIATED" ->
+                        "Refund initiated — ₹$refundRupees" +
+                            booking.cancellationRefundMode.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()
+                    booking.cancellationRefundStatus == "FAILED" ->
+                        "Refund failed — contact admin"
+                    booking.cancellationRefundAmountPaise == 0L ->
+                        "Cancelled — no refund per policy"
+                    else -> "Cancelled by reception"
+                }
+                val badgeColor = if (booking.cancellationRefundStatus == "FAILED")
+                    Color(0xFFE74C3C) else DreamlandGold
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(badgeColor.copy(alpha = 0.10f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(badgeText, color = badgeColor, fontSize = 10.sp, style = MaterialTheme.typography.labelSmall)
+                    if (booking.cancelledByReceptionUserId.isNotBlank()) {
+                        Spacer(Modifier.weight(1f))
+                        Text("by ${booking.cancelledByReceptionUserId}", color = DreamlandMuted, fontSize = 10.sp)
+                    }
+                }
+            }
+
             if (isConfirmed) {
                 Spacer(Modifier.height(12.dp))
                 HorizontalDivider(color = DreamlandGold.copy(alpha = 0.1f))
@@ -1927,29 +1962,228 @@ private fun BookingCard(
 
 @Composable
 private fun CancelConfirmDialog(
-    guestName: String,
+    dialog: CancelDialogState,
+    onReasonChanged: (String) -> Unit,
+    onRefundModeChanged: (ReceptionRefundMode) -> Unit,
+    onFixedRupeesChanged: (String) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val primary = dialog.primary
+    val group = dialog.groupBookings
+    val totalAdvanceRupees = "%.2f".format(dialog.totalAdvancePaise / 100.0)
+    val checkInFmt = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(primary.checkIn)
+    val reasonValid = dialog.reason.trim().length in 10..500
+    val fixedAmountValid = dialog.refundMode != ReceptionRefundMode.FIXED || run {
+        val paise = (dialog.fixedRefundRupeesInput.toDoubleOrNull()?.times(100))?.toLong() ?: -1L
+        paise in 1L..dialog.totalAdvancePaise
+    }
+    val canConfirm = !dialog.isLoading && reasonValid && fixedAmountValid
+
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!dialog.isLoading) onDismiss() },
         containerColor = DreamlandForestSurface,
         titleContentColor = DreamlandOnDark,
         textContentColor = DreamlandMuted,
-        title = { Text("Cancel Booking?") },
-        text = { Text("This will mark the booking for $guestName as Cancelled. This action cannot be undone.") },
+        shape = RoundedCornerShape(16.dp),
+        title = { Text("Cancel Booking + Refund", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(modifier = Modifier.widthIn(min = 460.dp, max = 600.dp).verticalScroll(rememberScrollState())) {
+                // Booking summary
+                CancelSummaryRow("Guest", "${primary.guestName.ifBlank { "—" }}${primary.guestPhone.takeIf { it.isNotBlank() }?.let { "  ($it)" }.orEmpty()}")
+                if (primary.groupBookingId.isNotBlank()) {
+                    CancelSummaryRow("Group", primary.groupBookingId)
+                }
+                CancelSummaryRow(
+                    label = if (group.size > 1) "Rooms" else "Room",
+                    value = group.joinToString(", ") { it.roomCategoryName.ifBlank { it.roomCategoryId } },
+                )
+                CancelSummaryRow("Check-in", checkInFmt)
+                CancelSummaryRow("Advance paid", "₹$totalAdvanceRupees")
+
+                Spacer(Modifier.height(14.dp))
+
+                // Refund mode picker
+                Text("Refund mode", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                val policySubtitle = when (val preview = dialog.policyPreviewPaise) {
+                    null -> "Calculating refund per cancellation policy…"
+                    0L   -> "No refund per current policy."
+                    else -> "Refund ₹${"%.2f".format(preview / 100.0)} per cancellation policy."
+                }
+                CancelRefundModeRow(
+                    selected = dialog.refundMode == ReceptionRefundMode.POLICY,
+                    enabled = !dialog.isLoading,
+                    title = "As per cancellation policy",
+                    subtitle = policySubtitle,
+                    onClick = { onRefundModeChanged(ReceptionRefundMode.POLICY) },
+                )
+                CancelRefundModeRow(
+                    selected = dialog.refundMode == ReceptionRefundMode.FULL,
+                    enabled = !dialog.isLoading,
+                    title = "Full advance refund",
+                    subtitle = "Refund ₹$totalAdvanceRupees (whole advance).",
+                    onClick = { onRefundModeChanged(ReceptionRefundMode.FULL) },
+                )
+                CancelRefundModeRow(
+                    selected = dialog.refundMode == ReceptionRefundMode.FIXED,
+                    enabled = !dialog.isLoading,
+                    title = "Custom amount",
+                    subtitle = "Manager enters a specific refund amount.",
+                    onClick = { onRefundModeChanged(ReceptionRefundMode.FIXED) },
+                )
+                if (dialog.refundMode == ReceptionRefundMode.FIXED) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = dialog.fixedRefundRupeesInput,
+                        onValueChange = onFixedRupeesChanged,
+                        enabled = !dialog.isLoading,
+                        label = { Text("Amount", color = DreamlandMuted) },
+                        prefix = { Text("₹", color = DreamlandOnDark) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth().padding(start = 32.dp),
+                        isError = !fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank(),
+                        supportingText = {
+                            Text(
+                                if (!fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank())
+                                    "Must be greater than ₹0 and at most ₹$totalAdvanceRupees."
+                                else
+                                    "Max ₹$totalAdvanceRupees.",
+                                color = if (!fixedAmountValid && dialog.fixedRefundRupeesInput.isNotBlank())
+                                    Color(0xFFE74C3C) else DreamlandMuted,
+                                fontSize = 12.sp,
+                            )
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = DreamlandOnDark,
+                            unfocusedTextColor = DreamlandOnDark,
+                            focusedBorderColor = DreamlandGold,
+                            unfocusedBorderColor = DreamlandMuted,
+                            errorBorderColor = Color(0xFFE74C3C),
+                            cursorColor = DreamlandGold,
+                        ),
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // Reason field
+                Text("Reason for cancellation", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = dialog.reason,
+                    onValueChange = onReasonChanged,
+                    enabled = !dialog.isLoading,
+                    placeholder = { Text("Why is this booking being cancelled?", color = DreamlandMuted) },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = dialog.reason.isNotEmpty() && !reasonValid,
+                    supportingText = {
+                        Text(
+                            if (dialog.reason.isEmpty()) "Required — at least 10 characters."
+                            else if (!reasonValid) "Reason must be 10–500 characters."
+                            else "${dialog.reason.length}/500",
+                            color = if (dialog.reason.isNotEmpty() && !reasonValid)
+                                Color(0xFFE74C3C) else DreamlandMuted,
+                            fontSize = 12.sp,
+                        )
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark,
+                        unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold,
+                        unfocusedBorderColor = DreamlandMuted,
+                        errorBorderColor = Color(0xFFE74C3C),
+                        cursorColor = DreamlandGold,
+                    ),
+                )
+
+                // Loading + error banners
+                if (dialog.isLoading) {
+                    Spacer(Modifier.height(10.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = DreamlandGold,
+                        trackColor = DreamlandForest,
+                    )
+                }
+                dialog.error?.let { err ->
+                    Spacer(Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFE74C3C).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            .border(1.dp, Color(0xFFE74C3C).copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text(err.title, color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(err.message, color = DreamlandMuted, fontSize = 12.sp)
+                        if (err.retrySafe) {
+                            Text("Safe to retry.", color = DreamlandMuted, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        },
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE74C3C)),
+                enabled = canConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFE74C3C),
+                    disabledContainerColor = Color(0xFFE74C3C).copy(alpha = 0.4f),
+                ),
                 shape = RoundedCornerShape(8.dp),
-            ) { Text("Yes, Cancel", fontWeight = FontWeight.SemiBold) }
+            ) { Text("Cancel + Refund", fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Keep", color = DreamlandMuted) }
+            TextButton(onClick = onDismiss, enabled = !dialog.isLoading) {
+                Text("Keep booking", color = DreamlandMuted)
+            }
         },
-        shape = RoundedCornerShape(16.dp),
     )
+}
+
+@Composable
+private fun CancelSummaryRow(label: String, value: String) {
+    Row(modifier = Modifier.padding(vertical = 2.dp)) {
+        Text(label, color = DreamlandMuted, fontSize = 13.sp, modifier = Modifier.width(110.dp))
+        Text(value, color = DreamlandOnDark, fontSize = 13.sp)
+    }
+}
+
+@Composable
+private fun CancelRefundModeRow(
+    selected: Boolean,
+    enabled: Boolean,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 4.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = onClick,
+            enabled = enabled,
+            colors = RadioButtonDefaults.colors(
+                selectedColor = DreamlandGold,
+                unselectedColor = DreamlandMuted,
+            ),
+        )
+        Spacer(Modifier.width(4.dp))
+        Column {
+            Text(title, color = DreamlandOnDark, fontSize = 14.sp)
+            Text(subtitle, color = DreamlandMuted, fontSize = 11.sp)
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
