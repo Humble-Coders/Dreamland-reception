@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -152,78 +157,60 @@ fun CreateOrderDialog(
                 Spacer(Modifier.height(8.dp))
 
                 state.items.forEachIndexed { index, item ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth(),
+                    // Compact inline row: item name · qty stepper · price · delete.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    "Item ${index + 1}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = DreamlandMuted,
-                                )
-                                if (state.items.size > 1) {
-                                    TextButton(onClick = { vm.removeCreateOrderItem(index) }) {
-                                        Text(
-                                            "Remove",
-                                            color = Color(0xFFEF5350),
-                                            style = MaterialTheme.typography.labelSmall,
-                                        )
-                                    }
-                                }
+                        // Combined food + service combobox — opens on focus, filters as you type.
+                        OrderItemNameField(
+                            value = item.name,
+                            catalog = state.catalogItems,
+                            onValueChange = { vm.onCreateOrderItemName(index, it) },
+                            onSelect = { vm.selectCreateOrderItemSuggestion(index, it) },
+                            onAddNew = { typedName -> settingsVm.openAddFood(typedName) },
+                            modifier = Modifier.weight(2.2f),
+                        )
+                        // Qty stepper
+                        Row(
+                            modifier = Modifier
+                                .weight(1.2f)
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .background(DreamlandForestSurface),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            TextButton(onClick = { vm.onCreateOrderItemQty(index, item.quantity - 1) }) {
+                                Text("-", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
-                            Spacer(Modifier.height(6.dp))
-
-                            // Combined food + service combobox — opens on focus, filters as you type.
-                            OrderItemNameField(
-                                value = item.name,
-                                catalog = state.catalogItems,
-                                onValueChange = { vm.onCreateOrderItemName(index, it) },
-                                onSelect = { vm.selectCreateOrderItemSuggestion(index, it) },
-                                onAddNew = { typedName -> settingsVm.openAddFood(typedName) },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-
-                            Spacer(Modifier.height(8.dp))
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Qty", style = MaterialTheme.typography.labelMedium, color = DreamlandMuted)
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .border(1.dp, DreamlandMuted.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                                            .background(DreamlandForestSurface),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        TextButton(onClick = { vm.onCreateOrderItemQty(index, item.quantity - 1) }) {
-                                            Text("-", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        }
-                                        Text("${item.quantity}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
-                                        TextButton(onClick = { vm.onCreateOrderItemQty(index, item.quantity + 1) }) {
-                                            Text("+", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        }
-                                    }
-                                }
-                                DreamlandTextField(
-                                    modifier = Modifier.weight(1f),
-                                    value = item.price,
-                                    onValueChange = { vm.onCreateOrderItemPrice(index, it) },
-                                    label = "Price (₹)",
-                                    keyboardType = KeyboardType.Number,
-                                )
+                            Text("${item.quantity}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold)
+                            TextButton(onClick = { vm.onCreateOrderItemQty(index, item.quantity + 1) }) {
+                                Text("+", color = DreamlandGold, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                             }
                         }
+                        DreamlandTextField(
+                            modifier = Modifier.weight(1.2f),
+                            value = item.price,
+                            onValueChange = { vm.onCreateOrderItemPrice(index, it) },
+                            label = "Price (₹)",
+                            keyboardType = KeyboardType.Number,
+                        )
+                        IconButton(
+                            onClick = { vm.removeCreateOrderItem(index) },
+                            enabled = state.items.size > 1,
+                        ) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = "Remove item",
+                                tint = Color(0xFFEF5350).copy(alpha = if (state.items.size > 1) 0.9f else 0.3f),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                 }
 
                 TextButton(onClick = { vm.addCreateOrderItem() }) {

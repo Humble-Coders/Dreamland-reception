@@ -210,8 +210,23 @@ private fun AvailableCategoryCard(cat: AvailableCategory) {
                         .padding(horizontal = 10.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        "${cat.availableCount} room${if (cat.availableCount != 1) "s" else ""} free",
+                        "${cat.availableCount} occupiable",
                         color = Color(0xFF2ECC71),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFFF39C12).copy(alpha = 0.15f))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        "${cat.availableForBookingCount} bookable",
+                        color = Color(0xFFF39C12),
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 11.sp,

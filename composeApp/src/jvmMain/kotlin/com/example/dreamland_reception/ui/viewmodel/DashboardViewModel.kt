@@ -7,6 +7,7 @@ import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.Complaint
 import com.example.dreamland_reception.data.model.Order
+import com.example.dreamland_reception.data.model.needsAcknowledgement
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.repository.BillRepository
@@ -17,9 +18,11 @@ import com.example.dreamland_reception.data.repository.FirestoreBookingRepositor
 import com.example.dreamland_reception.data.repository.FirestoreComplaintRepository
 import com.example.dreamland_reception.data.repository.FirestoreOrderRepository
 import com.example.dreamland_reception.data.repository.FirestoreRoomInstanceRepository
+import com.example.dreamland_reception.data.repository.FirestoreRoomRepository
 import com.example.dreamland_reception.data.repository.FirestoreStayRepository
 import com.example.dreamland_reception.data.repository.OrderRepository
 import com.example.dreamland_reception.data.repository.RoomInstanceRepository
+import com.example.dreamland_reception.data.repository.RoomRepository
 import com.example.dreamland_reception.data.repository.StayRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,6 +90,10 @@ data class DashboardState(
     val pendingPaymentsAmount: Double = 0.0,
     val activeComplaintsCount: Int = 0,
     val activeOrdersCount: Int = 0,
+    // Guest-placed (APP/WEBSITE) orders awaiting reception acknowledgement
+    val unacknowledgedAppOrders: List<Order> = emptyList(),
+    val pendingAckCount: Int = 0,
+    val showOrdersAckDialog: Boolean = false,
     // Room breakdown
     val roomStatus: RoomStatusBreakdown = RoomStatusBreakdown(),
     // Alerts & activity
@@ -95,6 +102,7 @@ data class DashboardState(
     val activeStays: List<ActiveStayRow> = emptyList(),
     // Raw data for room grid
     val roomInstances: List<RoomInstance> = emptyList(),
+    val categoryNames: Map<String, String> = emptyMap(),
     val rawActiveStays: List<Stay> = emptyList(),
     val todayBookings: List<Booking> = emptyList(),
     // Trends
@@ -108,6 +116,7 @@ class DashboardViewModel(
     private val orderRepo: OrderRepository = FirestoreOrderRepository,
     private val complaintRepo: ComplaintRepository = FirestoreComplaintRepository,
     private val roomInstanceRepo: RoomInstanceRepository = FirestoreRoomInstanceRepository,
+    private val roomRepo: RoomRepository = FirestoreRoomRepository,
     private val billRepo: BillRepository = FirestoreBillRepository,
     private val bookingRepo: BookingRepository = FirestoreBookingRepository,
 ) : ViewModel() {
@@ -128,9 +137,22 @@ class DashboardViewModel(
     private var ordersJob: Job? = null
     private var complaintsJob: Job? = null
     private var roomsJob: Job? = null
+    private var bookingsJob: Job? = null
 
     init {
         load()
+        loadCategoryNames()
+    }
+
+    private fun loadCategoryNames() {
+        viewModelScope.launch {
+            runCatching { roomRepo.getByHotel(AppContext.hotelId) }
+                .onSuccess { rooms ->
+                    // Room.id = categoryId, Room.type = display name
+                    val names = rooms.associate { it.id to it.type.ifBlank { "Room" } }
+                    _state.update { it.copy(categoryNames = names) }
+                }
+        }
     }
 
     fun load() {
@@ -153,6 +175,17 @@ class DashboardViewModel(
 
     fun clearError() = _state.update { it.copy(error = null) }
 
+    // ── Order acknowledgement (APP/WEBSITE orders) ─────────────────────────────
+    fun openOrdersAckDialog() = _state.update { it.copy(showOrdersAckDialog = true) }
+    fun closeOrdersAckDialog() = _state.update { it.copy(showOrdersAckDialog = false) }
+
+    fun acknowledgeOrder(orderId: String) {
+        viewModelScope.launch {
+            runCatching { orderRepo.markAcknowledged(orderId) }
+                .onFailure { e -> _state.update { it.copy(error = e.message) } }
+        }
+    }
+
     // ── Listener management ───────────────────────────────────────────────────
 
     private fun cancelAllListeners() {
@@ -160,6 +193,7 @@ class DashboardViewModel(
         ordersJob?.cancel(); ordersJob = null
         complaintsJob?.cancel(); complaintsJob = null
         roomsJob?.cancel(); roomsJob = null
+        bookingsJob?.cancel(); bookingsJob = null
     }
 
     private fun startRealtimeListeners() {
@@ -189,7 +223,7 @@ class DashboardViewModel(
         roomsJob = viewModelScope.launch {
             var prevNeedsCleaningCount = -1
             roomInstanceRepo.listenByHotel(hotelId).collect { rooms ->
-                val newCount = rooms.count { it.needsCleaning }
+                val newCount = rooms.count { it.status == "CLEANING" }
                 if (prevNeedsCleaningCount >= 0 && newCount > prevNeedsCleaningCount) {
                     runCatching { com.example.dreamland_reception.ui.notification.NotificationManager.playSound() }
                 }
@@ -209,19 +243,18 @@ class DashboardViewModel(
                 }
                 .onFailure { e -> _state.update { it.copy(error = e.message) } }
         }
-        // Today's bookings (arrivals expected today)
-        viewModelScope.launch {
-            runCatching { bookingRepo.getAllByHotel(AppContext.hotelId) }
-                .onSuccess { bookings: List<com.example.dreamland_reception.data.model.Booking> ->
-                    val today = Calendar.getInstance()
-                    val todayBookings = bookings.filter { b ->
-                        val cal = Calendar.getInstance().apply { time = b.checkIn }
-                        cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
-                        cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) &&
-                        b.status == "CONFIRMED"
-                    }
-                    _state.update { it.copy(todayBookings = todayBookings) }
+        // Today's bookings (arrivals expected today) — real-time, like stays/orders/rooms above
+        bookingsJob = viewModelScope.launch {
+            bookingRepo.listenByHotel(hotelId).collect { bookings ->
+                val today = Calendar.getInstance()
+                val todayBookings = bookings.filter { b ->
+                    val cal = Calendar.getInstance().apply { time = b.checkIn }
+                    cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
+                    cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) &&
+                    b.status == "CONFIRMED"
                 }
+                _state.update { it.copy(todayBookings = todayBookings) }
+            }
         }
     }
 
@@ -285,7 +318,7 @@ class DashboardViewModel(
             total = rooms.size,
             available = rooms.count { it.status == "AVAILABLE" && it.id !in activeRoomIds },
             occupied = activeRoomIds.size,
-            cleaning = rooms.count { it.needsCleaning },
+            cleaning = rooms.count { it.status == "CLEANING" },
             maintenance = rooms.count { it.status == "MAINTENANCE" },
         )
 
@@ -328,6 +361,8 @@ class DashboardViewModel(
                 pendingPaymentsAmount = pendingInvoices.sumOf { it.pendingAmount },
                 activeComplaintsCount = complaints.count { it.status in listOf("NEW", "ASSIGNED") },
                 activeOrdersCount = orders.count { it.status == "NEW" || it.status == "ASSIGNED" },
+                unacknowledgedAppOrders = orders.filter { it.needsAcknowledgement() }.sortedBy { it.createdAt },
+                pendingAckCount = orders.count { it.needsAcknowledgement() },
                 roomStatus = roomStatus,
                 alerts = buildAlerts(orders, complaints, rooms, pendingInvoices),
                 activeStays = activeStayRows,
@@ -363,9 +398,9 @@ class DashboardViewModel(
             ))
         }
 
-        val cleaningCount = rooms.count { it.needsCleaning }
+        val cleaningCount = rooms.count { it.status == "CLEANING" }
         if (cleaningCount > 0) {
-            val roomNums = rooms.filter { it.needsCleaning }.joinToString(", ") { it.roomNumber }
+            val roomNums = rooms.filter { it.status == "CLEANING" }.joinToString(", ") { it.roomNumber }
             alerts.add(DashboardAlert(
                 id = "cleaning_rooms", type = AlertType.CLEANING_ROOM,
                 title = "$cleaningCount Room${if (cleaningCount > 1) "s need" else " needs"} cleaning",
@@ -434,8 +469,13 @@ class DashboardViewModel(
         viewModelScope.launch {
             runCatching {
                 roomInstanceRepo.updateStatus(roomId, "AVAILABLE")
-                roomInstanceRepo.markNeedsCleaning(roomId, false)
             }
+        }
+    }
+
+    fun setRoomAvailableForBooking(roomId: String, available: Boolean) {
+        viewModelScope.launch {
+            runCatching { roomInstanceRepo.setAvailableForBooking(roomId, available) }
         }
     }
 }

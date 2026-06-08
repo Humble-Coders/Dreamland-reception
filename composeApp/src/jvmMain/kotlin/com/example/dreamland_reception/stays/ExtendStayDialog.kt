@@ -292,6 +292,9 @@ fun ExtendStayDialog(state: ExtendStayState, vm: StaysViewModel) {
                                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                             Text("Room ${inst.roomNumber}", color = Color(0xFF4CAF50), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                                             Text("available", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+                                            if (!inst.isAvailableForBooking) {
+                                                Text("not bookable", color = Color(0xFFF39C12).copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+                                            }
                                         }
                                     }
                                 }

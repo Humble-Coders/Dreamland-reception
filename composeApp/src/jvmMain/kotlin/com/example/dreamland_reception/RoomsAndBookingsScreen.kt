@@ -142,6 +142,14 @@ private fun bookingStatusColor(status: String): Color = when (status) {
     else              -> Color(0xFF8FA69E)
 }
 
+// Human-readable booking source for cards. Known codes are prettified; a configured
+// source name (e.g. "Make my trip") is shown as-is.
+private fun bookingSourceLabel(source: String): String = when (source.trim()) {
+    "", "APP"  -> "App"
+    "WALK_IN"  -> "Walk-in"
+    else        -> source.trim()
+}
+
 private fun formatRupees(amount: Double): String {
     val nf = NumberFormat.getNumberInstance(Locale("en", "IN")).apply {
         minimumFractionDigits = 2
@@ -666,22 +674,43 @@ private fun RoomListItem(
                     )
                 }
             }
-            if (categoryName.isNotBlank()) {
+            if (categoryName.isNotBlank() || !room.isAvailableForBooking) {
                 Spacer(Modifier.height(4.dp))
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(DreamlandGold.copy(alpha = 0.12f))
-                        .padding(horizontal = 5.dp, vertical = 2.dp),
-                ) {
-                    Text(
-                        categoryName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = DreamlandGold.copy(alpha = 0.8f),
-                        fontSize = 9.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    if (categoryName.isNotBlank()) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(DreamlandGold.copy(alpha = 0.12f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                categoryName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DreamlandGold.copy(alpha = 0.8f),
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (!room.isAvailableForBooking) {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFFF39C12).copy(alpha = 0.12f))
+                                .padding(horizontal = 5.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                "Not Bookable",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFF39C12).copy(alpha = 0.85f),
+                                fontSize = 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -751,7 +780,7 @@ private fun RoomDetailPanel(
                 ) {
                     Text(room.status, style = MaterialTheme.typography.labelMedium, color = statusColor, letterSpacing = 1.sp)
                 }
-                if (room.status == "CLEANING" || room.needsCleaning) {
+                if (room.status == "CLEANING") {
                     Button(
                         onClick = { vm.markCleaningComplete(room) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2ECC71)),
@@ -760,7 +789,7 @@ private fun RoomDetailPanel(
                     ) {
                         Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(14.dp), tint = Color.White)
                         Spacer(Modifier.width(6.dp))
-                        Text(if (room.needsCleaning && room.status != "CLEANING") "Mark Clean" else "Mark Available", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Mark Available", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
                 if (room.status != "OCCUPIED") {
@@ -1393,6 +1422,7 @@ private fun GroupBookingCard(
     onCancelAll: () -> Unit = {},
 ) {
     val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
+    val bookedAtFmt = SimpleDateFormat("d MMM yyyy, h:mm a", Locale.getDefault())
     val primary = group[0]
     val allStatuses = group.map { it.status }.distinct()
     val overallStatus = when {
@@ -1491,6 +1521,15 @@ private fun GroupBookingCard(
                             Text(primary.guestPhone, style = MaterialTheme.typography.bodySmall, color = DreamlandGold.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
                         }
                     }
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = buildString {
+                            append(bookingSourceLabel(primary.source))
+                            append("  ·  Booked ${bookedAtFmt.format(primary.createdAt)}")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted.copy(alpha = 0.7f),
+                    )
                 }
                 Box(
                     Modifier
@@ -1681,6 +1720,7 @@ private fun BookingCard(
     onNoShow: () -> Unit = {},
 ) {
     val fmt = SimpleDateFormat("d MMM", Locale.getDefault())
+    val bookedAtFmt = SimpleDateFormat("d MMM yyyy, h:mm a", Locale.getDefault())
     val statusColor = bookingStatusColor(booking.status)
     val isConfirmed = booking.status == "CONFIRMED"
     val hasRoom = booking.roomNumber.isNotBlank()
@@ -1769,6 +1809,15 @@ private fun BookingCard(
                             Text(booking.guestPhone, style = MaterialTheme.typography.bodySmall, color = DreamlandGold.copy(alpha = 0.9f), fontWeight = FontWeight.Medium)
                         }
                     }
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = buildString {
+                            append(bookingSourceLabel(booking.source))
+                            append("  ·  Booked ${bookedAtFmt.format(booking.createdAt)}")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DreamlandMuted.copy(alpha = 0.7f),
+                    )
                 }
                 Spacer(Modifier.width(12.dp))
                 Box(

@@ -28,6 +28,7 @@ import java.util.Date
 data class AvailableCategory(
     val room: Room,
     val availableCount: Int,
+    val availableForBookingCount: Int,
     val pricePerNight: Double,
 )
 
@@ -135,6 +136,16 @@ class AvailabilityViewModel(
             // One-shot: room categories (rarely change, no need for real-time)
             val allCategories = runCatching { roomRepo.getByHotel(hotelId) }.getOrElse { emptyList() }
 
+            // Refresh hotel check-in/out times synchronously before the combine below runs —
+            // init's loadHotelTimes() is fire-and-forget and may not have resolved yet, and
+            // since these are plain vars (not a Flow), a stale/blank value would never
+            // retrigger a recompute. atHotelTime() silently falls back to raw timestamps when
+            // blank, which misjudges same-day-turnover overlaps and undercounts bookable rooms.
+            runCatching { hotelRepo.getById(hotelId) }.getOrNull()?.let { hotel ->
+                hotelCheckInTime  = hotel.checkInTime
+                hotelCheckOutTime = hotel.checkOutTime
+            }
+
             // 3 parallel real-time listeners
             combine(
                 // Stream 1: confirmed bookings for this hotel
@@ -167,15 +178,25 @@ class AvailabilityViewModel(
                 }
                 val usableByCat = usable.groupingBy { it.categoryId }.eachCount()
 
+                // New-booking availability — shares availableForNewBookingByCategory with the
+                // Add Booking wizard (StaysViewModel) so this panel's "bookable" count can never
+                // drift from the wizard's "avail." count. Unassigned confirmed/pending bookings
+                // reduce the count on both surfaces.
+                val availableForBookingByCat = availableForNewBookingByCategory(
+                    usable, bookings, stays, checkIn, checkOut, hotelCheckInTime, hotelCheckOutTime,
+                )
+
                 // Steps 5-6 — availability per category, filter by guest count + active flag
                 allCategories.mapNotNull { cat ->
                     val committed = (bookedByCat[cat.id] ?: 0) + (staysByCat[cat.id] ?: 0)
                     val usableCount = usableByCat[cat.id] ?: 0
                     val available = usableCount - committed
+                    val availableForBooking = availableForBookingByCat[cat.id] ?: 0
                     if (available > 0 && cat.capacity >= guests && cat.available) {
                         AvailableCategory(
                             room = cat,
                             availableCount = available,
+                            availableForBookingCount = availableForBooking,
                             pricePerNight = cat.pricePerNight,
                         )
                     } else null

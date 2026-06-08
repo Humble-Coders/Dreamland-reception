@@ -864,6 +864,11 @@ class StaysViewModel(
         val ws = _walkInState.value
         val primaryName = ws.guestEntries.firstOrNull()?.name?.trim()?.ifBlank { ws.guestName.trim() } ?: ws.guestName.trim()
         if (primaryName.isBlank()) { _walkInState.update { it.copy(error = "Primary guest name is required") }; return }
+        // The primary guest must have a valid phone so the booking can be linked to a guest record.
+        val rawPrimaryPhoneCheck = (ws.guestEntries.firstOrNull()?.phone ?: "").trim().ifBlank { ws.guestPhone.trim() }
+        if (normalizePhoneE164(rawPrimaryPhoneCheck) == null) {
+            _walkInState.update { it.copy(error = "Primary guest phone number is required") }; return
+        }
         val totalRooms = ws.bookingRoomCountsByCategory.values.sum() + ws.selectedInstanceIds.count { id ->
             val catId = ws.selectedInstanceDetails[id]?.categoryId ?: ""
             catId !in ws.bookingRoomCountsByCategory
@@ -929,6 +934,7 @@ class StaysViewModel(
                             adults = ws.adults, children = ws.children,
                             status = "CONFIRMED", source = sourceName, sourceId = sourceId,
                             totalAmount = total, advancePaidAmount = advancePerRoom,
+                            advancePaymentMethod = ws.advancePaymentMethod.ifBlank { "CASH" },
                             groupBookingId = groupId, createdAt = Date(),
                         ))
                     }
@@ -947,6 +953,7 @@ class StaysViewModel(
                             adults = ws.adults, children = ws.children,
                             status = "CONFIRMED", source = sourceName, sourceId = sourceId,
                             totalAmount = total, advancePaidAmount = advancePerRoom,
+                            advancePaymentMethod = ws.advancePaymentMethod.ifBlank { "CASH" },
                             groupBookingId = groupId, createdAt = Date(),
                         ))
                     }
@@ -1633,6 +1640,20 @@ class StaysViewModel(
                 .filter { it.hotelId == hotelId && it.status != "MAINTENANCE" }
             val usablePerCat = allInstances.groupingBy { it.categoryId }.eachCount()
 
+            // Add Booking creates a NEW reservation, so its "avail." count must equal the
+            // Dashboard's Check Availability "bookable" count exactly — both go through the shared
+            // availableForNewBookingByCategory (honors the per-room "bookable" flag and counts
+            // unassigned reservations as demand). Walk-in / booking check-in keep the category-level
+            // supply−demand count below: the "bookable" flag only governs new-booking supply, not
+            // who can be checked in.
+            val bookingModeAvailability: Map<String, Int>? = if (ws.isBookingMode) {
+                val hotel = DreamlandAppInitializer.getSettingsViewModel().state.value.selectedHotel
+                availableForNewBookingByCategory(
+                    allInstances, confirmedBookings, activeStays, checkIn, checkOut,
+                    hotel?.checkInTime ?: "", hotel?.checkOutTime ?: "",
+                )
+            } else null
+
             // Steps 5-6 — compute availability for all categories; always populate the map
             // so the UI can show "N avail." counts regardless of capacity/available filters.
             val availabilityMap = mutableMapOf<String, Int>()
@@ -1640,7 +1661,8 @@ class StaysViewModel(
             ws.categories.forEach { cat ->
                 val committed = (bookingsPerCat[cat.id] ?: 0) + (staysPerCat[cat.id] ?: 0)
                 val usable = usablePerCat[cat.id] ?: 0
-                availabilityMap[cat.id] = (usable - committed).coerceAtLeast(0)
+                availabilityMap[cat.id] = bookingModeAvailability?.let { it[cat.id] ?: 0 }
+                    ?: (usable - committed).coerceAtLeast(0)
                 // Walk-ins default to the offline rate (ignoring seasonal); bookings keep
                 // the original standard/seasonal price. Manual overrides are applied on top
                 // in the UI and survive this recompute (they live in priceOverrides).
@@ -1728,6 +1750,8 @@ class StaysViewModel(
             val dueOut = mutableListOf<RoomInstance>()
             for (inst in allInstances) {
                 when {
+                    // Add Booking honors the "bookable" flag (see computeAvailability); walk-in/check-in don't.
+                    ws.isBookingMode && !inst.isAvailableForBooking -> continue  // off the new-booking pool — hide
                     inst.id in dueOutIds  -> dueOut.add(inst)   // expected checkout today — show marked
                     inst.id in occupiedIds -> continue           // occupied — hide
                     inst.id in bookedIds -> continue             // confirmed booking — hide
@@ -2614,8 +2638,10 @@ class StaysViewModel(
                 sourceBooking = booking,
                 // Rate locked in the booking (not offline, not current category price).
                 priceOverrides = bookingPriceOverrides(listOf(booking), categories),
-                // Auto-fill the advance already paid on the booking (editable; mode still required).
+                // Auto-fill the advance already paid on the booking + the method it was paid via,
+                // so check-in reflects what was recorded when the booking was made (both editable).
                 advancePayment = formatAmountField(booking.advancePaidAmount),
+                advancePaymentMethod = booking.advancePaymentMethod,
             )
             // Populate full category availability map for all categories
             computeAvailability()

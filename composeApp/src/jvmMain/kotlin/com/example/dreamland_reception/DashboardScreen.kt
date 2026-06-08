@@ -20,6 +20,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -55,7 +60,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,6 +77,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -76,6 +88,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.HorizontalDivider
+import com.example.dreamland_reception.data.model.Order
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.RoomInstance
@@ -151,9 +168,11 @@ fun DashboardScreen(
                     RoomGridSection(
                         rooms = state.roomInstances,
                         stays = state.rawActiveStays,
+                        categoryNames = state.categoryNames,
                         hotelCheckOutTime = hotelCheckOutTime,
                         onSetCleaning = vm::setRoomCleaning,
                         onSetAvailable = vm::setRoomAvailable,
+                        onToggleBookable = vm::setRoomAvailableForBooking,
                         onRoomClick = onRoomClick,
                     )
                     TodayBookingsCard(bookings = state.todayBookings)
@@ -181,7 +200,8 @@ fun DashboardScreen(
                         onNewWalkIn = onNewWalkIn,
                         onAddBooking = onAddBooking,
                         onNavigateToOrders = onNavigateToOrders,
-                        activeOrdersCount = state.activeOrdersCount,
+                        pendingAckCount = state.pendingAckCount,
+                        onOpenOrdersAck = { vm.openOrdersAckDialog() },
                     )
                 }
             }
@@ -191,6 +211,20 @@ fun DashboardScreen(
         com.example.dreamland_reception.stays.CheckAvailabilityDialog(
             onDismiss = { showCheckAvailability = false },
         )
+    }
+
+    if (state.showOrdersAckDialog) {
+        // Auto-close once everything has been acknowledged.
+        LaunchedEffect(state.unacknowledgedAppOrders.isEmpty()) {
+            if (state.unacknowledgedAppOrders.isEmpty()) vm.closeOrdersAckDialog()
+        }
+        if (state.unacknowledgedAppOrders.isNotEmpty()) {
+            OrdersAcknowledgeDialog(
+                orders = state.unacknowledgedAppOrders,
+                onAcknowledge = { vm.acknowledgeOrder(it) },
+                onDismiss = { vm.closeOrdersAckDialog() },
+            )
+        }
     }
 }
 
@@ -207,9 +241,11 @@ private fun roomStatusColor(status: String, isOccupied: Boolean): Color = when {
 private fun RoomGridSection(
     rooms: List<RoomInstance>,
     stays: List<Stay>,
+    categoryNames: Map<String, String>,
     hotelCheckOutTime: String,
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onToggleBookable: (String, Boolean) -> Unit,
     onRoomClick: (String) -> Unit,
 ) {
     if (rooms.isEmpty()) return
@@ -233,9 +269,11 @@ private fun RoomGridSection(
                                 room = room,
                                 stay = stay,
                                 isOccupied = stay != null,
+                                categoryNames = categoryNames,
                                 hotelCheckOutTime = hotelCheckOutTime,
                                 onSetCleaning = onSetCleaning,
                                 onSetAvailable = onSetAvailable,
+                                onToggleBookable = onToggleBookable,
                                 onClick = { stay?.id?.let { onRoomClick(it) } },
                                 modifier = Modifier.weight(1f),
                             )
@@ -263,9 +301,11 @@ private fun RoomCard(
     room: RoomInstance,
     stay: Stay?,
     isOccupied: Boolean,
+    categoryNames: Map<String, String> = emptyMap(),
     hotelCheckOutTime: String = "11:00",
     onSetCleaning: (String) -> Unit,
     onSetAvailable: (String) -> Unit,
+    onToggleBookable: (String, Boolean) -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -278,11 +318,11 @@ private fun RoomCard(
         room.status == "MAINTENANCE" -> "MAINTENANCE"
         else -> "AVAILABLE"
     }
-    // Room type from whatever's available: the instance's category, else the active stay's category.
-    val roomType = room.categoryName.ifBlank { stay?.roomCategoryName.orEmpty() }
+    // Room type from whatever's available: the instance's own name, else a category lookup, else the active stay's category.
+    val roomType = room.categoryName.ifBlank { categoryNames[room.categoryId] ?: stay?.roomCategoryName.orEmpty() }
     Column(
         modifier = modifier
-            .height(156.dp)
+            .height(200.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(DreamlandForestElevated)
             .border(1.dp, statusColor.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
@@ -302,7 +342,24 @@ private fun RoomCard(
             RoomStatusPill(statusLabel, statusColor)
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(6.dp))
+
+        // Admin toggle: takes the room off the new-booking pool without affecting check-in/extend/change-room.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (room.isAvailableForBooking) "Bookable" else "Not Bookable",
+                color = DreamlandMuted,
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Switch(
+                checked = room.isAvailableForBooking,
+                onCheckedChange = { onToggleBookable(room.id, it) },
+                modifier = Modifier.scale(0.7f),
+                colors = SwitchDefaults.colors(checkedThumbColor = DreamlandGold, checkedTrackColor = DreamlandGold.copy(alpha = 0.4f)),
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
 
         when {
             // Occupied — guest summary. No housekeeping toggle: an occupied room can't be set to cleaning here.
@@ -324,7 +381,7 @@ private fun RoomCard(
             // Vacant — housekeeping toggle.
             else -> {
                 Spacer(Modifier.weight(1f))
-                val cleaningSelected = room.status == "CLEANING" || room.needsCleaning
+                val cleaningSelected = room.status == "CLEANING"
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     RoomToggleChip("Available", !cleaningSelected, Color(0xFF4CAF50), Modifier.weight(1f)) { onSetAvailable(room.id) }
                     RoomToggleChip("Cleaning", cleaningSelected, Color(0xFF2196F3), Modifier.weight(1f)) { onSetCleaning(room.id) }
@@ -852,6 +909,12 @@ private fun SidebarAvailableCategoryRow(cat: AvailableCategory) {
                 color = Color(0xFF2ECC71),
                 fontSize = 10.sp,
             )
+            Text(
+                "${cat.availableForBookingCount} bookable",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFF39C12),
+                fontSize = 10.sp,
+            )
         }
         Text(
             "₹${fmt.format(cat.pricePerNight.toLong())}/night",
@@ -975,7 +1038,8 @@ private fun QuickActionsCard(
     onNewWalkIn: () -> Unit,
     onAddBooking: () -> Unit,
     onNavigateToOrders: () -> Unit,
-    activeOrdersCount: Int = 0,
+    pendingAckCount: Int = 0,
+    onOpenOrdersAck: () -> Unit = {},
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -996,7 +1060,10 @@ private fun QuickActionsCard(
                 Text("Walk-in Check-in", style = MaterialTheme.typography.bodySmall, color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), textAlign = TextAlign.Start)
             }
             QuickActionButton(Icons.Filled.EventAvailable, "Add Booking", onAddBooking)
-            ActiveOrdersButton(activeOrdersCount = activeOrdersCount, onClick = onNavigateToOrders)
+            ActiveOrdersButton(
+                activeOrdersCount = pendingAckCount,
+                onClick = { if (pendingAckCount > 0) onOpenOrdersAck() else onNavigateToOrders() },
+            )
         }
     }
 }
@@ -1048,6 +1115,147 @@ private fun ActiveOrdersButton(activeOrdersCount: Int, onClick: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(activeOrdersCount.toString(), style = MaterialTheme.typography.labelSmall, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+// Sliding dialog over unacknowledged APP/WEBSITE orders, with dot indicators and a
+// per-order Acknowledge button. Auto-closes (from the caller) once the list empties.
+@Composable
+private fun OrdersAcknowledgeDialog(
+    orders: List<Order>,
+    onAcknowledge: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val timeFmt = remember { SimpleDateFormat("d MMM yyyy, h:mm a", Locale.getDefault()) }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .widthIn(min = 420.dp, max = 560.dp)
+                .fillMaxWidth(0.5f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(DreamlandForestSurface)
+                .padding(24.dp),
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("NEW ORDERS", style = MaterialTheme.typography.labelMedium, color = DreamlandGold, letterSpacing = 1.5.sp)
+                        Text("Acknowledge to confirm", style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.Bold)
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Filled.Close, contentDescription = "Close", tint = DreamlandMuted, modifier = Modifier.size(18.dp))
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                val pagerState = rememberPagerState(pageCount = { orders.size })
+                val scope = rememberCoroutineScope()
+                HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth()) { page ->
+                    val order = orders[page]
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(DreamlandForestElevated)
+                            .padding(18.dp),
+                    ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (order.roomNumber.isNotBlank()) "Room ${order.roomNumber}" else order.guestName.ifBlank { "Order" },
+                                    style = MaterialTheme.typography.titleMedium, color = DreamlandOnDark, fontWeight = FontWeight.Bold,
+                                )
+                                if (order.guestName.isNotBlank()) Text(order.guestName, color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Box(
+                                Modifier.clip(RoundedCornerShape(6.dp)).background(DreamlandGold.copy(alpha = 0.18f)).padding(horizontal = 8.dp, vertical = 3.dp),
+                            ) {
+                                Text(order.source.ifBlank { "APP" }, color = DreamlandGold, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider(color = DreamlandGold.copy(alpha = 0.12f))
+                        Spacer(Modifier.height(12.dp))
+                        Column(
+                            Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            order.items.forEach { item ->
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("${item.name} ×${item.quantity}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                    Text("₹${"%.2f".format(item.total)}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        if (order.notes.isNotBlank()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("Note: ${order.notes}", color = DreamlandMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(timeFmt.format(order.createdAt), color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                            if (order.totalAmount > 0) Text("₹${"%.2f".format(order.totalAmount)}", color = DreamlandGold, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+                // Dot indicators
+                if (orders.size > 1) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        repeat(orders.size) { i ->
+                            val selected = i == pagerState.currentPage
+                            Box(
+                                Modifier
+                                    .padding(horizontal = 3.dp)
+                                    .size(if (selected) 9.dp else 7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.4f)),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                }
+
+                val cur = pagerState.currentPage.coerceIn(0, orders.lastIndex)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (orders.size > 1) {
+                        OutlinedButton(
+                            onClick = { scope.launch { pagerState.animateScrollToPage((cur - 1).coerceAtLeast(0)) } },
+                            enabled = cur > 0,
+                            modifier = Modifier.height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = if (cur > 0) 0.5f else 0.2f)),
+                        ) {
+                            Icon(Icons.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = if (cur > 0) DreamlandGold else DreamlandMuted, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    Button(
+                        onClick = { onAcknowledge(orders[cur].id) },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                    ) {
+                        Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = Color(0xFF0D1F17), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Acknowledge", color = Color(0xFF0D1F17), fontWeight = FontWeight.Bold)
+                    }
+                    if (orders.size > 1) {
+                        OutlinedButton(
+                            onClick = { scope.launch { pagerState.animateScrollToPage((cur + 1).coerceAtMost(orders.lastIndex)) } },
+                            enabled = cur < orders.lastIndex,
+                            modifier = Modifier.height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = if (cur < orders.lastIndex) 0.5f else 0.2f)),
+                        ) {
+                            Text("Next", color = if (cur < orders.lastIndex) DreamlandGold else DreamlandMuted, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(4.dp))
+                            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = "Next", tint = if (cur < orders.lastIndex) DreamlandGold else DreamlandMuted, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
             }
         }
     }

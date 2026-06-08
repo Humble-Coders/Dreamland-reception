@@ -18,6 +18,7 @@ interface OrderRepository {
     suspend fun getByHotel(hotelId: String): List<Order>
     suspend fun add(order: Order): String
     suspend fun updateStatus(id: String, status: String)
+    suspend fun markAcknowledged(id: String)
     suspend fun updateAssignment(id: String, staffId: String, staffName: String)
     suspend fun delete(id: String)
     /** Marks an order COMPLETED and records the vendor + payment details (unsynced). */
@@ -74,6 +75,10 @@ object FirestoreOrderRepository : OrderRepository {
 
     override suspend fun updateStatus(id: String, status: String) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("status" to status)).get(); Unit
+    }
+
+    override suspend fun markAcknowledged(id: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf("acknowledged" to true)).get(); Unit
     }
 
     override suspend fun updateAssignment(id: String, staffId: String, staffName: String) =
@@ -165,6 +170,8 @@ object FirestoreOrderRepository : OrderRepository {
             notes = getString("notes") ?: "",
             // `orderedAt` is the legacy field name; fall back to it for pre-rename docs.
             createdAt = getTimestamp("createdAt")?.toDate() ?: getTimestamp("orderedAt")?.toDate() ?: Date(),
+            acknowledged = getBoolean("acknowledged") ?: false,
+            source = getString("source") ?: "",
             assignedTo = getString("assignedTo") ?: "",
             assignedToName = getString("assignedToName") ?: "",
             vendorId = getString("vendorId") ?: "",
@@ -218,6 +225,8 @@ object FirestoreOrderRepository : OrderRepository {
         "status" to status,
         "notes" to notes,
         "createdAt" to createdAt,
+        "acknowledged" to acknowledged,
+        "source" to source,
         "assignedTo" to assignedTo,
         "assignedToName" to assignedToName,
         "vendorId" to vendorId,

@@ -118,6 +118,10 @@ data class RoomsAndBookingsUiState(
     val bookingsLoading: Boolean = true,
     // Active stays keyed by roomNumber for guest-name display
     val activeStaysByRoom: Map<String, Stay> = emptyMap(),
+    // Same active stays as a flat list — use this (not activeStaysByRoom.values) for any
+    // overlap/availability math: roomNumber can collide across categories, so the map silently
+    // drops stays and undercounts occupancy.
+    val activeStays: List<Stay> = emptyList(),
     // Room categories: categoryId -> display name (loaded from `rooms` collection)
     val categoryNames: Map<String, String> = emptyMap(),
     // Full room category objects (for price, capacity, etc. in Add Booking dialog)
@@ -303,7 +307,10 @@ class RoomsAndBookingsViewModel(
             stayRepo.listenActive(hotelId)
                 .catch { e -> _uiState.update { it.copy(error = "Stays: ${e.message}") } }
                 .collect { stays ->
-                    _uiState.update { it.copy(activeStaysByRoom = stays.associateBy { s -> s.roomNumber }) }
+                    _uiState.update { it.copy(
+                        activeStays = stays,
+                        activeStaysByRoom = stays.associateBy { s -> s.roomNumber },
+                    ) }
                 }
         }
     }
@@ -364,10 +371,8 @@ class RoomsAndBookingsViewModel(
     fun markCleaningComplete(room: RoomInstance) {
         launchWithGlobalLoading {
             runCatching {
-                // Clear needsCleaning flag AND ensure status is AVAILABLE
-                // (handles both new-flow rooms and legacy CLEANING-status rooms)
+                // Housekeeping done — return the CLEANING room to AVAILABLE.
                 roomInstanceRepo.updateStatus(room.id, "AVAILABLE", null)
-                roomInstanceRepo.markNeedsCleaning(room.id, false)
             }
                 .onSuccess { _uiState.update { it.copy(operationMessage = "Room ${room.roomNumber} marked as available") } }
                 .onFailure { e -> _uiState.update { it.copy(error = e.message) } }
@@ -940,17 +945,10 @@ class RoomsAndBookingsViewModel(
     fun computeAvailableRoomsForNewBooking(checkIn: Date, checkOut: Date) {
         val ciTime = _uiState.value.hotelCheckInTime
         val coTime = _uiState.value.hotelCheckOutTime
-        val allRooms = _uiState.value.rooms.filter { it.status != "MAINTENANCE" }
-        val bookedIds = _uiState.value.bookings
-            .filter { (it.status == "CONFIRMED" || it.status == "PENDING_PAYMENT") && it.roomInstanceId.isNotBlank() }
-            .filter { it.checkIn.atHotelTime(ciTime) < checkOut.atHotelTime(coTime) &&
-                      it.checkOut.atHotelTime(coTime) > checkIn.atHotelTime(ciTime) }
-            .map { it.roomInstanceId }.toSet()
-        val occupiedIds = _uiState.value.activeStaysByRoom.values
-            .filter { it.checkInActual.atHotelTime(ciTime) < checkOut.atHotelTime(coTime) &&
-                      it.expectedCheckOut.atHotelTime(coTime) > checkIn.atHotelTime(ciTime) }
-            .map { it.roomInstanceId }.toSet()
-        val available = allRooms.filter { it.id !in bookedIds && it.id !in occupiedIds }
+        val available = bookableInstancesForNewBooking(
+            _uiState.value.rooms, _uiState.value.bookings, _uiState.value.activeStays,
+            checkIn, checkOut, ciTime, coTime,
+        )
         val allCatIds = _uiState.value.rooms.map { it.categoryId }.filter { it.isNotBlank() }.toSet()
         val perCat = available.filter { it.status != "CLEANING" }.groupingBy { it.categoryId }.eachCount()
         val availabilityMap = allCatIds.associateWith { catId -> perCat[catId] ?: 0 }
