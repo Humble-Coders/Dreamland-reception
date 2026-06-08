@@ -1117,8 +1117,29 @@ class StayBillingViewModel(
         saveBillGuestName()
     }
 
-    fun onDiscountTypeInline(v: String) = _state.update { it.copy(editableDiscountType = v) }
-    fun onDiscountValueInline(v: String) = _state.update { it.copy(editableDiscountValue = v.filter { c -> c.isDigit() || c == '.' }) }
+    fun onDiscountTypeInline(v: String) {
+        _state.update { it.copy(editableDiscountType = v) }
+        // Persist immediately so the confirm dialog, finalize and invoice never use a stale type
+        // (e.g. FLAT when the user just switched to %). Recalculates the bill from the editable
+        // discount and writes it.
+        saveDiscountInline()
+    }
+
+    fun onDiscountValueInline(v: String) {
+        _state.update { it.copy(editableDiscountValue = v.filter { c -> c.isDigit() || c == '.' }) }
+        // Keep the in-memory bill in sync as the value is typed (the confirm dialog + finalize read
+        // the bill); Firestore is written when the field loses focus (onDiscountSave).
+        syncBillDiscountFromEditable()
+    }
+
+    /** Recomputes the in-memory bill from the current editable discount type/value (no Firestore write). */
+    private fun syncBillDiscountFromEditable() {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val type = _state.value.editableDiscountType
+        val value = _state.value.editableDiscountValue.toDoubleOrNull() ?: 0.0
+        val updated = recalculate(bill.copy(discountType = type, discountValue = value))
+        _state.update { it.copy(bill = updated) }
+    }
 
     fun saveDiscountInline() {
         val type = _state.value.editableDiscountType
@@ -1357,8 +1378,15 @@ class StayBillingViewModel(
             val updatedTxs = otherTxs + listOfNotNull(cashTx, bankTx)
             val newTotalPaid = updatedTxs.sumOf { it.amount }
 
-            // Recalculate totals using correct transactions and per-item tax rates.
-            val billWithTxs = bill.copy(transactions = updatedTxs, totalPaid = newTotalPaid)
+            // Recalculate totals using correct transactions, per-item tax rates, AND the current
+            // editable discount (type + value) — the user may have switched FLAT↔% without the
+            // value field blurring, so apply it here too so finalize/invoice match the summary.
+            val discType = _state.value.editableDiscountType
+            val discValue = _state.value.editableDiscountValue.toDoubleOrNull() ?: bill.discountValue
+            val billWithTxs = bill.copy(
+                transactions = updatedTxs, totalPaid = newTotalPaid,
+                discountType = discType, discountValue = discValue,
+            )
             val settledBill = recalculate(billWithTxs)
 
             // Write everything atomically in a single Firestore transaction.

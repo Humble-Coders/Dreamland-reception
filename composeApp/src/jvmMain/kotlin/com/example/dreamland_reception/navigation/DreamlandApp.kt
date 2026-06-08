@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Feedback
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Hotel
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Menu
@@ -134,6 +135,7 @@ internal enum class MainTab(val label: String) {
     Orders("Orders"),
     Expenses("Expenses"),
     Transfers("Transfers"),
+    DailyBook("Daily Book"),
     Complaints("Complaints"),
     Staff("Staff"),
     Reports("Users"),
@@ -155,6 +157,7 @@ private val dreamlandNavItems: List<NavItem> = listOf(
     NavItem(MainTab.Orders, Icons.Filled.ShoppingBag, "Orders"),
     NavItem(MainTab.Expenses, Icons.Filled.Payments, "Expenses"),
     NavItem(MainTab.Transfers, Icons.Filled.SwapHoriz, "Transfers"),
+    NavItem(MainTab.DailyBook, Icons.Filled.MenuBook, "Daily Book"),
     /* HIDDEN: NavItem(MainTab.Complaints, Icons.Filled.Feedback, "Complaints"), */
     /* HIDDEN: NavItem(MainTab.Staff, Icons.Filled.Groups, "Staff"), */
     NavItem(MainTab.Reports, Icons.Filled.Person, "Users"),
@@ -293,6 +296,7 @@ fun DreamlandApp() {
                         )
                         MainTab.Expenses -> ExpensesScreen()
                         MainTab.Transfers -> TransfersScreen()
+                        MainTab.DailyBook -> com.example.dreamland_reception.DailyBookScreen()
                         MainTab.Complaints -> ComplaintsScreen()
                         MainTab.Staff -> StaffScreen()
                         MainTab.Reports -> UsersScreen()

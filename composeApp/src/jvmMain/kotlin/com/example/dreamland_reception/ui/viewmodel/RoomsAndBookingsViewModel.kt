@@ -3,6 +3,7 @@ package com.example.dreamland_reception.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.data.accounting.AccountingRepository
 import com.example.dreamland_reception.ui.notification.SpeechAnnouncer
 import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.BookingSource
@@ -78,6 +79,11 @@ data class CancelDialogState(
      * Only relevant when [isManual] is true; ignored on the Razorpay flow.
      */
     val paidVia: ManualRefundMethod? = null,
+    // App-booking (Razorpay) refunds: how the refund is split across Cash/Bank for the LEDGER +
+    // Firestore till recording (independent of the Razorpay online refund, which is untouched).
+    // Free-text ₹ amounts; empty = 0. Must sum to the effective refund amount.
+    val refundCashInput: String = "",
+    val refundBankInput: String = "",
     val isLoading: Boolean = false,
     val error: CancelDialogError? = null,
     /**
@@ -99,6 +105,17 @@ data class CancelDialogState(
      * Refund-amount field on all modes, and the Paid-via CASH/BANK toggle.
      */
     val isManual: Boolean get() = groupBookings.all { it.paymentOrderId.isBlank() }
+
+    /**
+     * The refund amount (paise) implied by the selected mode — what the Cash/Bank split must total
+     * for the ledger + till recording. POLICY → policy preview, FULL → whole advance, FIXED → typed.
+     */
+    val effectiveRefundPaise: Long
+        get() = when (refundMode) {
+            ReceptionRefundMode.POLICY -> policyPreviewPaise ?: 0L
+            ReceptionRefundMode.FULL -> totalAdvancePaise
+            ReceptionRefundMode.FIXED -> refundAmountRupeesInput.toDoubleOrNull()?.let { (it * 100.0).toLong() } ?: 0L
+        }
 }
 
 data class RoomCategoryEntry(
@@ -498,7 +515,12 @@ class RoomsAndBookingsViewModel(
                 mode != ReceptionRefundMode.FIXED -> ""
                 else -> d.refundAmountRupeesInput
             }
-            s.copy(cancelDialog = d.copy(refundMode = mode, refundAmountRupeesInput = newInput, error = null))
+            // Changing the mode changes the target total → clear the Cash/Bank split so it can't
+            // silently disagree with the new amount.
+            s.copy(cancelDialog = d.copy(
+                refundMode = mode, refundAmountRupeesInput = newInput,
+                refundCashInput = "", refundBankInput = "", error = null,
+            ))
         }
     }
 
@@ -520,8 +542,30 @@ class RoomsAndBookingsViewModel(
         }
         _uiState.update { s ->
             val d = s.cancelDialog ?: return@update s
-            s.copy(cancelDialog = d.copy(refundAmountRupeesInput = sanitized, error = null))
+            // FIXED amount drives the target total → clear the split when it changes.
+            s.copy(cancelDialog = d.copy(refundAmountRupeesInput = sanitized, refundCashInput = "", refundBankInput = "", error = null))
         }
+    }
+
+    private fun sanitizeMoney(text: String): String = buildString {
+        var seenDot = false
+        var decimals = 0
+        for (c in text) when {
+            c.isDigit() -> if (seenDot) { if (decimals < 2) { append(c); decimals++ } } else append(c)
+            c == '.' && !seenDot -> { append(c); seenDot = true }
+        }
+    }
+
+    /** App-booking refund: Cash leg of the ledger/till split. */
+    fun onRefundCashChanged(text: String) = _uiState.update { s ->
+        val d = s.cancelDialog ?: return@update s
+        s.copy(cancelDialog = d.copy(refundCashInput = sanitizeMoney(text), error = null))
+    }
+
+    /** App-booking refund: Bank leg of the ledger/till split. */
+    fun onRefundBankChanged(text: String) = _uiState.update { s ->
+        val d = s.cancelDialog ?: return@update s
+        s.copy(cancelDialog = d.copy(refundBankInput = sanitizeMoney(text), error = null))
     }
 
     /** Reception picks how the cash/bank transfer happens (manual flow only). */
@@ -580,7 +624,27 @@ class RoomsAndBookingsViewModel(
             fixedPaise = paise
         }
 
+        // Cash/Bank split for the LEDGER + Firestore till recording. The Razorpay online refund
+        // below is untouched — this only mirrors the refund into our books. Must total exactly the
+        // refund amount (paise-exact) when a refund is due.
+        val refundPaise = dialog.effectiveRefundPaise
+        val cashPaise = dialog.refundCashInput.toDoubleOrNull()?.let { Math.round(it * 100.0) } ?: 0L
+        val bankPaise = dialog.refundBankInput.toDoubleOrNull()?.let { Math.round(it * 100.0) } ?: 0L
+        if (refundPaise > 0L && cashPaise + bankPaise != refundPaise) {
+            _uiState.update { it.copy(cancelDialog = dialog.copy(
+                error = CancelDialogError(
+                    "Split doesn't match",
+                    "Cash + Bank must total ₹${"%.2f".format(refundPaise / 100.0)} (the refund amount).",
+                    retrySafe = false,
+                )
+            ))}
+            return
+        }
+
         val booking = dialog.primary
+        val refundKey = booking.groupBookingId.ifBlank { booking.id }
+        val reason = dialog.reason.trim()
+        val guestName = booking.guestName
         _uiState.update { it.copy(cancelDialog = dialog.copy(isLoading = true, error = null)) }
 
         viewModelScope.launch {
@@ -588,17 +652,37 @@ class RoomsAndBookingsViewModel(
                 bookingRepo.cancelByReception(
                     userId = booking.userId,
                     groupBookingId = booking.groupBookingId.ifBlank { booking.id },
-                    reason = dialog.reason.trim(),
+                    reason = reason,
                     refundMode = dialog.refundMode,
                     fixedRefundPaise = fixedPaise,
                     cancelledByReceptionUserId = staffId,
                 )
             }
             result.onSuccess { res ->
+                // Mirror the refund into our ledger + Firestore till, but ONLY when the server
+                // actually refunded the amount the split was built against (so the numbers match).
+                var ledgerWarning = false
+                if (refundPaise > 0L) {
+                    if (res.totalRefundPaise == refundPaise) {
+                        runCatching {
+                            AccountingRepository.postBookingRefund(
+                                refundKey = refundKey,
+                                cashAmount = cashPaise / 100.0,
+                                bankAmount = bankPaise / 100.0,
+                                reason = reason,
+                                guestName = guestName,
+                            )
+                        }.onFailure { ledgerWarning = true }
+                            .onSuccess { if (it.isFailure) ledgerWarning = true }
+                    } else {
+                        ledgerWarning = true   // server refunded a different amount than the split
+                    }
+                }
                 _uiState.update {
                     it.copy(
                         cancelDialog = null,
-                        operationMessage = buildSuccessMessage(res, booking.guestName),
+                        operationMessage = buildSuccessMessage(res, guestName) +
+                            if (ledgerWarning) " (Ledger/till refund not recorded — record it manually.)" else "",
                     )
                 }
             }.onFailure { e ->

@@ -234,6 +234,8 @@ fun RoomsAndBookingsScreen(
             onReasonChanged = vm::onCancelReasonChanged,
             onRefundModeChanged = vm::onCancelRefundModeChanged,
             onRefundAmountChanged = vm::onCancelRefundAmountChanged,
+            onRefundCashChanged = vm::onRefundCashChanged,
+            onRefundBankChanged = vm::onRefundBankChanged,
             onPaidViaChanged = vm::onPaidViaChanged,
             onConfirm = vm::confirmCancelByReception,
             onDismiss = vm::dismissCancelDialog,
@@ -2023,6 +2025,8 @@ private fun CancelConfirmDialog(
     onReasonChanged: (String) -> Unit,
     onRefundModeChanged: (ReceptionRefundMode) -> Unit,
     onRefundAmountChanged: (String) -> Unit,
+    onRefundCashChanged: (String) -> Unit,
+    onRefundBankChanged: (String) -> Unit,
     onPaidViaChanged: (ManualRefundMethod) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -2042,7 +2046,16 @@ private fun CancelConfirmDialog(
     val amountValid = isManual || dialog.refundMode != ReceptionRefundMode.FIXED ||
         (amountPaise != null && amountPaise in 1L..dialog.totalAdvancePaise)
 
-    val canConfirm = !dialog.isLoading && reasonValid && amountValid
+    // App-booking Cash/Bank split for the ledger + till. Must total the refund amount exactly.
+    val refundPaise = dialog.effectiveRefundPaise
+    val cashPaise = dialog.refundCashInput.toDoubleOrNull()?.let { Math.round(it * 100.0) } ?: 0L
+    val bankPaise = dialog.refundBankInput.toDoubleOrNull()?.let { Math.round(it * 100.0) } ?: 0L
+    val splitValid = isManual || refundPaise <= 0L || (cashPaise + bankPaise == refundPaise)
+    // For app bookings on POLICY mode, wait until the refund preview has loaded so the split has a
+    // known target (avoids confirming with a not-yet-computed amount).
+    val policyReady = isManual || dialog.refundMode != ReceptionRefundMode.POLICY || dialog.policyPreviewPaise != null
+
+    val canConfirm = !dialog.isLoading && reasonValid && amountValid && splitValid && policyReady
 
     AlertDialog(
         onDismissRequest = { if (!dialog.isLoading) onDismiss() },
@@ -2149,6 +2162,59 @@ private fun CancelConfirmDialog(
                                 errorBorderColor = Color(0xFFE74C3C),
                                 cursorColor = DreamlandGold,
                             ),
+                        )
+                    }
+
+                    // Cash / Bank split for the LEDGER + Firestore till. The Razorpay online
+                    // refund above is separate and untouched — this records how the money leaves
+                    // our books. Must total the refund amount exactly.
+                    if (refundPaise > 0L) {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Refund split — Cash / Bank", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text(
+                            "Recorded in the ledger + till. Must total ₹${"%.2f".format(refundPaise / 100.0)}.",
+                            color = DreamlandMuted, fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedTextField(
+                                value = dialog.refundCashInput,
+                                onValueChange = onRefundCashChanged,
+                                enabled = !dialog.isLoading,
+                                label = { Text("Cash", color = DreamlandMuted) },
+                                prefix = { Text("₹", color = DreamlandOnDark) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted,
+                                    cursorColor = DreamlandGold,
+                                ),
+                            )
+                            OutlinedTextField(
+                                value = dialog.refundBankInput,
+                                onValueChange = onRefundBankChanged,
+                                enabled = !dialog.isLoading,
+                                label = { Text("Bank", color = DreamlandMuted) },
+                                prefix = { Text("₹", color = DreamlandOnDark) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                                    focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted,
+                                    cursorColor = DreamlandGold,
+                                ),
+                            )
+                        }
+                        val enteredPaise = cashPaise + bankPaise
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (splitValid) "Split OK — totals ₹${"%.2f".format(enteredPaise / 100.0)}."
+                            else "Cash + Bank = ₹${"%.2f".format(enteredPaise / 100.0)} — must equal ₹${"%.2f".format(refundPaise / 100.0)}.",
+                            color = if (splitValid) Color(0xFF2ECC71) else Color(0xFFE74C3C),
+                            fontSize = 12.sp,
                         )
                     }
                 }

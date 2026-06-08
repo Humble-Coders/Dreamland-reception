@@ -99,6 +99,13 @@ object AccountingRepository {
     @Volatile
     private var generalExpenseAccountId: String? = null
 
+    // Account that booking-cancellation refunds are booked against (the debit side; the
+    // online advance was never recorded in this ledger, so a dedicated account is used).
+    private const val BOOKING_REFUNDS_ACCOUNT_NAME = "Booking Refunds"
+
+    @Volatile
+    private var bookingRefundsAccountId: String? = null
+
     /** Outcome of a successful settlement — carries the ledger invoice identity. */
     data class SettleResult(
         val invoiceId: String,
@@ -450,6 +457,59 @@ object AccountingRepository {
     }
 
     /**
+     * Posts a booking-cancellation refund to Humble Ledger as one balanced journal:
+     *   DR Booking Refunds            (cash + bank)
+     *   CR Cash                       cashAmount   (when > 0)
+     *   CR Bank                       bankAmount   (when > 0)
+     *
+     * The CR Cash/Bank legs are auto-mirrored to the Firestore till by the API client
+     * ([FirestoreLiquidityRepository]). Idempotent on `bookingrefund_<refundKey>` — the ledger
+     * dedupes and the till mirror is keyed on the same sourceId, so a retry never double-counts.
+     * The caller guarantees cashAmount + bankAmount equals the actual refund amount.
+     *
+     * Returns success(true) posted, success(false) not configured / nothing to post, failure(e) on error.
+     */
+    suspend fun postBookingRefund(
+        refundKey: String,
+        cashAmount: Double,
+        bankAmount: Double,
+        reason: String,
+        guestName: String,
+    ): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("postBookingRefund SKIP — not configured (refund $refundKey)")
+            return@runCatching false
+        }
+        val cash = roundAmount(cashAmount).coerceAtLeast(0.0)
+        val bank = roundAmount(bankAmount).coerceAtLeast(0.0)
+        val total = roundAmount(cash + bank)
+        if (refundKey.isBlank() || total <= 0.01) return@runCatching true
+        val token = client.ensureValidToken()
+        val refundsAccountId = ensureBookingRefundsAccount(token)
+        log("postBookingRefund — key=$refundKey, cash=$cash, bank=$bank, total=$total")
+        val entries = buildList {
+            add(RawEntryInput(accountId = refundsAccountId, type = "DEBIT", amount = total))
+            if (cash > 0.0) add(RawEntryInput(account = "Cash", type = "CREDIT", amount = cash))
+            if (bank > 0.0) add(RawEntryInput(account = "Bank", type = "CREDIT", amount = bank))
+        }
+        client.postRawTransaction(
+            token = token,
+            req   = RawTransactionRequest(
+                appId       = APP_ID,
+                sourceId    = "bookingrefund_$refundKey",
+                postingType = "REFUND",
+                description = stampManager("Booking refund — $guestName${if (reason.isNotBlank()) ": $reason" else ""}"),
+                date        = LocalDate.now().toString(),
+                entries     = entries,
+            ),
+        )
+        log("postBookingRefund OK — key=$refundKey")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("postBookingRefund FAILED — refund $refundKey: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /**
      * Sums the advance already sitting in the Advance Liability account from CHECK-IN
      * for the stays on [bill] (those flagged [Stay.ledgerAdvancePostedAtCheckIn]).
      *
@@ -573,6 +633,17 @@ object AccountingRepository {
         return created.id
     }
 
+    /** Finds or creates the "$BOOKING_REFUNDS_ACCOUNT_NAME" expense account and returns its UUID (cached). */
+    private suspend fun ensureBookingRefundsAccount(token: String): String {
+        bookingRefundsAccountId?.let { return it }
+        val accounts = client.getAccounts(token)
+        val existing = accounts.firstOrNull { it.name.equals(BOOKING_REFUNDS_ACCOUNT_NAME, ignoreCase = true) }
+        val id = existing?.id
+            ?: client.createAccount(token, CreateAccountRequest(name = BOOKING_REFUNDS_ACCOUNT_NAME, type = "EXPENSE")).id
+        bookingRefundsAccountId = id
+        return id
+    }
+
     // ── Vendor settlement (food bought from an outside supplier) ────────────────
 
     /**
@@ -642,7 +713,7 @@ object AccountingRepository {
                     vendorId    = hlVendor.id,
                     amount      = cash,
                     method      = "CASH",
-                    description = stampManager("Vendor payment (cash) — order ${order.id}"),
+                    description = stampManager("Vendor payment (cash) — ${order.vendorName.ifBlank { "Vendor" }} · Room ${order.roomNumber}"),
                     date        = today,
                     appId       = APP_ID,
                     sourceId    = "order_${order.id}_pay_cash",
@@ -657,7 +728,7 @@ object AccountingRepository {
                     vendorId    = hlVendor.id,
                     amount      = bank,
                     method      = "BANK",
-                    description = stampManager("Vendor payment (bank) — order ${order.id}"),
+                    description = stampManager("Vendor payment (bank) — ${order.vendorName.ifBlank { "Vendor" }} · Room ${order.roomNumber}"),
                     date        = today,
                     appId       = APP_ID,
                     sourceId    = "order_${order.id}_pay_bank",
@@ -819,11 +890,13 @@ object AccountingRepository {
                     ),
                 )
             }
+            // Use the full expense description (title + notes) on the cash/bank leg too, so the
+            // title shows in both the Humble Ledger and the daily book — not just an opaque id.
             if (cash > 0.0) client.postVendorPayment(
-                token, PostVendorPaymentRequest(hlVendor.id, cash, "CASH", stampManager("Expense (cash) — ${expense.id}"), today, APP_ID, "expense_${expense.id}_pay_cash"),
+                token, PostVendorPaymentRequest(hlVendor.id, cash, "CASH", desc, today, APP_ID, "expense_${expense.id}_pay_cash"),
             )
             if (bank > 0.0) client.postVendorPayment(
-                token, PostVendorPaymentRequest(hlVendor.id, bank, "BANK", stampManager("Expense (bank) — ${expense.id}"), today, APP_ID, "expense_${expense.id}_pay_bank"),
+                token, PostVendorPaymentRequest(hlVendor.id, bank, "BANK", desc, today, APP_ID, "expense_${expense.id}_pay_bank"),
             )
         } else {
             // No vendor → direct expense paid from cash/bank (must be fully paid).

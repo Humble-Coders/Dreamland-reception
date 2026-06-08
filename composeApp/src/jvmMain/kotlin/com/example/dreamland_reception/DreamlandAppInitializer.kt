@@ -70,6 +70,7 @@ object DreamlandAppInitializer {
     private var expensesVm: ExpensesViewModel? = null
     private var transfersVm: TransfersViewModel? = null
     private var shiftVm: ShiftViewModel? = null
+    private var dailyBookVm: com.example.dreamland_reception.ui.viewmodel.DailyBookViewModel? = null
 
     @Volatile
     private var complaintsVm: ComplaintsViewModel? = null
@@ -196,6 +197,11 @@ object DreamlandAppInitializer {
     fun getShiftViewModel(): ShiftViewModel =
         shiftVm ?: synchronized(this) {
             shiftVm ?: ShiftViewModel().also { shiftVm = it }
+        }
+
+    fun getDailyBookViewModel(): com.example.dreamland_reception.ui.viewmodel.DailyBookViewModel =
+        dailyBookVm ?: synchronized(this) {
+            dailyBookVm ?: com.example.dreamland_reception.ui.viewmodel.DailyBookViewModel().also { dailyBookVm = it }
         }
 
     fun getComplaintsViewModel(): ComplaintsViewModel =
