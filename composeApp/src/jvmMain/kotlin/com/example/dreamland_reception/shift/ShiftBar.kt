@@ -81,9 +81,19 @@ fun ShiftBar(vm: ShiftViewModel = DreamlandAppInitializer.getShiftViewModel()) {
     var showAdd by remember { mutableStateOf(false) }
 
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        balance?.let { bal ->
-            Pill("CASH", bal.cash, GREEN)
-            Pill("BANK", bal.bank, BLUE)
+        // ── Ledger cash/bank pills (commented out) ───────────────────────────────
+        // Replaced by the Firestore till pills below. `balance` above still polls the
+        // ledger so re-enabling this is a one-liner.
+        // balance?.let { bal ->
+        //     Pill("CASH", bal.cash, GREEN)
+        //     Pill("BANK", bal.bank, BLUE)
+        // }
+
+        // Firestore (Firebase) till pills, with a subtle "FB" marker so it's clear these
+        // reflect the on-device Firestore till — not the accounting ledger.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("FB", color = Color(0xFFFFA000), fontSize = 8.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            LiquidityPills()
         }
 
         // On-duty manager dropdown
