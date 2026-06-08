@@ -612,32 +612,8 @@ class RoomsAndBookingsViewModel(
     }
 
     private fun confirmManualRefund(dialog: CancelDialogState, staffId: String) {
-        // Manual flow: amount field is ALWAYS the source of truth (auto-filled or typed).
-        val method = dialog.paidVia
-        if (method == null) {
-            _uiState.update { it.copy(cancelDialog = dialog.copy(
-                error = CancelDialogError("Pick payout method", "Select CASH or BANK to confirm the manual refund.", retrySafe = false)
-            ))}
-            return
-        }
-        val paise = rupeesInputToPaise(dialog.refundAmountRupeesInput)
-        if (paise == null || paise < 0L) {
-            _uiState.update { it.copy(cancelDialog = dialog.copy(
-                error = CancelDialogError("Invalid amount", "Enter a valid refund amount in ₹.", retrySafe = false)
-            ))}
-            return
-        }
-        if (paise > dialog.totalAdvancePaise) {
-            _uiState.update { it.copy(cancelDialog = dialog.copy(
-                error = CancelDialogError(
-                    "Amount too high",
-                    "Must be at most ₹${"%.2f".format(dialog.totalAdvancePaise / 100.0)} (the advance paid).",
-                    retrySafe = false,
-                )
-            ))}
-            return
-        }
-
+        // Manual flow: no refund amount, no payout method — refund is handled
+        // entirely off-system at the desk. We only record the cancellation + reason.
         val booking = dialog.primary
         _uiState.update { it.copy(cancelDialog = dialog.copy(isLoading = true, error = null)) }
 
@@ -646,17 +622,13 @@ class RoomsAndBookingsViewModel(
                 bookingRepo.cancelByReceptionManual(
                     bookingIds = dialog.groupBookings.map { it.id },
                     reason = dialog.reason.trim(),
-                    refundMode = dialog.refundMode,
-                    refundAmountPaise = paise,
-                    method = method,
                     cancelledByReceptionUserId = staffId,
                 )
             }.onSuccess {
-                val rupees = "%.2f".format(paise / 100.0)
                 _uiState.update {
                     it.copy(
                         cancelDialog = null,
-                        operationMessage = "Cancelled for ${booking.guestName}. Manual refund of ₹$rupees logged (${method.name}).",
+                        operationMessage = "Booking for ${booking.guestName} cancelled. Handle the refund manually at the desk.",
                     )
                 }
             }.onFailure { e ->

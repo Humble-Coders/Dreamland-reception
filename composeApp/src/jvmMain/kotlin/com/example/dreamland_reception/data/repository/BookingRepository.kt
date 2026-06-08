@@ -54,18 +54,15 @@ interface BookingRepository {
     ): CancelBookingResult
 
     /**
-     * Cancel + log a manual refund for a HOTEL-SIDE (walk-in) booking group.
-     * No Cloud Function, no Razorpay — the cash/bank payout happens at the desk.
-     * This method just flips the booking statuses + writes the audit fields so
-     * the cancellation is on record. Every booking in [bookingIds] is updated
-     * in a single Firestore transaction.
+     * Cancel a HOTEL-SIDE (walk-in) booking group. No Cloud Function, no
+     * Razorpay — any refund happens **manually** at the desk and is NOT
+     * tracked in this method. We only flip the booking statuses + log the
+     * reason for audit. Every booking in [bookingIds] is updated in a single
+     * Firestore transaction.
      */
     suspend fun cancelByReceptionManual(
         bookingIds: List<String>,
         reason: String,
-        refundMode: ReceptionRefundMode,
-        refundAmountPaise: Long,
-        method: ManualRefundMethod,
         cancelledByReceptionUserId: String,
     )
 
@@ -220,20 +217,14 @@ object FirestoreBookingRepository : BookingRepository {
     override suspend fun cancelByReceptionManual(
         bookingIds: List<String>,
         reason: String,
-        refundMode: ReceptionRefundMode,
-        refundAmountPaise: Long,
-        method: ManualRefundMethod,
         cancelledByReceptionUserId: String,
     ) = withContext(Dispatchers.IO) {
         require(bookingIds.isNotEmpty()) { "bookingIds must not be empty" }
         require(reason.trim().length in 10..500) { "reason must be 10–500 chars" }
-        require(refundAmountPaise >= 0L) { "refundAmountPaise must be non-negative" }
         val fs = FirestoreRepositorySupport.get()
         fs.runTransaction { txn ->
-            // Pre-read every booking so the transaction sees the latest state.
             val refs = bookingIds.map { col.document(it) }
             val snaps = refs.map { txn.get(it).get() }
-            // Refuse if any booking has already been cancelled — keeps the audit clean.
             for (snap in snaps) {
                 val status = snap.getString("status") ?: ""
                 if (status == "CANCELLED") {
@@ -246,17 +237,12 @@ object FirestoreBookingRepository : BookingRepository {
             val now = java.util.Date()
             for (ref in refs) {
                 txn.update(ref, mapOf(
-                    "status"                          to "CANCELLED",
-                    "cancellationSource"              to "RECEPTION",
-                    "cancelledAt"                     to now,
-                    "cancellationLockedAt"            to 0,
-                    "cancellationReason"              to reason.trim(),
-                    "cancelledByReceptionUserId"      to cancelledByReceptionUserId,
-                    "cancellationRefundMode"          to refundMode.name,
-                    "cancellationRefundAmountPaise"   to refundAmountPaise,
-                    "cancellationRefundStatus"        to "MANUAL",
-                    "cancellationRefundId"            to "",
-                    "cancellationManualRefundMethod"  to method.name,
+                    "status"                     to "CANCELLED",
+                    "cancellationSource"         to "RECEPTION",
+                    "cancelledAt"                to now,
+                    "cancellationLockedAt"       to 0,
+                    "cancellationReason"         to reason.trim(),
+                    "cancelledByReceptionUserId" to cancelledByReceptionUserId,
                 ))
             }
         }.get(); Unit
