@@ -913,6 +913,69 @@ object AccountingRepository {
         result.onFailure { e -> log("settleExpense FAILED — expense ${expense.id}: ${e::class.simpleName}: ${e.message}") }
     }
 
+    /**
+     * Reverses a previously-settled expense (called when the expense is deleted) as ONE balanced
+     * journal that exactly negates [settleExpense]:
+     *   DR Cash | Bank   (the cash/bank that was paid — money returns to the till)
+     *   CR General Expense   (amount — the cost is undone)
+     *   ± Vendor AP          (clears the payable the original purchase created, for vendor expenses)
+     *
+     * Posting the Cash/Bank DEBITs through [AccountingApiClient.postRawTransaction] auto-mirrors the
+     * money back INTO the Firestore till (and the daily book). Idempotent on
+     * `expense_<id>_reversal`, so a retry can never double-reverse.
+     *
+     * Returns success(true) posted, success(false) skipped (not configured / nothing to reverse),
+     * failure(e) on a real error.
+     */
+    suspend fun reverseExpense(expense: Expense): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("reverseExpense SKIP — not configured (expense ${expense.id})")
+            return@runCatching false
+        }
+        val amount = roundAmount(expense.amount)
+        val cash = roundAmount(expense.cashPaid)
+        val bank = roundAmount(expense.bankPaid)
+        if (expense.id.isBlank() || (amount <= 0.01 && cash <= 0.01 && bank <= 0.01)) return@runCatching true
+        val token = client.ensureValidToken()
+        val expenseAccountId = ensureGeneralExpenseAccount(token)
+        log("reverseExpense — id=${expense.id}, amount=$amount, cash=$cash, bank=$bank, vendor='${expense.vendorName}'")
+
+        val entries = buildList {
+            if (cash > 0.0) add(RawEntryInput(account = "Cash", type = "DEBIT", amount = cash))   // → till IN
+            if (bank > 0.0) add(RawEntryInput(account = "Bank", type = "DEBIT", amount = bank))   // → till IN
+            if (amount > 0.0) add(RawEntryInput(accountId = expenseAccountId, type = "CREDIT", amount = amount))
+            // Vendor expense: unwind the Accounts-Payable the original purchase/payment left behind.
+            if (expense.vendorId.isNotBlank()) {
+                val hlVendor = client.createVendor(
+                    token = token,
+                    req   = CreateVendorRequest(name = expense.vendorName.ifBlank { "Vendor" }, externalId = expense.vendorId),
+                )
+                val apDelta = roundAmount(amount - (cash + bank))
+                when {
+                    apDelta > 0.005 -> add(RawEntryInput(accountId = hlVendor.accountId, type = "DEBIT", amount = apDelta))
+                    apDelta < -0.005 -> add(RawEntryInput(accountId = hlVendor.accountId, type = "CREDIT", amount = -apDelta))
+                }
+            }
+        }
+        if (entries.size < 2) return@runCatching true   // nothing meaningful to post
+
+        client.postRawTransaction(
+            token = token,
+            req   = RawTransactionRequest(
+                appId       = APP_ID,
+                sourceId    = "expense_${expense.id}_reversal",
+                postingType = "REVERSAL",
+                description = stampManager("Expense deleted — ${expense.title.ifBlank { expense.vendorName.ifBlank { "Expense" } }}"),
+                date        = LocalDate.now().toString(),
+                entries     = entries,
+            ),
+        )
+        log("reverseExpense OK — expense ${expense.id}")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("reverseExpense FAILED — expense ${expense.id}: ${e::class.simpleName}: ${e.message}") }
+    }
+
     private suspend fun ensureGeneralExpenseAccount(token: String): String {
         generalExpenseAccountId?.let { return it }
         val accounts = client.getAccounts(token)

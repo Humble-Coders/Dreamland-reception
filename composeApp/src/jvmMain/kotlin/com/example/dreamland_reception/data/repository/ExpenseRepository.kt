@@ -17,6 +17,8 @@ interface ExpenseRepository {
     suspend fun markSyncFailed(id: String, error: String)
     /** Expenses that have a vendor/payment but never synced — retried on load. */
     suspend fun getUnsynced(hotelId: String): List<Expense>
+    /** Permanently removes the expense document. */
+    suspend fun delete(id: String)
 }
 
 object FirestoreExpenseRepository : ExpenseRepository {
@@ -56,6 +58,11 @@ object FirestoreExpenseRepository : ExpenseRepository {
             .whereEqualTo("synced", false)
             .get().get().documents.mapNotNull { it.toExpense() }
             .filter { it.id.isNotBlank() }
+    }
+
+    override suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+        if (id.isBlank()) return@withContext
+        col.document(id).delete().get(); Unit
     }
 
     private fun DocumentSnapshot.toExpense() = runCatching {

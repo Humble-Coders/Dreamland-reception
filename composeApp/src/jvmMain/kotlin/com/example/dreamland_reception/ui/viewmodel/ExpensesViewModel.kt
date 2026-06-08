@@ -23,6 +23,7 @@ data class ExpensesScreenState(
     val isLoading: Boolean = true,
     val error: String? = null,
     val searchQuery: String = "",
+    val deletingId: String? = null,   // expense currently being deleted (for row spinner/disable)
 ) {
     val filtered: List<Expense> get() {
         val q = searchQuery.trim().lowercase()
@@ -118,6 +119,30 @@ class ExpensesViewModel(
         accountingRepo.settleExpense(expense)
             .onSuccess { posted -> if (posted) runCatching { expenseRepo.markSynced(expense.id) } }
             .onFailure { e -> runCatching { expenseRepo.markSyncFailed(expense.id, e.message ?: "sync failed") } }
+    }
+
+    /**
+     * Deletes an expense. If it was synced to the ledger, its accounting is REVERSED first (which
+     * also returns the cash/bank to the Firestore till), and only on success is the document
+     * removed — so we never erase a record while the ledger still holds it. Unsynced expenses had
+     * no ledger/till effect, so they're simply removed.
+     */
+    fun deleteExpense(id: String) {
+        val expense = _state.value.expenses.find { it.id == id } ?: return
+        if (_state.value.deletingId == id) return
+        _state.update { it.copy(deletingId = id, error = null) }
+        viewModelScope.launch {
+            if (expense.synced) {
+                val reversed = accountingRepo.reverseExpense(expense)
+                if (reversed.isFailure) {
+                    _state.update { it.copy(deletingId = null, error = "Couldn't reverse the expense in the ledger — not deleted. Try again.") }
+                    return@launch
+                }
+            }
+            runCatching { expenseRepo.delete(id) }
+                .onSuccess { _state.update { it.copy(deletingId = null) } }   // live listener drops the row
+                .onFailure { e -> _state.update { it.copy(deletingId = null, error = e.message ?: "Failed to delete expense") } }
+        }
     }
 
     private suspend fun retryUnsynced() {
