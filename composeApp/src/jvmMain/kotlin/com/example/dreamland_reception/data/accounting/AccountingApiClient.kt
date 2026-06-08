@@ -1,5 +1,7 @@
 package com.example.dreamland_reception.data.accounting
 
+import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.data.repository.FirestoreLiquidityRepository
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -195,6 +197,21 @@ internal object AccountingApiClient {
     suspend fun postRawTransaction(token: String, req: RawTransactionRequest) =
         withContext(Dispatchers.IO) {
             post<Map<*, *>>(path = "/api/v1/transactions", body = req, token = token)
+            // Ledger post succeeded → mirror EVERY cash/bank leg into the Firestore till: a DEBIT
+            // to Cash/Bank is money IN, a CREDIT is money OUT. This also keeps internal Cash↔Bank
+            // transfers correct (one leg OUT, one leg IN → net zero). Idempotent + atomic; a
+            // Firestore failure never breaks the ledger flow.
+            req.entries
+                .filter { it.account.equals("Cash", true) || it.account.equals("Bank", true) }
+                .forEach { e ->
+                    val direction = if (e.type.equals("DEBIT", true)) "IN" else "OUT"
+                    runCatching {
+                        FirestoreLiquidityRepository.recordMovement(
+                            account = e.account!!, amount = e.amount, direction = direction,
+                            sourceId = req.sourceId, description = req.description, hotelId = AppContext.hotelId,
+                        )
+                    }
+                }
             Unit
         }
 
@@ -209,6 +226,17 @@ internal object AccountingApiClient {
         withContext(Dispatchers.IO) {
             // Response data is not needed; we only care that it succeeded.
             post<Map<*, *>>(path = "/api/v1/payments", body = req, token = token)
+            // Ledger post succeeded → mirror cash/bank receipts into the Firestore till. Skip when
+            // paymentAccountId is set (that debits the Advance Liability, not Cash/Bank — e.g. an
+            // advance being applied to the invoice). Idempotent + atomic; never breaks the flow.
+            if (req.paymentAccountId == null && (req.method.equals("CASH", true) || req.method.equals("BANK", true))) {
+                runCatching {
+                    FirestoreLiquidityRepository.recordMovement(
+                        account = req.method, amount = req.amount, direction = "IN",
+                        sourceId = req.sourceId, description = req.description ?: "Payment", hotelId = AppContext.hotelId,
+                    )
+                }
+            }
             Unit
         }
 
@@ -244,6 +272,16 @@ internal object AccountingApiClient {
     suspend fun postVendorPayment(token: String, req: PostVendorPaymentRequest) =
         withContext(Dispatchers.IO) {
             post<Map<*, *>>(path = "/api/v1/vendor-payments", body = req, token = token)
+            // Cash/bank paid OUT to a vendor → decrement the Firestore till. Idempotent + atomic.
+            if (req.method.equals("CASH", true) || req.method.equals("BANK", true)) {
+                runCatching {
+                    FirestoreLiquidityRepository.recordMovement(
+                        account = req.method, amount = req.amount, direction = "OUT",
+                        sourceId = req.sourceId, description = req.description ?: "Vendor payment",
+                        hotelId = AppContext.hotelId,
+                    )
+                }
+            }
             Unit
         }
 
@@ -251,6 +289,16 @@ internal object AccountingApiClient {
     suspend fun postExpense(token: String, req: PostExpenseRequest) =
         withContext(Dispatchers.IO) {
             post<Map<*, *>>(path = "/api/v1/expenses", body = req, token = token)
+            // Cash/bank paid OUT as an expense → decrement the till. PAYABLE (on credit) moves no
+            // cash, so it's skipped. Idempotent + atomic.
+            if (req.paymentMethod.equals("CASH", true) || req.paymentMethod.equals("BANK", true)) {
+                runCatching {
+                    FirestoreLiquidityRepository.recordMovement(
+                        account = req.paymentMethod, amount = req.amount, direction = "OUT",
+                        sourceId = req.sourceId, description = req.description, hotelId = AppContext.hotelId,
+                    )
+                }
+            }
             Unit
         }
 

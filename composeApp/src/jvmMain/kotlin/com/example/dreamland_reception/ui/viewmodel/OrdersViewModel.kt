@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import com.example.dreamland_reception.ui.notification.NotificationManager
+import com.example.dreamland_reception.ui.notification.SpeechAnnouncer
 import java.util.Date
 
 // ── Backward-compat sealed state (used by DashboardViewModel, refreshAllViewModels) ─────────
@@ -176,6 +177,14 @@ class OrdersViewModel(
                     val newArrivals = currentIds - previousOrderIds
                     if (!firstEmit && newArrivals.isNotEmpty()) {
                         runCatching { NotificationManager.playSound() }
+                        // Announce each new order's room aloud (twice), matching the blink.
+                        val newRooms = orders.filter { it.id in newArrivals }
+                            .map { it.roomNumber.trim() }.filter { it.isNotEmpty() }.distinct()
+                        if (newRooms.isEmpty()) {
+                            SpeechAnnouncer.announce("New Order Received")
+                        } else {
+                            newRooms.forEach { room -> SpeechAnnouncer.announce("New Order From Room Number $room") }
+                        }
                     }
                     previousOrderIds = currentIds
                     _screenState.update { it.copy(orders = orders, isLoading = false, error = null) }

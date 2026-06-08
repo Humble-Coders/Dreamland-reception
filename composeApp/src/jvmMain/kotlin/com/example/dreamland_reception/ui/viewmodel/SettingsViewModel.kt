@@ -93,6 +93,10 @@ data class SettingsUiState(
     val grcLogoDraft: String = "",
     val grcSaving: Boolean = false,
     val grcSaved: Boolean = false,
+
+    // Scratch-card settings
+    val scratchCardConfigSaved: Boolean = false,   // "Saved ✓" after the per-guest cap saves
+    val roomRewardSavedId: String? = null,         // category id that just saved its reward
 )
 
 // ── ViewModel ─────────────────────────────────────────────────────────────────
@@ -231,6 +235,67 @@ class SettingsViewModel(
     }
 
     fun clearRoomPricesSaved() = _state.update { it.copy(roomPricesSavedId = null) }
+
+    // ── Scratch-card settings ───────────────────────────────────────────────────
+
+    /** Master switch for issuing scratch cards at the selected hotel. Persisted immediately. */
+    fun setScratchCardsEnabled(enabled: Boolean) {
+        val hotelId = _state.value.selectedHotelId
+        val hotel = _state.value.selectedHotel ?: return
+        if (hotelId.isBlank()) return
+        _state.update { it.copy(selectedHotel = it.selectedHotel?.copy(scratchCardsEnabled = enabled)) }  // optimistic
+        viewModelScope.launch {
+            runCatching { hotelRepo.updateScratchCardConfig(hotelId, enabled, hotel.maxScratchCardsPerUser) }
+                .onFailure { e ->
+                    _state.update { it.copy(selectedHotel = it.selectedHotel?.copy(scratchCardsEnabled = !enabled), error = e.message ?: "Failed to save") }
+                }
+        }
+    }
+
+    /** Per-guest cap on issued cards (0 = feature off even when the switch is on). */
+    fun saveMaxScratchCardsPerUser(max: Int) {
+        val hotelId = _state.value.selectedHotelId
+        val hotel = _state.value.selectedHotel ?: return
+        if (hotelId.isBlank()) return
+        val capped = max.coerceAtLeast(0)
+        viewModelScope.launch {
+            runCatching { hotelRepo.updateScratchCardConfig(hotelId, hotel.scratchCardsEnabled, capped) }
+                .onSuccess {
+                    _state.update { it.copy(selectedHotel = it.selectedHotel?.copy(maxScratchCardsPerUser = capped), scratchCardConfigSaved = true) }
+                }
+                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Failed to save") } }
+        }
+    }
+
+    fun clearScratchCardConfigSaved() = _state.update { it.copy(scratchCardConfigSaved = false) }
+
+    /**
+     * Saves a category's scratch-card reward. [rewardType] is "" (off), "FLAT", or "PERCENT".
+     * Rupee inputs are converted to paise; values that don't apply to the chosen type are zeroed.
+     */
+    fun saveRoomReward(categoryId: String, rewardType: String, flatRupees: Double, percent: Double, maxRupees: Double) {
+        if (categoryId.isBlank()) return
+        val type = rewardType.takeIf { it == "FLAT" || it == "PERCENT" } ?: ""
+        val paise = if (type == "FLAT") Math.round(flatRupees * 100).coerceAtLeast(0L) else 0L
+        val pct = if (type == "PERCENT") percent.coerceIn(0.0, 100.0) else 0.0
+        val maxPaise = if (type == "PERCENT") Math.round(maxRupees * 100).coerceAtLeast(0L) else 0L
+        viewModelScope.launch {
+            runCatching { roomRepo.updateRewardConfig(categoryId, type, paise, pct, maxPaise) }
+                .onSuccess {
+                    _state.update { s ->
+                        s.copy(
+                            rooms = s.rooms.map { r ->
+                                if (r.id == categoryId) r.copy(rewardType = type, rewardValuePaise = paise, rewardValuePercent = pct, rewardMaxPaise = maxPaise) else r
+                            },
+                            roomRewardSavedId = categoryId,
+                        )
+                    }
+                }
+                .onFailure { e -> _state.update { it.copy(error = e.message ?: "Failed to save reward") } }
+        }
+    }
+
+    fun clearRoomRewardSaved() = _state.update { it.copy(roomRewardSavedId = null) }
 
     fun openAddService(name: String = "") = _state.update { it.copy(addServiceDialog = AddServiceDialog(show = true, name = name)) }
     fun closeAddService() = _state.update { it.copy(addServiceDialog = AddServiceDialog()) }

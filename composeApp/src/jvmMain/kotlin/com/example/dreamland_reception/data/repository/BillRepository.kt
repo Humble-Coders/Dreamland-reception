@@ -26,6 +26,7 @@ interface BillRepository {
     suspend fun updateGuestName(id: String, name: String)
     suspend fun updateGuestPhone(id: String, phone: String)
     suspend fun updateGuestGstin(id: String, gstin: String)
+    suspend fun updateAppliedScratchCard(id: String, cardId: String, code: String)
     suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String)
     suspend fun finalizeTransaction(
         id: String, items: List<BillItem>,
@@ -194,6 +195,8 @@ object FirestoreBillRepository : BillRepository {
             taxInclusive = getBoolean("taxInclusive") ?: false,
             discountType = getString("discountType") ?: "FLAT",
             discountValue = getDouble("discountValue") ?: 0.0,
+            appliedScratchCardId = getString("appliedScratchCardId") ?: "",
+            appliedScratchCardCode = getString("appliedScratchCardCode") ?: "",
             subtotal = getDouble("subtotal") ?: 0.0,
             taxAmount = getDouble("taxAmount") ?: 0.0,
             discountAmount = getDouble("discountAmount") ?: 0.0,
@@ -253,6 +256,14 @@ object FirestoreBillRepository : BillRepository {
 
     override suspend fun updateGuestGstin(id: String, gstin: String) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("guestGstin" to gstin, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateAppliedScratchCard(id: String, cardId: String, code: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "appliedScratchCardId" to cardId,
+            "appliedScratchCardCode" to code,
+            "updatedAt" to Date(),
+        )).get(); Unit
     }
 
     override suspend fun updateAdvancePaid(id: String, advancePayment: Double, pendingAmount: Double, status: String) = withContext(Dispatchers.IO) {
@@ -340,6 +351,8 @@ object FirestoreBillRepository : BillRepository {
         "taxInclusive" to taxInclusive,
         "discountType" to discountType,
         "discountValue" to discountValue,
+        "appliedScratchCardId" to appliedScratchCardId,
+        "appliedScratchCardCode" to appliedScratchCardCode,
         "subtotal" to subtotal,
         "taxAmount" to taxAmount,
         "discountAmount" to discountAmount,

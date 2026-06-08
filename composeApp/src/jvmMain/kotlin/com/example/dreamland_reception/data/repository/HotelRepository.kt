@@ -11,6 +11,8 @@ interface HotelRepository {
     suspend fun update(hotel: Hotel)
     /** Field-level update of the GRC template + logo — avoids the full-document overwrite in [update]. */
     suspend fun updateGrcConfig(hotelId: String, html: String, logoUrl: String)
+    /** Field-level update of the scratch-card master switch + per-guest cap. */
+    suspend fun updateScratchCardConfig(hotelId: String, enabled: Boolean, maxPerUser: Int)
 }
 
 object FirestoreHotelRepository : HotelRepository {
@@ -35,6 +37,13 @@ object FirestoreHotelRepository : HotelRepository {
         col.document(hotelId).update(mapOf("grcTemplateHtml" to html, "grcLogoUrl" to logoUrl)).get(); Unit
     }
 
+    override suspend fun updateScratchCardConfig(hotelId: String, enabled: Boolean, maxPerUser: Int) = withContext(Dispatchers.IO) {
+        col.document(hotelId).update(mapOf(
+            "scratchCardsEnabled" to enabled,
+            "maxScratchCardsPerUser" to maxPerUser,
+        )).get(); Unit
+    }
+
     private fun com.google.cloud.firestore.DocumentSnapshot.toHotel() = runCatching {
         Hotel(
             id = id,
@@ -53,6 +62,9 @@ object FirestoreHotelRepository : HotelRepository {
             taxPercentage = getDouble("taxPercentage") ?: 18.0,
             defaultDiscountType = getString("defaultDiscountType") ?: "PERCENTAGE",
             defaultDiscountValue = getDouble("defaultDiscountValue") ?: 0.0,
+            // Scratch-card rewards
+            scratchCardsEnabled = getBoolean("scratchCardsEnabled") ?: false,
+            maxScratchCardsPerUser = (getLong("maxScratchCardsPerUser") ?: 0L).toInt(),
             // Room rules
             checkInTime = getString("checkInTime") ?: "12:00",
             checkOutTime = getString("checkOutTime") ?: "11:00",
@@ -83,6 +95,8 @@ object FirestoreHotelRepository : HotelRepository {
         "taxPercentage" to taxPercentage,
         "defaultDiscountType" to defaultDiscountType,
         "defaultDiscountValue" to defaultDiscountValue,
+        "scratchCardsEnabled" to scratchCardsEnabled,
+        "maxScratchCardsPerUser" to maxScratchCardsPerUser,
         "checkInTime" to checkInTime,
         "checkOutTime" to checkOutTime,
         "autoAssignRoom" to autoAssignRoom,

@@ -50,6 +50,11 @@ data class Bill(
     val taxInclusive: Boolean = false,
     val discountType: String = "FLAT",   // FLAT | PERCENT
     val discountValue: Double = 0.0,
+    // Scratch-card coupon applied to this bill (empty when none). The discount itself lives in
+    // discountType/discountValue like any other discount; these only record WHICH coupon set it,
+    // so the banner + "Remove" survive a reload. The card is marked REDEEMED when applied.
+    val appliedScratchCardId: String = "",
+    val appliedScratchCardCode: String = "",
     val subtotal: Double = 0.0,
     val taxAmount: Double = 0.0,
     val discountAmount: Double = 0.0,

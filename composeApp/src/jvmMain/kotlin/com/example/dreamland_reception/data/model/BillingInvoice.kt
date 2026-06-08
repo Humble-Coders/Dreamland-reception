@@ -11,6 +11,7 @@ data class BillingInvoice(
     val roomCharges: Double = 0.0,
     val serviceCharges: Double = 0.0,
     val earlyCheckInCharge: Double = 0.0,
+    val extraCharges: Double = 0.0,   // ad-hoc taxable charges added during the stay (pre-tax)
     val lateCheckOutCharge: Double = 0.0,
     val tax: Double = 0.0,
     val discount: Double = 0.0,

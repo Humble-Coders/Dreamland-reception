@@ -374,6 +374,8 @@ fun CheckOutDialog(
                                 if (totalEarlyCI > 0) CheckOutBillRow("Early Check-in", totalEarlyCI)
                             }
 
+                            val totalExtra = checkedBills.sumOf { it.extraCharges }
+                            if (totalExtra > 0) CheckOutBillRow("Extra Charges", totalExtra)
                             if (state.ordersTotal > 0) CheckOutBillRow("Orders", state.ordersTotal)
                             val lateCharge = if (state.lateCheckoutCharge > 0) state.lateCheckoutCharge else checkedBills.sumOf { it.lateCheckOutCharge }
                             if (lateCharge > 0) CheckOutBillRow("Late Check-out", lateCharge)

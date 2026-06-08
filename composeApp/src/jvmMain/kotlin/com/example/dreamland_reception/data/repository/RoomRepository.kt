@@ -15,6 +15,8 @@ interface RoomRepository {
     suspend fun updateStatus(id: String, status: String)
     /** Targeted update — writes ONLY `offlinePrice`, never the standard `price` or any other field. */
     suspend fun updateOfflinePrice(id: String, offlinePrice: Double)
+    /** Targeted update — writes ONLY the scratch-card reward fields for a category. */
+    suspend fun updateRewardConfig(id: String, rewardType: String, rewardValuePaise: Long, rewardValuePercent: Double, rewardMaxPaise: Long)
 }
 
 object FirestoreRoomRepository : RoomRepository {
@@ -55,6 +57,18 @@ object FirestoreRoomRepository : RoomRepository {
         col.document(id).update(mapOf("offlinePrice" to offlinePrice)).get(); Unit
     }
 
+    override suspend fun updateRewardConfig(
+        id: String, rewardType: String, rewardValuePaise: Long, rewardValuePercent: Double, rewardMaxPaise: Long,
+    ) = withContext(Dispatchers.IO) {
+        // Partial update of ONLY the reward fields — pricing/occupancy/etc. are never touched.
+        col.document(id).update(mapOf(
+            "rewardType" to rewardType,
+            "rewardValuePaise" to rewardValuePaise,
+            "rewardValuePercent" to rewardValuePercent,
+            "rewardMaxPaise" to rewardMaxPaise,
+        )).get(); Unit
+    }
+
     private fun com.google.cloud.firestore.DocumentSnapshot.toRoom() = runCatching {
         @Suppress("UNCHECKED_CAST")
         val seasonal = (get("seasonalPricing") as? List<Map<String, Any>>)?.map { s ->
@@ -90,6 +104,10 @@ object FirestoreRoomRepository : RoomRepository {
             amenities = (get("amenities") as? List<String>) ?: emptyList(),
             description = getString("description") ?: "",
             seasonalPricing = seasonal,
+            rewardType = getString("rewardType") ?: "",
+            rewardValuePaise = getLong("rewardValuePaise") ?: 0L,
+            rewardValuePercent = getDouble("rewardValuePercent") ?: 0.0,
+            rewardMaxPaise = getLong("rewardMaxPaise") ?: 0L,
         )
     }.getOrNull()
 

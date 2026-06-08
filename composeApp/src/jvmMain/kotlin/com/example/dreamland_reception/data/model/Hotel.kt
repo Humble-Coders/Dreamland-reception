@@ -25,6 +25,11 @@ data class Hotel(
     val defaultDiscountType: String = "PERCENTAGE",   // PERCENTAGE | FLAT
     val defaultDiscountValue: Double = 0.0,
 
+    // ── Scratch-card rewards (read by the issuance Cloud Function) ──────────────
+    // Cards are only issued when BOTH the master switch is on AND the per-guest cap is > 0.
+    val scratchCardsEnabled: Boolean = false,
+    val maxScratchCardsPerUser: Int = 0,
+
     // ── Room rules ────────────────────────────────────────────────────────────
     val checkInTime: String = "12:00",
     val checkOutTime: String = "11:00",

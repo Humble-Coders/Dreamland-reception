@@ -3,6 +3,7 @@ package com.example.dreamland_reception.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dreamland_reception.data.AppContext
+import com.example.dreamland_reception.ui.notification.SpeechAnnouncer
 import com.example.dreamland_reception.data.model.Booking
 import com.example.dreamland_reception.data.model.BookingSource
 import com.example.dreamland_reception.data.model.Hotel
@@ -266,6 +267,8 @@ class RoomsAndBookingsViewModel(
     val uiState: StateFlow<RoomsAndBookingsUiState> = _uiState.asStateFlow()
 
     private var hotel: Hotel? = null
+    // Booking ids seen on the previous snapshot — used to detect newly-arrived bookings to announce.
+    private var previousBookingIds: Set<String> = emptySet()
 
     init {
         startListeners()
@@ -301,7 +304,20 @@ class RoomsAndBookingsViewModel(
         viewModelScope.launch {
             bookingRepo.listenByHotel(hotelId)
                 .catch { e -> _uiState.update { it.copy(bookingsLoading = false, error = "Bookings: ${e.message}") } }
-                .collect { bookings -> _uiState.update { it.copy(bookings = bookings, bookingsLoading = false) } }
+                .collect { bookings ->
+                    // Announce genuinely-new mobile-app bookings aloud (twice). Skip the initial
+                    // load and any reception-created (walk-in / agent) bookings.
+                    val currentIds = bookings.map { it.id }.toSet()
+                    val firstEmit = previousBookingIds.isEmpty() && _uiState.value.bookings.isEmpty()
+                    val newArrivals = currentIds - previousBookingIds
+                    if (!firstEmit && newArrivals.isNotEmpty() &&
+                        bookings.any { it.id in newArrivals && it.source.equals("APP", ignoreCase = true) }
+                    ) {
+                        runCatching { SpeechAnnouncer.announce("New Booking from Mobile App") }
+                    }
+                    previousBookingIds = currentIds
+                    _uiState.update { it.copy(bookings = bookings, bookingsLoading = false) }
+                }
         }
         viewModelScope.launch {
             stayRepo.listenActive(hotelId)

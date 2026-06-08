@@ -26,4 +26,10 @@ data class Room(
     val description: String = "",
     val seasonalPricing: List<SeasonalPricing> = emptyList(),
     val taxPercentage: Double = 0.0,
+    // ── Scratch-card reward for this category (read by the issuance Cloud Function) ──
+    // rewardType "" = this category issues no cards. Values are stored in PAISE (5000 = ₹50).
+    val rewardType: String = "",           // "" | "FLAT" | "PERCENT"
+    val rewardValuePaise: Long = 0,        // used when FLAT
+    val rewardValuePercent: Double = 0.0,  // used when PERCENT, 0–100
+    val rewardMaxPaise: Long = 0,          // optional cap for PERCENT (0 = no cap)
 )

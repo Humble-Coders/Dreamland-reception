@@ -117,6 +117,8 @@ object DreamlandAppInitializer {
                 com.example.dreamland_reception.data.repository.FirestoreCounterRepository.initialize(fs)
                 FirestoreBookingSourceRepository.initialize(fs)
                 FirestoreUserRepository.initialize(fs)
+                com.example.dreamland_reception.data.repository.FirestoreScratchCardRepository.initialize(fs)
+                com.example.dreamland_reception.data.repository.FirestoreLiquidityRepository.initialize(fs)
             }.onSuccess {
                 reposWired = true
                 // Start global booking notification listener immediately after Firebase is ready

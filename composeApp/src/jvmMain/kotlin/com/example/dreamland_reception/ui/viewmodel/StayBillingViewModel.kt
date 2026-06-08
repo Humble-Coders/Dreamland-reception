@@ -7,10 +7,13 @@ import com.example.dreamland_reception.data.accounting.AccountingRepository
 import com.example.dreamland_reception.data.billing.HumbleBillEngine
 import com.example.dreamland_reception.data.model.Bill
 import com.example.dreamland_reception.data.model.BillItem
+import com.example.dreamland_reception.data.model.ScratchCard
 import com.example.dreamland_reception.data.model.PaymentTransaction
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.model.RoomInstance
 import com.example.dreamland_reception.data.repository.BillRepository
+import com.example.dreamland_reception.data.repository.FirestoreScratchCardRepository
+import com.example.dreamland_reception.data.repository.ScratchCardRepository
 import com.example.dreamland_reception.data.repository.FirestoreSharedQrCodeRepository
 import com.example.dreamland_reception.data.repository.FirestoreUserRepository
 import com.example.dreamland_reception.data.repository.SharedQrCodeRepository
@@ -169,6 +172,12 @@ data class StayBillingState(
     val editableAdvancePaid: String = "",    // inline-editable advance paid in summary
     val editableDiscountType: String = "FLAT",  // FLAT | PERCENT
     val editableDiscountValue: String = "",      // inline-editable discount value
+    // Scratch-card coupon entry/state on the billing screen.
+    val couponCodeInput: String = "",
+    val couponApplying: Boolean = false,
+    val couponError: String? = null,
+    val appliedCouponCode: String = "",          // non-blank ⇒ a coupon is applied (shows the banner)
+    val appliedScratchCardId: String = "",       // card doc id, for "Remove"
     val nightsMismatchCount: Int? = null,  // non-null when ROOM nights ≠ other rooms or bill dates
     val guestPickerOpen: Boolean = false,
     val billGuests: List<GuestNameOption> = emptyList(),
@@ -203,6 +212,7 @@ class StayBillingViewModel(
     private val userRepo: UserRepository = FirestoreUserRepository,
     private val accountingRepo: AccountingRepository = AccountingRepository,
     private val sharedQrCodeRepo: SharedQrCodeRepository = FirestoreSharedQrCodeRepository,
+    private val scratchCardRepo: ScratchCardRepository = FirestoreScratchCardRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(StayBillingState())
@@ -230,6 +240,9 @@ class StayBillingViewModel(
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                appliedCouponCode = bill?.appliedScratchCardCode ?: "",
+                appliedScratchCardId = bill?.appliedScratchCardId ?: "",
+                couponCodeInput = "", couponError = null,
                 roomInstances = instances, rooms = allRooms, foodItems = foods, services = svcs,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState(), error = if (bill == null) "Bill not found" else null) }
@@ -331,6 +344,9 @@ class StayBillingViewModel(
                 editableAdvancePaid = bill?.advancePayment?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
                 editableDiscountType = bill?.discountType ?: "FLAT",
                 editableDiscountValue = bill?.discountValue?.let { if (it > 0) "%.2f".format(it) else "" } ?: "",
+                appliedCouponCode = bill?.appliedScratchCardCode ?: "",
+                appliedScratchCardId = bill?.appliedScratchCardId ?: "",
+                couponCodeInput = "", couponError = null,
                 roomInstances = instances2, rooms = allRooms2, foodItems = foods2, services = svcs2,
                 addPaymentDialog = pd, confirmPaymentDialog = ConfirmPaymentDialog(), accountingStatus = AccountingStatus.Idle,
                 invoicePdf = InvoicePdfState()) }
@@ -1115,6 +1131,140 @@ class StayBillingViewModel(
                 billRepo.updateTaxDiscount(bill.id, bill.taxEnabled, bill.taxPercentage, type, value,
                     updatedBill.subtotal, updatedBill.taxAmount, updatedBill.discountAmount,
                     updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+            }
+        }
+    }
+
+    // ── Scratch-card coupon ─────────────────────────────────────────────────────
+
+    fun onCouponCodeChange(v: String) = _state.update {
+        it.copy(couponCodeInput = v.uppercase().filter { c -> c.isLetterOrDigit() || c == '-' }.take(16), couponError = null)
+    }
+
+    /**
+     * Computes the rupee discount a [card] grants against the pre-tax [subtotal], plus a short
+     * human label. PERCENT respects the optional cap; everything is capped at the subtotal so a
+     * coupon can never exceed the bill. Returns (0.0, "") when the card carries no value.
+     */
+    private fun computeCouponDiscount(card: ScratchCard, subtotal: Double): Pair<Double, String> = when (card.rewardType) {
+        "FLAT" -> {
+            val rupees = card.rewardValuePaise / 100.0
+            (minOf(rupees, subtotal).coerceAtLeast(0.0)) to "₹${"%.0f".format(rupees)} off"
+        }
+        "PERCENT" -> {
+            val pct = card.rewardValuePercent
+            var amt = subtotal * pct / 100.0
+            val capRupees = card.rewardMaxPaise / 100.0
+            if (card.rewardMaxPaise > 0 && amt > capRupees) amt = capRupees
+            amt = amt.coerceIn(0.0, subtotal)
+            val label = if (card.rewardMaxPaise > 0) "${pct.fmtPctShort()}% off (max ₹${"%.0f".format(capRupees)})"
+            else "${pct.fmtPctShort()}% off"
+            amt to label
+        }
+        else -> 0.0 to ""
+    }
+
+    private fun Double.fmtPctShort(): String = if (this % 1.0 == 0.0) "%.0f".format(this) else "%.1f".format(this)
+
+    /**
+     * Applies the scratch-card code currently typed: looks it up, validates it's a SCRATCHED card
+     * for this hotel, atomically claims it (→ REDEEMED), then writes the resulting discount into the
+     * bill's existing discount field (as a FLAT amount) — exactly like a manual discount. If saving
+     * the discount fails, the card is rolled back so it's never burned without a discount applied.
+     */
+    fun applyCoupon() {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        if (_state.value.couponApplying) return
+        if (_state.value.appliedCouponCode.isNotBlank()) return  // remove the current one first
+        val code = _state.value.couponCodeInput.trim().uppercase()
+        if (code.isBlank()) return
+        _state.update { it.copy(couponApplying = true, couponError = null) }
+        viewModelScope.launch {
+            val hotelId = bill.hotelId.ifBlank { AppContext.hotelId }
+            val card = runCatching { scratchCardRepo.findByCode(code, hotelId) }.getOrNull()
+            if (card == null) {
+                _state.update { it.copy(couponApplying = false, couponError = "No coupon found for this code.") }
+                return@launch
+            }
+            when (card.status) {
+                "SCRATCHED" -> { /* redeemable */ }
+                "UNSCRATCHED" -> { _state.update { it.copy(couponApplying = false, couponError = "Guest hasn't scratched this card yet.") }; return@launch }
+                "REDEEMED" -> { _state.update { it.copy(couponApplying = false, couponError = "This coupon has already been used.") }; return@launch }
+                else -> { _state.update { it.copy(couponApplying = false, couponError = "This coupon can't be used.") }; return@launch }
+            }
+            val (amount, _) = computeCouponDiscount(card, bill.subtotal)
+            if (amount <= 0.0) {
+                _state.update { it.copy(couponApplying = false, couponError = "This coupon has no discount value.") }
+                return@launch
+            }
+            // Atomically claim the card before touching the bill — two desks can't both redeem it.
+            if (scratchCardRepo.redeem(card.id).isFailure) {
+                _state.update { it.copy(couponApplying = false, couponError = "Coupon could not be applied (it may have just been used).") }
+                return@launch
+            }
+            // Put the discount into the existing field + persist, just like a manual FLAT discount.
+            val updatedBill = recalculate(bill.copy(
+                discountType = "FLAT", discountValue = amount,
+                appliedScratchCardId = card.id, appliedScratchCardCode = card.redemptionCode,
+            ))
+            _state.update {
+                it.copy(
+                    bill = updatedBill,
+                    editableDiscountType = "FLAT",
+                    editableDiscountValue = "%.2f".format(amount),
+                    couponApplying = false, couponError = null, couponCodeInput = "",
+                    appliedCouponCode = card.redemptionCode, appliedScratchCardId = card.id,
+                )
+            }
+            runCatching {
+                billRepo.updateTaxDiscount(bill.id, bill.taxEnabled, bill.taxPercentage, "FLAT", amount,
+                    updatedBill.subtotal, updatedBill.taxAmount, updatedBill.discountAmount,
+                    updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+                billRepo.updateAppliedScratchCard(bill.id, card.id, card.redemptionCode)
+            }.onFailure {
+                // Couldn't persist — un-burn the card and revert UI so nothing is left half-applied.
+                runCatching { scratchCardRepo.revertRedemption(card.id) }
+                val reverted = recalculate(bill.copy(
+                    discountType = bill.discountType, discountValue = bill.discountValue,
+                    appliedScratchCardId = "", appliedScratchCardCode = "",
+                ))
+                _state.update { s ->
+                    s.copy(
+                        bill = reverted,
+                        editableDiscountType = bill.discountType,
+                        editableDiscountValue = if (bill.discountValue > 0) "%.2f".format(bill.discountValue) else "",
+                        appliedCouponCode = "", appliedScratchCardId = "",
+                        couponError = "Couldn't save the coupon. Please try again.",
+                    )
+                }
+            }
+        }
+    }
+
+    /** Removes the applied coupon: reverts the card to SCRATCHED and clears the discount it set. */
+    fun removeCoupon() {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val cardId = _state.value.appliedScratchCardId.ifBlank { bill.appliedScratchCardId }
+        if (cardId.isBlank() && _state.value.appliedCouponCode.isBlank()) return
+        viewModelScope.launch {
+            if (cardId.isNotBlank()) runCatching { scratchCardRepo.revertRedemption(cardId) }
+            val updatedBill = recalculate(bill.copy(
+                discountType = "FLAT", discountValue = 0.0,
+                appliedScratchCardId = "", appliedScratchCardCode = "",
+            ))
+            _state.update {
+                it.copy(
+                    bill = updatedBill,
+                    editableDiscountType = "FLAT", editableDiscountValue = "",
+                    appliedCouponCode = "", appliedScratchCardId = "",
+                    couponError = null, couponCodeInput = "",
+                )
+            }
+            runCatching {
+                billRepo.updateTaxDiscount(bill.id, bill.taxEnabled, bill.taxPercentage, "FLAT", 0.0,
+                    updatedBill.subtotal, updatedBill.taxAmount, updatedBill.discountAmount,
+                    updatedBill.totalAmount, updatedBill.pendingAmount, updatedBill.status)
+                billRepo.updateAppliedScratchCard(bill.id, "", "")
             }
         }
     }

@@ -400,6 +400,20 @@ fun StayBillingScreen(
                             onDiscountSave = vm::saveDiscountInline,
                         )
 
+                        // Scratch-card coupon — only on a real (post-checkout) bill, never in preview.
+                        if (!isPreview) {
+                            CouponCard(
+                                appliedCode = state.appliedCouponCode,
+                                appliedDiscount = bill.discountAmount,
+                                codeInput = state.couponCodeInput,
+                                applying = state.couponApplying,
+                                error = state.couponError,
+                                onCodeChange = vm::onCouponCodeChange,
+                                onApply = vm::applyCoupon,
+                                onRemove = vm::removeCoupon,
+                            )
+                        }
+
                         // Payments card
                         Card(
                             colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
@@ -903,6 +917,92 @@ private fun GuestLedgerBalanceCard(bal: CustomerBalanceInfo) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
             Text(amountText, color = color, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+        }
+    }
+}
+
+/**
+ * Scratch-card coupon entry on the billing screen. When no coupon is applied it shows a code
+ * field + Apply; once applied it shows the code, the discount it set, and a Remove action. The
+ * discount itself flows into the normal discount field/summary — this card only drives it.
+ */
+@Composable
+private fun CouponCard(
+    appliedCode: String,
+    appliedDiscount: Double,
+    codeInput: String,
+    applying: Boolean,
+    error: String?,
+    onCodeChange: (String) -> Unit,
+    onApply: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestElevated),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text("Scratch Card Coupon", style = MaterialTheme.typography.titleSmall, color = DreamlandGold, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(color = DreamlandGold.copy(alpha = 0.15f))
+            Spacer(Modifier.height(10.dp))
+
+            if (appliedCode.isNotBlank()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("✓ $appliedCode applied", color = Color(0xFF4CAF50), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                        if (appliedDiscount > 0) {
+                            Text("Discount −₹${appliedDiscount.fmtAmt()}", color = DreamlandMuted, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    TextButton(onClick = onRemove) {
+                        Text("Remove", color = Color(0xFFE57373), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = codeInput,
+                        onValueChange = onCodeChange,
+                        singleLine = true,
+                        enabled = !applying,
+                        placeholder = { Text("SC-XXXXXXXX", color = DreamlandMuted.copy(alpha = 0.4f)) },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = DreamlandOnDark),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onApply() }),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = DreamlandGold,
+                            unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.3f),
+                            cursorColor = DreamlandGold,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = onApply,
+                        enabled = codeInput.isNotBlank() && !applying,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DreamlandGold,
+                            disabledContainerColor = DreamlandForestElevated,
+                        ),
+                        modifier = Modifier.height(52.dp),
+                    ) {
+                        if (applying) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = DreamlandOnDark)
+                        } else {
+                            Text("Apply", color = Color(0xFF1B2A1F), fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+                if (!error.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(error, color = Color(0xFFE57373), style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }

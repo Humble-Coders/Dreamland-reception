@@ -37,6 +37,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -269,6 +271,14 @@ fun SettingsScreen(vm: SettingsViewModel = DreamlandAppInitializer.getSettingsVi
 
                 if (state.rooms.isNotEmpty()) {
                     RoomPricesCard(state = state, vm = vm)
+                }
+
+                if (state.selectedHotel != null) {
+                    ScratchCardConfigCard(state = state, vm = vm)
+                }
+
+                if (state.rooms.isNotEmpty()) {
+                    ScratchCardRewardsCard(state = state, vm = vm)
                 }
 
                 if (state.error != null) {
@@ -559,6 +569,178 @@ private fun RoomPriceField(label: String, value: String, onChange: (String) -> U
         label = { Text(label, fontSize = 11.sp) },
         singleLine = true,
         prefix = { Text("₹", color = DreamlandMuted, fontSize = 12.sp) },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+            focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+            focusedLabelColor = DreamlandGold, unfocusedLabelColor = DreamlandMuted, cursorColor = DreamlandOnDark,
+        ),
+    )
+}
+
+// ── Scratch-card settings ──────────────────────────────────────────────────────
+
+/** Hotel-level scratch-card master switch + per-guest cap. Cards issue only when BOTH are set. */
+@Composable
+private fun ScratchCardConfigCard(state: SettingsUiState, vm: SettingsViewModel) {
+    val hotel = state.selectedHotel ?: return
+    var maxStr by remember(state.selectedHotelId, hotel.maxScratchCardsPerUser) {
+        mutableStateOf(if (hotel.maxScratchCardsPerUser > 0) hotel.maxScratchCardsPerUser.toString() else "")
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("SCRATCH CARD REWARDS", style = MaterialTheme.typography.labelLarge, color = DreamlandGold)
+            Text(
+                "Cards are issued automatically when a booking completes — but ONLY if this switch is on " +
+                    "AND the per-guest limit is more than 0. Set the reward amount for each room category below.",
+                color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("Issue scratch cards", color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = hotel.scratchCardsEnabled,
+                    onCheckedChange = { vm.setScratchCardsEnabled(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF0D1F17),
+                        checkedTrackColor = DreamlandGold,
+                        uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.25f),
+                        uncheckedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                    ),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = maxStr,
+                    onValueChange = { maxStr = it.filter(Char::isDigit).take(3); vm.clearScratchCardConfigSaved() },
+                    label = { Text("Max cards per guest (0 = off)", fontSize = 11.sp) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = DreamlandOnDark, unfocusedTextColor = DreamlandOnDark,
+                        focusedBorderColor = DreamlandGold, unfocusedBorderColor = DreamlandMuted.copy(alpha = 0.4f),
+                        focusedLabelColor = DreamlandGold, unfocusedLabelColor = DreamlandMuted, cursorColor = DreamlandOnDark,
+                    ),
+                )
+                if (state.scratchCardConfigSaved) {
+                    Text("Saved ✓", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium)
+                }
+                Button(
+                    onClick = { vm.saveMaxScratchCardsPerUser(maxStr.toIntOrNull() ?: 0) },
+                    colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("Save", color = Color(0xFF0D1F17), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
+            }
+        }
+    }
+}
+
+/** Per-category reward editor (FLAT ₹ or PERCENT %, with optional cap). */
+@Composable
+private fun ScratchCardRewardsCard(state: SettingsUiState, vm: SettingsViewModel) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("REWARD PER ROOM CATEGORY", style = MaterialTheme.typography.labelLarge, color = DreamlandGold)
+            Text(
+                "Choose what a card gives for each category. \"Off\" means that category issues no cards. " +
+                    "The amount is frozen onto each card when it's issued.",
+                color = DreamlandMuted, style = MaterialTheme.typography.bodySmall,
+            )
+            state.rooms.forEach { room ->
+                val roomId = room.id
+                ScratchCardRewardRow(
+                    name = room.type.ifBlank { room.number.ifBlank { "Category" } },
+                    rewardType = room.rewardType,
+                    rewardValuePaise = room.rewardValuePaise,
+                    rewardValuePercent = room.rewardValuePercent,
+                    rewardMaxPaise = room.rewardMaxPaise,
+                    saved = state.roomRewardSavedId == roomId,
+                    onEdit = { vm.clearRoomRewardSaved() },
+                    onSave = { type, flat, pct, maxR -> vm.saveRoomReward(roomId, type, flat, pct, maxR) },
+                )
+                HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScratchCardRewardRow(
+    name: String,
+    rewardType: String,
+    rewardValuePaise: Long,
+    rewardValuePercent: Double,
+    rewardMaxPaise: Long,
+    saved: Boolean,
+    onEdit: () -> Unit,
+    onSave: (rewardType: String, flatRupees: Double, percent: Double, maxRupees: Double) -> Unit,
+) {
+    fun paiseStr(p: Long): String = if (p <= 0) "" else { val r = p / 100.0; if (r == r.toLong().toDouble()) r.toLong().toString() else "%.2f".format(r) }
+    fun pctStr(d: Double): String = if (d <= 0) "" else if (d == d.toLong().toDouble()) d.toLong().toString() else "%.1f".format(d)
+
+    var type by remember(name, rewardType) { mutableStateOf(rewardType) }       // "" | FLAT | PERCENT
+    var flat by remember(name, rewardValuePaise) { mutableStateOf(paiseStr(rewardValuePaise)) }
+    var pct by remember(name, rewardValuePercent) { mutableStateOf(pctStr(rewardValuePercent)) }
+    var maxR by remember(name, rewardMaxPaise) { mutableStateOf(paiseStr(rewardMaxPaise)) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(name, color = DreamlandOnDark, style = MaterialTheme.typography.bodyMedium, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("" to "Off", "FLAT" to "Flat ₹", "PERCENT" to "Percent %").forEach { (key, label) ->
+                val selected = type == key
+                Box(
+                    modifier = Modifier
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(7.dp))
+                        .background(if (selected) DreamlandGold.copy(alpha = 0.15f) else Color.Transparent)
+                        .border(1.dp, if (selected) DreamlandGold else DreamlandMuted.copy(alpha = 0.3f), RoundedCornerShape(7.dp))
+                        .clickable { type = key; onEdit() }
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, color = if (selected) DreamlandGold else DreamlandMuted, fontSize = 12.sp, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.SemiBold else androidx.compose.ui.text.font.FontWeight.Normal)
+                }
+            }
+        }
+        when (type) {
+            "FLAT" -> RewardField("Amount off", flat, { flat = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, prefix = "₹", modifier = Modifier.fillMaxWidth())
+            "PERCENT" -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                RewardField("Percent off", pct, { pct = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, suffix = "%", modifier = Modifier.weight(1f))
+                RewardField("Max (optional)", maxR, { maxR = it.filter { c -> c.isDigit() || c == '.' }; onEdit() }, prefix = "₹", modifier = Modifier.weight(1f))
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            if (saved) {
+                Text("Saved ✓", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.width(10.dp))
+            }
+            Button(
+                onClick = { onSave(type, flat.toDoubleOrNull() ?: 0.0, pct.toDoubleOrNull() ?: 0.0, maxR.toDoubleOrNull() ?: 0.0) },
+                colors = ButtonDefaults.buttonColors(containerColor = DreamlandGold),
+                shape = RoundedCornerShape(8.dp),
+            ) { Text("Save", color = Color(0xFF0D1F17), fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold) }
+        }
+    }
+}
+
+@Composable
+private fun RewardField(label: String, value: String, onChange: (String) -> Unit, prefix: String? = null, suffix: String? = null, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label, fontSize = 11.sp) },
+        singleLine = true,
+        prefix = prefix?.let { { Text(it, color = DreamlandMuted, fontSize = 12.sp) } },
+        suffix = suffix?.let { { Text(it, color = DreamlandMuted, fontSize = 12.sp) } },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier,
         colors = OutlinedTextFieldDefaults.colors(

@@ -2697,10 +2697,16 @@ class StaysViewModel(
             } else false
             val flatFee = if (isLateCheckout && hotel?.lateCheckOutAllowed == true) hotel.lateCheckOutPrice else 0.0
 
-            // Build an in-memory bill for display in the checkout dialog (not persisted)
-            val displaySubtotal = roomCharges + breakfastCharge + stay.earlyCheckInCharge
+            // Build an in-memory bill for display in the checkout dialog (not persisted).
+            // Ad-hoc extra charges added during the stay are included (taxed at each item's own
+            // rate) so the dialog matches the actual bill.
+            val roomSubtotal = roomCharges + breakfastCharge + stay.earlyCheckInCharge
             val displayTaxRate = room?.taxPercentage ?: 0.0
-            val displayTax = displaySubtotal * displayTaxRate / 100.0
+            val extraItems = stayExtraChargeItems(stay)
+            val extraSubtotal = extraItems.sumOf { it.total }
+            val extraTax = extraItems.sumOf { it.total * it.taxPercentage / 100.0 }
+            val displaySubtotal = roomSubtotal + extraSubtotal
+            val displayTax = roomSubtotal * displayTaxRate / 100.0 + extraTax
             val displayBill = BillingInvoice(
                 stayId = stayId,
                 guestName = stay.guestName,
@@ -2708,6 +2714,7 @@ class StaysViewModel(
                 roomCharges = roomCharges,
                 serviceCharges = breakfastCharge,
                 earlyCheckInCharge = stay.earlyCheckInCharge,
+                extraCharges = extraSubtotal,
                 tax = displayTax,
                 totalAmount = displaySubtotal + displayTax,
                 amountPaid = stay.advancePaidAmount,
@@ -2732,9 +2739,12 @@ class StaysViewModel(
                         val nights = ChronoUnit.DAYS.between(gs.checkInActual.toInstant(), now.toInstant()).coerceAtLeast(1)
                         val rc = rPrice * nights
                         val bc = if (gs.breakfast) (r?.breakfastPrice ?: 0.0) * gs.adults * nights else 0.0
-                        val subtotal = rc + bc + gs.earlyCheckInCharge
+                        val roomSub = rc + bc + gs.earlyCheckInCharge
                         val taxRate = r?.taxPercentage ?: 0.0
-                        val taxAmt = subtotal * taxRate / 100.0
+                        val gsExtraItems = stayExtraChargeItems(gs)
+                        val gsExtraSub = gsExtraItems.sumOf { it.total }
+                        val gsExtraTax = gsExtraItems.sumOf { it.total * it.taxPercentage / 100.0 }
+                        val taxAmt = roomSub * taxRate / 100.0 + gsExtraTax
                         bills[gs.id] = BillingInvoice(
                             stayId = gs.id,
                             guestName = gs.guestName,
@@ -2742,8 +2752,9 @@ class StaysViewModel(
                             roomCharges = rc,
                             serviceCharges = bc,
                             earlyCheckInCharge = gs.earlyCheckInCharge,
+                            extraCharges = gsExtraSub,
                             tax = taxAmt,
-                            totalAmount = subtotal + taxAmt,
+                            totalAmount = roomSub + gsExtraSub + taxAmt,
                             amountPaid = gs.advancePaidAmount,
                         )
                     }
@@ -2763,9 +2774,12 @@ class StaysViewModel(
                         val nights = ChronoUnit.DAYS.between(gs.checkInActual.toInstant(), now.toInstant()).coerceAtLeast(1)
                         val rc = rPrice * nights
                         val bc = if (gs.breakfast) (r?.breakfastPrice ?: 0.0) * gs.adults * nights else 0.0
-                        val subtotal = rc + bc + gs.earlyCheckInCharge
+                        val roomSub = rc + bc + gs.earlyCheckInCharge
                         val taxRate = r?.taxPercentage ?: 0.0
-                        val taxAmt = subtotal * taxRate / 100.0
+                        val gsExtraItems = stayExtraChargeItems(gs)
+                        val gsExtraSub = gsExtraItems.sumOf { it.total }
+                        val gsExtraTax = gsExtraItems.sumOf { it.total * it.taxPercentage / 100.0 }
+                        val taxAmt = roomSub * taxRate / 100.0 + gsExtraTax
                         bills[gs.id] = BillingInvoice(
                             stayId = gs.id,
                             guestName = gs.guestName,
@@ -2773,8 +2787,9 @@ class StaysViewModel(
                             roomCharges = rc,
                             serviceCharges = bc,
                             earlyCheckInCharge = gs.earlyCheckInCharge,
+                            extraCharges = gsExtraSub,
                             tax = taxAmt,
-                            totalAmount = subtotal + taxAmt,
+                            totalAmount = roomSub + gsExtraSub + taxAmt,
                             amountPaid = gs.advancePaidAmount,
                         )
                     }
