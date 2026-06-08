@@ -128,6 +128,13 @@ fun StayDetailPanel(listState: StaysListState, detailState: StayDetailState, vm:
                     ) {
                         Text("Print GRC", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
                     }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { vm.openAddStayCharge(stay.id) },
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, DreamlandGold.copy(alpha = 0.7f)),
+                    ) {
+                        Text("+ Add charge", color = DreamlandGold, fontWeight = FontWeight.SemiBold)
+                    }
                     Button(
                         onClick = { vm.openCheckOut(stay.id) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF5350)),
@@ -330,7 +337,6 @@ private fun BillingTab(bill: Bill?, isWalkIn: Boolean = false) {
     // where tax is hidden until the billing screen, so we show the pre-tax amount.
     val orderCharges = bill.items.filter { it.type == "ORDER" }
         .sumOf { if (isWalkIn) it.total else it.total * (1 + it.taxPercentage / 100.0) }
-    val customCharges = bill.items.filter { it.type == "CUSTOM" }.sumOf { it.total }
     val amountPaid = bill.totalPaid + bill.advancePayment
 
     LazyColumn(
@@ -368,7 +374,10 @@ private fun BillingTab(bill: Bill?, isWalkIn: Boolean = false) {
                             }
                         }
                     }
-                    if (customCharges > 0) BillRow("Other", customCharges)
+                    // Ad-hoc extra charges — listed by their actual name (narration), not lumped as "Other".
+                    bill.items.filter { it.type == "CUSTOM" }.forEach { item ->
+                        BillRow(item.name, item.total)
+                    }
                     // Show per-rate tax rows (same logic as BillSummaryCard) — hidden for
                     // walk-ins, where tax is revealed only at the billing screen.
                     // Exclude ORDER items from tax rows — their tax is already included in orderCharges

@@ -13,6 +13,7 @@ import com.example.dreamland_reception.data.model.Order
 import com.example.dreamland_reception.data.model.OrderItem
 import com.example.dreamland_reception.data.model.Room
 import com.example.dreamland_reception.data.model.RoomInstance
+import com.example.dreamland_reception.data.model.ExtraCharge
 import com.example.dreamland_reception.data.model.GuestRecord
 import com.example.dreamland_reception.data.model.Stay
 import com.example.dreamland_reception.data.repository.BillRepository
@@ -338,6 +339,20 @@ fun orderToBillItems(order: Order, prefix: String = ""): List<com.example.dreaml
     }
 }
 
+/** Converts a stay's ad-hoc extra charges into bill line items (taxable, per their GST%). */
+fun stayExtraChargeItems(stay: com.example.dreamland_reception.data.model.Stay, prefix: String = ""): List<com.example.dreamland_reception.data.model.BillItem> =
+    stay.extraCharges.filter { it.name.isNotBlank() && it.unitPrice > 0.0 }.map { c ->
+        val qty = c.quantity.coerceAtLeast(1)
+        com.example.dreamland_reception.data.model.BillItem(
+            name = "$prefix${c.name.trim()}",
+            type = "CUSTOM",
+            quantity = qty,
+            unitPrice = c.unitPrice,
+            total = c.unitPrice * qty,
+            taxPercentage = c.taxPercentage,
+        )
+    }
+
 // ── From-booking dialog state ─────────────────────────────────────────────────
 
 data class FromBookingState(
@@ -477,6 +492,21 @@ data class ChangeRoomState(
     val error: String? = null,
 )
 
+/** State for the "Add charge" dialog (extra taxable item and/or advance) on an active stay. */
+data class AddStayChargeState(
+    val isOpen: Boolean = false,
+    val stayId: String = "",
+    val guestName: String = "",
+    val roomNumber: String = "",
+    val itemName: String = "",
+    val quantity: String = "1",
+    val unitPrice: String = "",
+    val advanceAmount: String = "",
+    val advanceMethod: String = "",   // CASH | BANK | "" (none selected)
+    val isSaving: Boolean = false,
+    val error: String? = null,
+)
+
 data class ExtendStayState(
     val isOpen: Boolean = false,
     val stay: Stay? = null,
@@ -538,6 +568,9 @@ class StaysViewModel(
 
     private val _changeRoomState = MutableStateFlow(ChangeRoomState())
     val changeRoomState: StateFlow<ChangeRoomState> = _changeRoomState.asStateFlow()
+
+    private val _addStayChargeState = MutableStateFlow(AddStayChargeState())
+    val addStayChargeState: StateFlow<AddStayChargeState> = _addStayChargeState.asStateFlow()
 
     private val _addOrderState = MutableStateFlow(AddOrderState())
     val addOrderState: StateFlow<AddOrderState> = _addOrderState.asStateFlow()
@@ -730,9 +763,12 @@ class StaysViewModel(
                         addAll(orderToBillItems(order))
                     }
                 }
+                // Ad-hoc extra charges added during the stay (late checkout, extra bed, …).
+                addAll(stayExtraChargeItems(stay))
             }
             val subtotal = items.sumOf { it.total }
-            val taxAmount = if (taxPercentage > 0) items.sumOf { it.total * it.taxPercentage / 100.0 } else 0.0
+            // Gate on any taxed item (extra charges may carry GST even if the room doesn't).
+            val taxAmount = if (items.any { it.taxPercentage > 0 }) items.sumOf { it.total * it.taxPercentage / 100.0 } else 0.0
             val total = subtotal + taxAmount
             val advance = stay.advancePaidAmount
             val pending = (total - advance).coerceAtLeast(0.0)
@@ -2928,6 +2964,8 @@ class StaysViewModel(
                     allItems.addAll(orderToBillItems(order, prefix))
                 }
             }
+            // Ad-hoc extra charges added during the stay.
+            allItems.addAll(stayExtraChargeItems(stay, prefix))
             totalAdvance += stay.advancePaidAmount
         }
 
@@ -3301,27 +3339,47 @@ class StaysViewModel(
             val categoryNames = runCatching { roomRepo.getByHotel(hotelId) }
                 .getOrElse { emptyList() }.associate { it.id to it.type }
 
-            val allInstances = runCatching { instanceRepo.listenByHotel(hotelId).first() }
-                .getOrElse { emptyList() }
-                .filter { it.status != "MAINTENANCE" && it.id != stay.roomInstanceId }
+            // Full instance list (used for per-category capacity); only MAINTENANCE is excluded
+            // from capacity — CLEANING rooms still count (consistent with check-in/extend).
+            val rawInstances = runCatching { instanceRepo.listenByHotel(hotelId).first() }.getOrElse { emptyList() }
+            // Rooms that can appear in the picker: not maintenance, not the guest's current room.
+            val pickableInstances = rawInstances.filter { it.status != "MAINTENANCE" && it.id != stay.roomInstanceId }
 
             val confirmedBookings = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
-            val bookedIds = confirmedBookings
-                .filter { it.roomInstanceId.isNotBlank() && it.checkIn.before(checkOut) && it.checkOut.after(now) }
-                .map { it.roomInstanceId }.toSet()
-
             val activeStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
-            val occupiedIds = activeStays
-                .filter { it.id != stayId }
-                .map { it.roomInstanceId }.toSet()
+
+            // Bookings already checked in (became an active stay) are excluded to avoid double-counting.
+            val checkedInBookingIds = activeStays.map { it.bookingId }.filter { it.isNotBlank() }.toSet()
+            // Confirmed bookings overlapping the remaining stay window [now, checkOut), not yet checked in.
+            val confirmedInWindow = confirmedBookings.filter {
+                it.id !in checkedInBookingIds && it.checkIn.before(checkOut) && it.checkOut.after(now)
+            }
+            // Other active stays (this guest excluded — they're the one moving).
+            val otherActiveStays = activeStays.filter { it.id != stayId }
+
+            // Instance-level exclusions: a specific assigned-booking room or an occupied room.
+            val bookedIds = confirmedInWindow.filter { it.roomInstanceId.isNotBlank() }.map { it.roomInstanceId }.toSet()
+            val occupiedIds = otherActiveStays.map { it.roomInstanceId }.toSet()
+
+            // ── Per-category spare capacity (same algorithm as Extend Stay / check-in) ──
+            //   spare = usable rooms − overlapping bookings − other active stays
+            // Includes count-based (unassigned) bookings, which the old instance-only check missed.
+            val usableByCat = rawInstances.filter { it.status != "MAINTENANCE" }.groupingBy { it.categoryId }.eachCount()
+            val bookingByCat = confirmedInWindow.groupingBy { it.roomCategoryId }.eachCount()
+            val stayByCat = otherActiveStays.groupingBy { it.roomCategoryId }.eachCount()
+            fun spareForCat(catId: String) = (usableByCat[catId] ?: 0) - (bookingByCat[catId] ?: 0) - (stayByCat[catId] ?: 0)
+            // Moving WITHIN the current category is a swap (net-zero), so always allowed. Moving to
+            // a DIFFERENT category is allowed only if that category still has a genuinely spare room.
+            fun categoryAllowed(catId: String) = catId == stay.roomCategoryId || spareForCat(catId) >= 1
 
             val roomSort = compareBy<RoomInstance>({ it.roomNumber.toIntOrNull() ?: Int.MAX_VALUE }, { it.roomNumber })
             val selectable = mutableListOf<RoomInstance>()
             val cleaning = mutableListOf<RoomInstance>()
-            for (inst in allInstances) {
+            for (inst in pickableInstances) {
                 when {
                     inst.id in occupiedIds -> continue
                     inst.id in bookedIds -> continue
+                    !categoryAllowed(inst.categoryId) -> continue   // category fully needed by today's bookings
                     inst.status == "CLEANING" -> cleaning.add(inst)
                     else -> selectable.add(inst)
                 }
@@ -3348,11 +3406,108 @@ class StaysViewModel(
         _changeRoomState.update { it.copy(isSaving = true, error = null) }
         launchWithGlobalLoading {
             runCatching {
+                // ── Pre-flight re-check (a booking may have arrived while the dialog was open) ──
+                val hotelId = AppContext.hotelId
+                val now = Date()
+                val checkOut = stay.expectedCheckOut
+                val freshBookings = runCatching { bookingRepo.getConfirmedByHotel(hotelId) }.getOrElse { emptyList() }
+                val freshStays = runCatching { stayRepo.getActive(hotelId) }.getOrElse { emptyList() }
+                val checkedInBookingIds = freshStays.map { it.bookingId }.filter { it.isNotBlank() }.toSet()
+                val bookingsInWindow = freshBookings.filter {
+                    it.id !in checkedInBookingIds && it.checkIn.before(checkOut) && it.checkOut.after(now)
+                }
+                // Target room still free (not assigned to a booking, not occupied by someone else)?
+                val targetBooked = bookingsInWindow.any { it.roomInstanceId == newRoom.id }
+                val targetOccupied = freshStays.any { it.id != stay.id && it.roomInstanceId == newRoom.id }
+                if (targetBooked || targetOccupied) {
+                    throw Exception("Room ${newRoom.roomNumber} is no longer available — please pick another room.")
+                }
+                // Moving to a different category needs a genuinely spare room in that category.
+                if (newRoom.categoryId != stay.roomCategoryId) {
+                    val rawInstances = runCatching { instanceRepo.listenByHotel(hotelId).first() }.getOrElse { emptyList() }
+                    val usable = rawInstances.count { it.categoryId == newRoom.categoryId && it.status != "MAINTENANCE" }
+                    val bk = bookingsInWindow.count { it.roomCategoryId == newRoom.categoryId }
+                    val st = freshStays.count { it.id != stay.id && it.roomCategoryId == newRoom.categoryId }
+                    if (usable - bk - st < 1) {
+                        throw Exception("No ${newRoom.categoryName} room is free for these dates — a booking needs it. Please pick another room.")
+                    }
+                }
                 stayRepo.changeRoom(stay.id, stay.roomInstanceId, newRoom.id, newRoom.roomNumber, newRoom.categoryId, newRoom.categoryName)
             }.onSuccess {
                 _changeRoomState.value = ChangeRoomState()
             }.onFailure { e ->
                 _changeRoomState.update { it.copy(isSaving = false, error = e.message ?: "Failed to change room") }
+            }
+        }
+    }
+
+    // ── Add charge / advance to an active stay ─────────────────────────────────
+
+    fun openAddStayCharge(stayId: String) {
+        val stay = _listState.value.stays.find { it.id == stayId } ?: return
+        _addStayChargeState.value = AddStayChargeState(
+            isOpen = true, stayId = stay.id, guestName = stay.guestName, roomNumber = stay.roomNumber, quantity = "1",
+        )
+    }
+    fun closeAddStayCharge() { _addStayChargeState.value = AddStayChargeState() }
+    fun onStayChargeName(v: String) = _addStayChargeState.update { it.copy(itemName = v) }
+    fun onStayChargeQty(v: String) = _addStayChargeState.update { it.copy(quantity = v.filter(Char::isDigit)) }
+    fun onStayChargePrice(v: String) = _addStayChargeState.update { it.copy(unitPrice = v.filter { c -> c.isDigit() || c == '.' }) }
+    fun onStayChargeAdvanceAmount(v: String) = _addStayChargeState.update { it.copy(advanceAmount = v.filter { c -> c.isDigit() || c == '.' }) }
+    fun onStayChargeAdvanceMethod(m: String) = _addStayChargeState.update { it.copy(advanceMethod = m) }
+
+    /**
+     * Saves an ad-hoc taxable charge and/or an advance to an active stay.
+     *  • Charge → appended to stay.extraCharges (flows into the bill at checkout / preview).
+     *  • Advance → Firestore FIRST (bumps stay.advancePaidAmount, the field the bill reads),
+     *    then posted to the ledger immediately. Firestore-first means the guest can never be
+     *    asked to pay twice; if the ledger post fails, the advance is still on the bill and a
+     *    warning is surfaced for accounting to reconcile.
+     */
+    fun submitStayCharge() {
+        val s = _addStayChargeState.value
+        val stay = _listState.value.stays.find { it.id == s.stayId } ?: return
+        val name = s.itemName.trim()
+        val qty = s.quantity.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val price = s.unitPrice.toDoubleOrNull() ?: 0.0
+        val hasCharge = name.isNotBlank() && price > 0.0
+        val advAmt = s.advanceAmount.toDoubleOrNull() ?: 0.0
+        val hasAdvance = advAmt > 0.0
+        if (!hasCharge && !hasAdvance) {
+            _addStayChargeState.update { it.copy(error = "Enter a charge (name + price) or an advance.") }
+            return
+        }
+        if (hasAdvance && s.advanceMethod.isBlank()) {
+            _addStayChargeState.update { it.copy(error = "Select Cash or Bank for the advance.") }
+            return
+        }
+        _addStayChargeState.update { it.copy(isSaving = true, error = null) }
+        val manager = AppContext.currentManager
+        launchWithGlobalLoading {
+            var ledgerFailed = false
+            runCatching {
+                // 1. Extra charge → persist on the stay.
+                if (hasCharge) {
+                    val newCharge = ExtraCharge(name = name, quantity = qty, unitPrice = price, taxPercentage = 5.0, addedBy = manager)
+                    stayRepo.updateExtraCharges(stay.id, stay.extraCharges + newCharge)
+                }
+                // 2. Advance → Firestore first (running total the bill reads), then ledger.
+                if (hasAdvance) {
+                    val newTotal = Math.round((stay.advancePaidAmount + advAmt) * 100.0) / 100.0
+                    stayRepo.updateAdvance(stay.id, newTotal, s.advanceMethod)
+                    val advId = UUID.randomUUID().toString()
+                    val posted = accountingRepo.postStayAdvance(stay.id, advId, advAmt, s.advanceMethod, stay.roomNumber, stay.guestName)
+                    if (posted.isFailure) ledgerFailed = true
+                }
+            }.onSuccess {
+                _addStayChargeState.value = AddStayChargeState()
+                loadActive()
+                if (_listState.value.selectedStayId == stay.id) loadDetailForStay(stay.id)
+                if (ledgerFailed) {
+                    _listState.update { it.copy(error = "Advance saved to the bill, but ledger sync failed — accounting will reconcile it.") }
+                }
+            }.onFailure { e ->
+                _addStayChargeState.update { it.copy(isSaving = false, error = e.message ?: "Failed to save charge") }
             }
         }
     }

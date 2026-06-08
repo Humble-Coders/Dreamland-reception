@@ -70,22 +70,35 @@ class BillingViewModel(
                 .catch { e -> _state.update { it.copy(isLoading = false, error = e.message ?: "Failed to load") } }
                 .collect { bills ->
                     val normalized = bills.map { bill ->
-                        val taxAmount = if (bill.taxEnabled) {
-                            if (bill.taxInclusive) {
-                                // Prices already include GST → back it out of each line.
-                                val t = bill.items.sumOf { it.total - it.total / (1.0 + it.taxPercentage / 100.0) }
-                                if (t > 0) t else bill.subtotal - bill.subtotal / (1.0 + bill.taxPercentage / 100.0)
-                            } else {
-                                val perItemTax = bill.items.filter { it.taxPercentage > 0 }
-                                    .sumOf { it.total * it.taxPercentage / 100.0 }
-                                if (perItemTax > 0) perItemTax else bill.subtotal * bill.taxPercentage / 100.0
+                        // Mirror StayBillingViewModel.recalculate(): per-item GST (each line's own
+                        // inclusive flag) and discount applied BEFORE tax. Keeps the list totals
+                        // consistent with the authoritative bill.
+                        var taxFull = 0.0
+                        var baseSum = 0.0
+                        if (bill.taxEnabled) {
+                            for (it in bill.items) {
+                                if (it.taxPercentage <= 0.0) { baseSum += it.total; continue }
+                                if (it.taxInclusive) {
+                                    val b = it.total / (1.0 + it.taxPercentage / 100.0)
+                                    baseSum += b; taxFull += it.total - b
+                                } else {
+                                    baseSum += it.total; taxFull += it.total * it.taxPercentage / 100.0
+                                }
                             }
-                        } else 0.0
+                            if (taxFull == 0.0 && bill.taxPercentage > 0.0 && baseSum > 0.0) {
+                                taxFull = baseSum * bill.taxPercentage / 100.0   // legacy fallback
+                            }
+                        } else {
+                            baseSum = bill.items.sumOf { it.total }
+                        }
+                        val subtotal = baseSum
                         val discountAmount = when (bill.discountType) {
-                            "PERCENT" -> bill.subtotal * bill.discountValue / 100.0
+                            "PERCENT" -> subtotal * bill.discountValue / 100.0
                             else -> bill.discountValue
                         }
-                        val totalAmount = (bill.subtotal + taxAmount - discountAmount).coerceAtLeast(0.0)
+                        val discountFraction = if (subtotal > 0.0) (discountAmount / subtotal).coerceIn(0.0, 1.0) else 0.0
+                        val taxAmount = taxFull * (1.0 - discountFraction)
+                        val totalAmount = (subtotal - discountAmount + taxAmount).coerceAtLeast(0.0)
                         val pendingAmount = (totalAmount - bill.totalPaid - bill.advancePayment).coerceAtLeast(0.0)
                         val roundedPending = Math.round(pendingAmount).toDouble()
                         val correctedStatus = when {
@@ -94,6 +107,7 @@ class BillingViewModel(
                             else -> "PENDING"
                         }
                         bill.copy(
+                            subtotal = subtotal,
                             taxAmount = taxAmount,
                             discountAmount = discountAmount,
                             totalAmount = totalAmount,

@@ -11,6 +11,9 @@ data class BillItem(
     val unitPrice: Double = 0.0,
     val total: Double = unitPrice * quantity,
     val taxPercentage: Double = 0.0,
+    // When true, this line's price already INCLUDES its GST (tax backed out of the price);
+    // when false, GST is added on top. Per-item — toggled on the billing screen. Default false.
+    val taxInclusive: Boolean = false,
     val refId: String = "",
     val notes: String = "",
 )

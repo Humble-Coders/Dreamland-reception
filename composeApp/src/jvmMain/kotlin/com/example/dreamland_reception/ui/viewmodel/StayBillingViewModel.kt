@@ -213,6 +213,7 @@ class StayBillingViewModel(
         launchWithGlobalLoading {
             _state.update { it.copy(isLoading = true, error = null, addPaymentDialog = AddPaymentDialog()) }
             val bill = runCatching { billRepo.getById(billId) }.getOrNull()
+                ?.let { migrateBillLevelInclusive(it) }
                 ?.let { recalculate(it) }
                 ?.let { migrateRoomItemTaxRates(it) }
                 ?.let { migrateFoodServiceItemTaxRates(it) }
@@ -242,6 +243,7 @@ class StayBillingViewModel(
             _state.update { it.copy(isLoading = true, error = null, addPaymentDialog = AddPaymentDialog()) }
             val stay = runCatching { stayRepo.getById(stayId) }.getOrNull()
             var bill = runCatching { billRepo.getByStay(stayId) }.getOrNull()
+                ?.let { migrateBillLevelInclusive(it) }
                 ?.let { recalculate(it) }
                 ?.let { migrateRoomItemTaxRates(it) }
                 ?.let { migrateFoodServiceItemTaxRates(it) }
@@ -280,10 +282,12 @@ class StayBillingViewModel(
                             addAll(orderToBillItems(order))
                         }
                     }
+                    // Ad-hoc extra charges added during the stay.
+                    addAll(stayExtraChargeItems(stay))
                 }
                 val advance = stay.advancePaidAmount
                 val subtotal = items.sumOf { it.total }
-                val taxEnabled = taxPercentage > 0
+                val taxEnabled = items.any { it.taxPercentage > 0 }
                 val taxAmount = if (taxEnabled) {
                     val perItemTax = items.sumOf { it.total * it.taxPercentage / 100.0 }
                     if (perItemTax > 0.0) perItemTax else subtotal * taxPercentage / 100.0
@@ -944,25 +948,55 @@ class StayBillingViewModel(
     fun onBillGuestPhone(v: String) = _state.update { it.copy(billGuestPhone = v.filter { c -> c.isDigit() }.take(10)) }
 
     /**
-     * Toggle whether the bill's prices are treated as GST-inclusive or GST-added-on-top.
-     * Recomputes totals and persists. This is the ONLY tax control on the billing screen —
-     * the rate itself comes from each item's category and is not editable here.
+     * Toggle GST inclusive/exclusive for a SINGLE line item (the per-item switch on the left).
+     * Recomputes totals and persists. Other items are unaffected.
      */
-    fun setTaxInclusive(inclusive: Boolean) {
-        val current = _state.value.bill ?: return
-        val totals = recalculate(current.copy(taxInclusive = inclusive))
+    fun setItemTaxInclusive(itemId: String, inclusive: Boolean) {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedItems = bill.items.map { if (it.id == itemId) it.copy(taxInclusive = inclusive) else it }
+        persistItemTaxModes(bill, updatedItems)
+    }
+
+    /**
+     * Bill-level convenience: set EVERY taxed line to inclusive/exclusive at once. It simply writes
+     * each item's per-item flag (single source of truth), so it can be freely mixed with the
+     * per-item switches without any conflict.
+     */
+    fun setAllItemsTaxInclusive(inclusive: Boolean) {
+        val bill = _state.value.bill?.takeIf { it.id.isNotBlank() } ?: return
+        val updatedItems = bill.items.map { if (it.taxPercentage > 0.0) it.copy(taxInclusive = inclusive) else it }
+        persistItemTaxModes(bill, updatedItems)
+    }
+
+    private fun persistItemTaxModes(bill: Bill, updatedItems: List<BillItem>) {
+        val totals = recalculate(bill.copy(items = updatedItems))
         _state.update { it.copy(bill = totals) }
-        if (current.id.isNotBlank()) {
-            viewModelScope.launch {
-                runCatching {
-                    billRepo.updateTaxInclusive(
-                        current.id, inclusive,
-                        totals.subtotal, totals.taxAmount, totals.discountAmount,
-                        totals.totalAmount, totals.pendingAmount, totals.status,
-                    )
-                }
+        viewModelScope.launch {
+            runCatching {
+                billRepo.updateItems(bill.id, updatedItems, totals.subtotal, totals.taxAmount,
+                    totals.discountAmount, totals.totalAmount, totals.pendingAmount, totals.status)
             }
         }
+    }
+
+    /**
+     * One-time migration for bills created under the OLD bill-level inclusive flag: project that
+     * flag onto each taxed item (which now owns the flag), clear the bill-level flag, and persist —
+     * so existing inclusive bills keep their exact totals and per-item edits then stick.
+     */
+    private suspend fun migrateBillLevelInclusive(bill: Bill): Bill {
+        if (!bill.taxInclusive) return bill
+        val migratedItems = bill.items.map { if (it.taxPercentage > 0.0) it.copy(taxInclusive = true) else it }
+        val migrated = recalculate(bill.copy(taxInclusive = false, items = migratedItems))
+        if (bill.id.isNotBlank()) {
+            runCatching {
+                billRepo.updateItems(bill.id, migratedItems, migrated.subtotal, migrated.taxAmount,
+                    migrated.discountAmount, migrated.totalAmount, migrated.pendingAmount, migrated.status)
+                billRepo.updateTaxInclusive(bill.id, false, migrated.subtotal, migrated.taxAmount,
+                    migrated.discountAmount, migrated.totalAmount, migrated.pendingAmount, migrated.status)
+            }
+        }
+        return migrated
     }
 
     fun onAdvancePaidInline(v: String) = _state.update { it.copy(editableAdvancePaid = v.filter { c -> c.isDigit() || c == '.' }) }
@@ -1233,14 +1267,12 @@ class StayBillingViewModel(
         // a new phone still settles against the SAME ledger customer. Fall back to phone only
         // when the bill has no UID (legacy bills / older flows).
         val guestUid = bill.userId.ifBlank { resolveGuestUid(bill.guestName, guestPhone) }
-        // Use the authoritative display name from the users collection for accounting,
-        // so the ledger record matches the registered guest identity.
-        val normalizedPhone = normalizePhoneE164(guestPhone) ?: guestPhone
-        val accountingName = if (normalizedPhone.isNotBlank()) {
-            runCatching { userRepo.findNameByPhone(normalizedPhone) }.getOrNull()
-        } else null
-        val billForAccounting = if (!accountingName.isNullOrBlank()) bill.copy(guestName = accountingName) else bill
-        return accountingRepo.settle(billForAccounting, guestPhone, guestUid)
+        // Resolve the accounting identity from the billed ACCOUNT (uid) — never from the entered
+        // phone. Otherwise a guest identified by name (pinned account) whose typed phone happens
+        // to belong to someone else would be billed under that other person's name.
+        val (accountingName, accountingPhone) = resolveAccountingNameAndPhone(bill, guestUid, guestPhone)
+        val billForAccounting = if (accountingName.isNotBlank()) bill.copy(guestName = accountingName) else bill
+        return accountingRepo.settle(billForAccounting, accountingPhone, guestUid)
             .onSuccess { r ->
                 if (r.invoiceId.isNotBlank()) {
                     runCatching { billRepo.markLedgerSynced(bill.id, r.invoiceId, r.invoiceNumber) }
@@ -1321,6 +1353,35 @@ class StayBillingViewModel(
     }
 
     /**
+     * Resolves the name + phone to post to the ledger for [bill], settling against [guestUid].
+     *
+     * The identity is taken from the billed ACCOUNT (the uid's user doc), NOT from the phone
+     * entered on the bill. This matters for a returning guest identified by name (pinned
+     * account) who gives a NEW contact number: that number may belong to a *different* user,
+     * and deriving the name from it would bill the stay under the wrong person. The account's
+     * own name/phone are authoritative; we only fall back to the phone-derived name (then the
+     * bill's own name) when there is no uid to look up.
+     */
+    private suspend fun resolveAccountingNameAndPhone(
+        bill: Bill,
+        guestUid: String,
+        guestPhone: String,
+    ): Pair<String, String> {
+        val acctGuest = if (guestUid.isNotBlank())
+            runCatching { userRepo.getByIds(setOf(guestUid)).firstOrNull() }.getOrNull()
+        else null
+        val name = acctGuest?.name?.takeIf { it.isNotBlank() }
+            ?: run {
+                val np = normalizePhoneE164(guestPhone) ?: guestPhone
+                if (np.isNotBlank()) runCatching { userRepo.findNameByPhone(np) }.getOrNull()?.takeIf { it.isNotBlank() } else null
+            }
+            ?: bill.guestName
+        // Never overwrite the account's stored phone with an unrelated contact number.
+        val phone = acctGuest?.phone?.takeIf { it.isNotBlank() } ?: guestPhone
+        return name to phone
+    }
+
+    /**
      * Retries the ledger sync for a finalized-but-unsynced bill. Called on load
      * (durable recovery after a failed/lost sync) and by the manual Retry button.
      * No-op for in-memory previews, already-synced bills, and not-yet-finalized
@@ -1364,7 +1425,9 @@ class StayBillingViewModel(
             var invId = bill.ledgerInvoiceId
             if (invNo.isBlank()) {
                 val uid = bill.userId.ifBlank { resolveGuestUid(bill.guestName, guestPhone) }
-                accountingRepo.settle(bill, guestPhone, uid).onSuccess { r ->
+                val (acctName, acctPhone) = resolveAccountingNameAndPhone(bill, uid, guestPhone)
+                val billForAccounting = if (acctName.isNotBlank()) bill.copy(guestName = acctName) else bill
+                accountingRepo.settle(billForAccounting, acctPhone, uid).onSuccess { r ->
                     if (r.invoiceNumber.isNotBlank()) {
                         invNo = r.invoiceNumber
                         invId = r.invoiceId
@@ -1562,21 +1625,38 @@ class StayBillingViewModel(
     private fun recalculate(bill: Bill): Bill {
         // gross = sum of the entered item prices (what's shown on each row).
         val gross = bill.items.sumOf { it.total }
-        // Full per-item GST BEFORE any discount, honouring the inclusive/exclusive toggle.
-        //   exclusive → tax is added on top:  tax = price × rate
-        //   inclusive → price already contains tax:  tax = price − price/(1+rate)
-        // Falls back to the bill-level rate only when no item carries a per-item rate.
-        val taxFull = if (bill.taxEnabled) {
-            if (bill.taxInclusive) {
-                val t = bill.items.sumOf { it.total - it.total / (1.0 + it.taxPercentage / 100.0) }
-                if (t > 0.0) t else gross - gross / (1.0 + bill.taxPercentage / 100.0)
-            } else {
-                val t = bill.items.sumOf { it.total * it.taxPercentage / 100.0 }
-                if (t > 0.0) t else gross * bill.taxPercentage / 100.0
+        // Per-item GST BEFORE any discount, each line honouring its OWN inclusive/exclusive flag:
+        //   exclusive → tax added on top:        base = price,            tax = price × rate
+        //   inclusive → price already has tax:   base = price/(1+rate),   tax = price − base
+        // The taxable base is the sum of each line's base.
+        var taxFull = 0.0
+        var baseSum = 0.0
+        if (bill.taxEnabled) {
+            for (item in bill.items) {
+                if (item.taxPercentage <= 0.0) { baseSum += item.total; continue }
+                if (item.taxInclusive) {
+                    val base = item.total / (1.0 + item.taxPercentage / 100.0)
+                    baseSum += base
+                    taxFull += item.total - base
+                } else {
+                    baseSum += item.total
+                    taxFull += item.total * item.taxPercentage / 100.0
+                }
             }
-        } else 0.0
-        // Taxable base before discount: exclusive → gross prices; inclusive → gross minus embedded tax.
-        val subtotal = if (bill.taxEnabled && bill.taxInclusive) gross - taxFull else gross
+            // Legacy fallback: a bill with tax enabled but no per-item rates uses the bill-level rate.
+            if (taxFull == 0.0 && bill.taxPercentage > 0.0 && gross > 0.0) {
+                if (bill.taxInclusive) {
+                    val base = gross / (1.0 + bill.taxPercentage / 100.0)
+                    baseSum = base; taxFull = gross - base
+                } else {
+                    baseSum = gross; taxFull = gross * bill.taxPercentage / 100.0
+                }
+            }
+        } else {
+            baseSum = gross
+        }
+        // Taxable base before discount (ex-tax).
+        val subtotal = baseSum
         // Discount: a % of the taxable base, or a flat amount.
         val discountAmount = when (bill.discountType) {
             "PERCENT" -> subtotal * bill.discountValue / 100.0

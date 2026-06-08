@@ -362,7 +362,7 @@ fun StayBillingScreen(
                                 BillItemRow(
                                     item = item,
                                     readOnly = isPreview,
-                                    taxInclusive = bill.taxInclusive,
+                                    onToggleInclusive = { vm.setItemTaxInclusive(item.id, it) },
                                     onDelete = { vm.removeItem(item.id) },
                                     onEdit = { vm.openEditItem(item) },
                                 )
@@ -392,7 +392,7 @@ fun StayBillingScreen(
                             editableAdvancePaid = state.editableAdvancePaid,
                             editableDiscountType = state.editableDiscountType,
                             editableDiscountValue = state.editableDiscountValue,
-                            onTaxInclusiveChange = vm::setTaxInclusive,
+                            onSetAllInclusive = vm::setAllItemsTaxInclusive,
                             onAdvancePaidChange = vm::onAdvancePaidInline,
                             onAdvancePaidSave = vm::saveAdvancePaidInline,
                             onDiscountTypeChange = vm::onDiscountTypeInline,
@@ -731,7 +731,7 @@ private fun EditableInfoCell(label: String, value: String, editable: Boolean, on
 }
 
 @Composable
-private fun BillItemRow(item: BillItem, readOnly: Boolean = false, taxInclusive: Boolean = false, onDelete: () -> Unit, onEdit: () -> Unit) {
+private fun BillItemRow(item: BillItem, readOnly: Boolean = false, onToggleInclusive: (Boolean) -> Unit = {}, onDelete: () -> Unit, onEdit: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = DreamlandForestSurface),
         shape = RoundedCornerShape(8.dp),
@@ -742,14 +742,15 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, taxInclusive:
         ) {
             TypeChip(item.type)
             Spacer(Modifier.width(10.dp))
-            // Mode-aware figures: when GST is inclusive the entered price is gross, so we back
-            // the tax out and show the taxable BASE on the row (so the rows reconcile with the
-            // Subtotal in the summary). When exclusive, the entered price IS the base.
+            // Mode-aware figures (per-item): when THIS line is GST-inclusive the entered price is
+            // gross, so we back the tax out and show the taxable BASE on the row (so the rows
+            // reconcile with the Subtotal). When exclusive, the entered price IS the base.
             val taxed = item.taxPercentage > 0
+            val inclusive = item.taxInclusive
             val divisor = 1.0 + item.taxPercentage / 100.0
-            val baseTotal = if (taxInclusive && taxed) item.total / divisor else item.total
-            val baseUnit = if (taxInclusive && taxed) item.unitPrice / divisor else item.unitPrice
-            val gst = if (taxInclusive && taxed) item.total - baseTotal
+            val baseTotal = if (inclusive && taxed) item.total / divisor else item.total
+            val baseUnit = if (inclusive && taxed) item.unitPrice / divisor else item.unitPrice
+            val gst = if (inclusive && taxed) item.total - baseTotal
                       else if (taxed) item.total * item.taxPercentage / 100.0
                       else 0.0
             Column(Modifier.weight(1f)) {
@@ -774,7 +775,39 @@ private fun BillItemRow(item: BillItem, readOnly: Boolean = false, taxInclusive:
                     }
                 }
             }
-            Text("₹${baseTotal.fmtAmt()}", color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+            // Per-item GST switch — a FIXED-WIDTH column so every switch (and the price to its
+            // right) lines up vertically down the list. Reserved on every editable row (even
+            // 0%-tax items, which show no switch) to keep the alignment symmetric.
+            if (!readOnly) {
+                Box(Modifier.width(92.dp), contentAlignment = Alignment.Center) {
+                    if (taxed) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                if (inclusive) "GST incl." else "GST on top",
+                                color = if (inclusive) Color(0xFF4CAF50) else DreamlandMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                            Switch(
+                                checked = inclusive,
+                                onCheckedChange = onToggleInclusive,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color(0xFF0D1F17),
+                                    checkedTrackColor = Color(0xFF4CAF50),
+                                    uncheckedThumbColor = DreamlandMuted,
+                                    uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.3f),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            // Fixed-width, right-aligned price so amounts line up down the column too.
+            Text(
+                "₹${baseTotal.fmtAmt()}",
+                color = DreamlandOnDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(96.dp),
+            )
             if (!readOnly) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Filled.Edit, contentDescription = "Edit item", tint = DreamlandGold.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
@@ -877,7 +910,7 @@ internal fun BillSummaryCard(
     editableAdvancePaid: String = "",
     editableDiscountType: String = "FLAT",
     editableDiscountValue: String = "",
-    onTaxInclusiveChange: (Boolean) -> Unit = {},
+    onSetAllInclusive: (Boolean) -> Unit = {},
     onAdvancePaidChange: (String) -> Unit = {},
     onAdvancePaidSave: () -> Unit = {},
     onDiscountTypeChange: (String) -> Unit = {},
@@ -965,9 +998,10 @@ internal fun BillSummaryCard(
             }
 
             val taxByRate = bill.items.filter { it.taxPercentage > 0 }.groupBy { it.taxPercentage }
+            // Per-item GST: each line is inclusive or on-top based on its own flag (toggled on the left).
             fun itemGst(item: BillItem): Double = when {
                 !bill.taxEnabled || item.taxPercentage <= 0.0 -> 0.0
-                bill.taxInclusive -> item.total - item.total / (1.0 + item.taxPercentage / 100.0)
+                item.taxInclusive -> item.total - item.total / (1.0 + item.taxPercentage / 100.0)
                 else -> item.total * item.taxPercentage / 100.0
             }
             val liveTaxAmount = bill.items.sumOf { itemGst(it) } * (1.0 - liveDiscountFraction)
@@ -980,31 +1014,36 @@ internal fun BillSummaryCard(
                         Text("₹${rateAmt.fmtAmt()}", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                     }
                 }
-                if (readOnly) {
-                    Text(
-                        if (bill.taxInclusive) "GST included in price" else "GST added on top of prices",
-                        color = DreamlandMuted, style = MaterialTheme.typography.labelSmall,
-                    )
-                } else {
+                if (!readOnly) {
+                    // Master switch: applies GST included/on-top to ALL items at once (it just
+                    // writes each item's per-item flag, so it mixes safely with the per-item
+                    // switches on the left). Shows "Mixed" when items differ.
+                    val taxedItems = bill.items.filter { it.taxPercentage > 0 }
+                    val allInclusive = taxedItems.isNotEmpty() && taxedItems.all { it.taxInclusive }
+                    val mixed = taxedItems.any { it.taxInclusive } && taxedItems.any { !it.taxInclusive }
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("GST included in price", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
+                            Text("GST included in all prices", color = DreamlandOnDark, style = MaterialTheme.typography.bodySmall)
                             Text(
-                                if (bill.taxInclusive) "Prices already include GST" else "GST added on top of prices",
+                                when {
+                                    mixed -> "Mixed — set per item on the left, or use this to apply to all"
+                                    allInclusive -> "All prices include GST"
+                                    else -> "GST added on top of all prices"
+                                },
                                 color = DreamlandMuted, style = MaterialTheme.typography.labelSmall,
                             )
                         }
                         Switch(
-                            checked = bill.taxInclusive,
-                            onCheckedChange = onTaxInclusiveChange,
+                            checked = allInclusive,
+                            onCheckedChange = onSetAllInclusive,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = DreamlandGold,
                                 checkedTrackColor = DreamlandGold.copy(alpha = 0.4f),
-                                uncheckedThumbColor = DreamlandMuted,
+                                uncheckedThumbColor = if (mixed) DreamlandGold.copy(alpha = 0.6f) else DreamlandMuted,
                                 uncheckedTrackColor = DreamlandMuted.copy(alpha = 0.25f),
                             ),
                         )
@@ -1765,7 +1804,7 @@ private fun ConfirmPaymentDialogUI(
                                 ConfirmRow("Taxable value", "₹${(bill.subtotal - bill.discountAmount).coerceAtLeast(0.0).fmtAmt()}", DreamlandOnDark)
                             }
                             if (bill.taxEnabled && liveTaxAmount > 0)
-                                ConfirmRow(if (bill.taxInclusive) "GST (incl.)" else "GST", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
+                                ConfirmRow("GST", "₹${liveTaxAmount.fmtAmt()}", DreamlandOnDark)
                             HorizontalDivider(color = DreamlandMuted.copy(alpha = 0.2f))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Total", color = DreamlandOnDark, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)

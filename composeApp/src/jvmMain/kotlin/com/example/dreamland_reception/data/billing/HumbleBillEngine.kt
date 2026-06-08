@@ -87,14 +87,6 @@ object HumbleBillEngine {
             bill.roomNumber.isNotBlank() -> bill.roomNumber
             else -> ""
         }
-        val payments = buildList {
-            if (bill.advancePayment > 0) {
-                add(PaymentEntry(bill.advancePayment, TxnInfo(apiDateFmt.format(bill.createdAt), "ADVANCE", null)))
-            }
-            bill.transactions.forEach {
-                add(PaymentEntry(it.amount, TxnInfo(apiDateFmt.format(it.createdAt), "PAYMENT", it.id)))
-            }
-        }
         return InvoiceData(
             // STRICT: always the authoritative Humble Ledger invoice number (e.g.
             // INV-000044) so the printed bill reconciles 1:1 with the accounting ledger.
@@ -126,13 +118,13 @@ object HumbleBillEngine {
                 phone = guestPhone.ifBlank { null },
                 gstin = bill.guestGstin.ifBlank { null },   // rendered in BILL TO when present
             ),
-            payments = payments.ifEmpty { null },
+            payments = null,   // PAYMENTS section intentionally omitted from the invoice
             lineItems = bill.items.map {
                 // The engine treats `rate` as the PRE-TAX base (it adds tax on top to reach
-                // the total). When the bill is GST-inclusive, item.unitPrice is the GROSS
-                // price, so we back the tax out here — otherwise the line items wouldn't sum
-                // to the subtotal/tax we send. Exclusive bills keep unitPrice as-is.
-                val baseRate = if (bill.taxInclusive && it.taxPercentage > 0)
+                // the total). For a GST-inclusive line, item.unitPrice is the GROSS price, so we
+                // back the tax out here — otherwise the line items wouldn't sum to the subtotal/tax
+                // we send. Exclusive lines keep unitPrice as-is. (Per-item flag.)
+                val baseRate = if (it.taxInclusive && it.taxPercentage > 0)
                     it.unitPrice / (1.0 + it.taxPercentage / 100.0)
                 else it.unitPrice
                 LineItem(

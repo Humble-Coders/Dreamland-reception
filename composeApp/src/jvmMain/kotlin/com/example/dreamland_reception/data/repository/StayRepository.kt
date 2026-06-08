@@ -1,5 +1,6 @@
 package com.example.dreamland_reception.data.repository
 
+import com.example.dreamland_reception.data.model.ExtraCharge
 import com.example.dreamland_reception.data.model.GuestRecord
 import com.example.dreamland_reception.data.model.Stay
 import com.google.cloud.firestore.Firestore
@@ -22,6 +23,10 @@ interface StayRepository {
     suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date)
     /** Persists the guests array (e.g. to store a GRC number allocated when printing later). */
     suspend fun updateGuests(id: String, guests: List<GuestRecord>)
+    /** Persists the ad-hoc extra charges array for a stay. */
+    suspend fun updateExtraCharges(id: String, charges: List<ExtraCharge>)
+    /** Sets the running advance total + method, and marks it posted (so checkout doesn't re-post). */
+    suspend fun updateAdvance(id: String, advancePaidAmount: Double, advancePaymentMethod: String)
     suspend fun changeRoom(
         stayId: String, oldInstanceId: String,
         newInstanceId: String, newRoomNumber: String,
@@ -99,6 +104,23 @@ object FirestoreStayRepository : StayRepository {
 
     override suspend fun updateExpectedCheckOut(id: String, newCheckOut: Date) = withContext(Dispatchers.IO) {
         col.document(id).update(mapOf("expectedCheckOut" to newCheckOut, "updatedAt" to Date())).get(); Unit
+    }
+
+    override suspend fun updateExtraCharges(id: String, charges: List<ExtraCharge>) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "extraCharges" to charges.map { it.toMap() },
+            "updatedAt" to Date(),
+        )).get(); Unit
+    }
+
+    override suspend fun updateAdvance(id: String, advancePaidAmount: Double, advancePaymentMethod: String) = withContext(Dispatchers.IO) {
+        col.document(id).update(mapOf(
+            "advancePaidAmount" to advancePaidAmount,
+            "advancePaymentMethod" to advancePaymentMethod,
+            // Mark as posted so checkout settle treats this as already-held and never re-posts it.
+            "ledgerAdvancePostedAtCheckIn" to true,
+            "updatedAt" to Date(),
+        )).get(); Unit
     }
 
     override suspend fun updateGuests(id: String, guests: List<GuestRecord>) = withContext(Dispatchers.IO) {
@@ -198,8 +220,30 @@ object FirestoreStayRepository : StayRepository {
                 }
             } ?: emptyList(),
             groupStayId = getString("groupStayId") ?: "",
+            extraCharges = (get("extraCharges") as? List<*>)?.mapNotNull { entry ->
+                (entry as? Map<*, *>)?.let {
+                    ExtraCharge(
+                        id = it["id"] as? String ?: "",
+                        name = it["name"] as? String ?: "",
+                        quantity = (it["quantity"] as? Number)?.toInt() ?: 1,
+                        unitPrice = (it["unitPrice"] as? Number)?.toDouble() ?: 0.0,
+                        taxPercentage = (it["taxPercentage"] as? Number)?.toDouble() ?: 5.0,
+                        addedBy = it["addedBy"] as? String ?: "",
+                        createdAt = when (val c = it["createdAt"]) {
+                            is Date -> c
+                            is com.google.cloud.Timestamp -> c.toDate()
+                            else -> Date()
+                        },
+                    )
+                }
+            } ?: emptyList(),
         )
     }.getOrNull()
+
+    private fun ExtraCharge.toMap() = mapOf(
+        "id" to id, "name" to name, "quantity" to quantity, "unitPrice" to unitPrice,
+        "taxPercentage" to taxPercentage, "addedBy" to addedBy, "createdAt" to createdAt,
+    )
 
     private fun Stay.toMap() = mapOf(
         "hotelId" to hotelId,
@@ -241,5 +285,6 @@ object FirestoreStayRepository : StayRepository {
                 "address" to g.address, "dob" to g.dob, "age" to g.age, "grcNumber" to g.grcNumber)
         },
         "groupStayId" to groupStayId,
+        "extraCharges" to extraCharges.map { it.toMap() },
     )
 }

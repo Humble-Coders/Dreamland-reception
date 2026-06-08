@@ -1,6 +1,22 @@
 package com.example.dreamland_reception.data.model
 
 import java.util.Date
+import java.util.UUID
+
+/**
+ * An ad-hoc taxable charge added to an active stay from the reception desk (e.g. late-checkout
+ * extra hours, an extra mattress, laundry). Free-typed (no catalog); GST defaults to 5%. These
+ * flow into the final bill as line items at checkout.
+ */
+data class ExtraCharge(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String = "",
+    val quantity: Int = 1,
+    val unitPrice: Double = 0.0,
+    val taxPercentage: Double = 5.0,
+    val addedBy: String = "",
+    val createdAt: Date = Date(),
+)
 
 data class GuestRecord(
     val name: String = "",
@@ -64,4 +80,6 @@ data class Stay(
     val updatedAt: Date = Date(),
     val guests: List<GuestRecord> = emptyList(),
     val groupStayId: String = "",
+    // Ad-hoc taxable charges added during the stay (late checkout, extra bed, etc.).
+    val extraCharges: List<ExtraCharge> = emptyList(),
 )

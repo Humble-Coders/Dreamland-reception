@@ -222,6 +222,7 @@ object FirestoreBillRepository : BillRepository {
         unitPrice = (get("unitPrice") as? Number)?.toDouble() ?: 0.0,
         total = (get("total") as? Number)?.toDouble() ?: 0.0,
         taxPercentage = (get("taxPercentage") as? Number)?.toDouble() ?: 0.0,
+        taxInclusive = get("taxInclusive") as? Boolean ?: false,
         refId = get("refId") as? String ?: "",
         notes = get("notes") as? String ?: "",
     )
@@ -366,6 +367,7 @@ object FirestoreBillRepository : BillRepository {
         "unitPrice" to unitPrice,
         "total" to total,
         "taxPercentage" to taxPercentage,
+        "taxInclusive" to taxInclusive,
         "refId" to refId,
         "notes" to notes,
     )

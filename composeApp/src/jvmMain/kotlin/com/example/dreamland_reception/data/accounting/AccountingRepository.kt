@@ -401,6 +401,55 @@ object AccountingRepository {
     }
 
     /**
+     * Posts an advance collected DURING a stay (from the reception desk) to Humble Ledger:
+     *   DR Cash | Bank        amount
+     *   CR Advance Liability  amount
+     *
+     * Idempotent on `stayadv_<stayId>_<chargeId>` ([chargeId] must be unique per advance, so
+     * multiple advances on the same stay each post once). Because the caller also bumps
+     * `stay.advancePaidAmount` and marks the stay's advance as posted, checkout settle counts
+     * this as already-held and never re-posts it (top-up = 0).
+     *
+     * Returns success(true) posted, success(false) not configured, failure(e) on a real error.
+     */
+    suspend fun postStayAdvance(
+        stayId: String,
+        chargeId: String,
+        amount: Double,
+        method: String,
+        roomNumber: String,
+        guestName: String,
+    ): Result<Boolean> = runCatching {
+        if (!AccountingConfig.isConfigured()) {
+            log("postStayAdvance SKIP — not configured (stay $stayId)")
+            return@runCatching false
+        }
+        val amt = roundAmount(amount)
+        if (stayId.isBlank() || chargeId.isBlank() || amt <= 0.01) return@runCatching true
+        val token = client.ensureValidToken()
+        val advanceLiabilityId = ensureAdvanceLiabilityAccount(token)
+        log("postStayAdvance — stay=$stayId, charge=$chargeId, amount=$amt, method=$method")
+        client.postRawTransaction(
+            token = token,
+            req   = RawTransactionRequest(
+                appId       = APP_ID,
+                sourceId    = "stayadv_${stayId}_${chargeId}",
+                postingType = "ADVANCE",
+                description = stampManager("Advance received — Room $roomNumber ($guestName)"),
+                date        = LocalDate.now().toString(),
+                entries     = listOf(
+                    RawEntryInput(account = if (method == "BANK") "Bank" else "Cash", type = "DEBIT", amount = amt),
+                    RawEntryInput(accountId = advanceLiabilityId, type = "CREDIT", amount = amt),
+                ),
+            ),
+        )
+        log("postStayAdvance OK — stay=$stayId, charge=$chargeId")
+        true
+    }.also { result ->
+        result.onFailure { e -> log("postStayAdvance FAILED — stay $stayId: ${e::class.simpleName}: ${e.message}") }
+    }
+
+    /**
      * Sums the advance already sitting in the Advance Liability account from CHECK-IN
      * for the stays on [bill] (those flagged [Stay.ledgerAdvancePostedAtCheckIn]).
      *
